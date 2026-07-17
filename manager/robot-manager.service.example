@@ -1,0 +1,12 @@
+[Unit]
+Description=GR6 manager
+After=network.target
+
+[Service]
+User=pi
+WorkingDirectory=/home/pi/share/GR6-v2
+ExecStart=/usr/bin/python3 manager/app.py
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

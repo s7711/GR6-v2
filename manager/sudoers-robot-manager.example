@@ -1,0 +1,4 @@
+# Scoped sudoers rule so the manager's user can control robot-* units
+# without a password, and nothing broader. Install as
+# /etc/sudoers.d/robot-manager (via `visudo -f`, not a plain copy).
+pi ALL=(root) NOPASSWD: /usr/bin/systemctl start robot-*, /usr/bin/systemctl stop robot-*, /usr/bin/systemctl restart robot-*

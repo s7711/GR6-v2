@@ -1,0 +1,118 @@
+{# title: Home #}
+{% extends "base.html" %}
+{% block title %}GR6 — Home{% endblock %}
+
+{% block content %}
+<div class="row row-cols-2 row-cols-md-4 g-3 mb-4">
+  <div class="col">
+    <div class="card text-center">
+      <div class="card-body">
+        <div class="text-body-secondary small">Satellites</div>
+        <div class="fs-4"><span id="status-GpsNumObs">—</span></div>
+      </div>
+    </div>
+  </div>
+  <div class="col">
+    <div class="card text-center">
+      <div class="card-body">
+        <div class="text-body-secondary small">GPS Position Mode</div>
+        <div class="fs-4"><span id="status-GpsPosMode">—</span></div>
+      </div>
+    </div>
+  </div>
+  <div class="col">
+    <div class="card text-center">
+      <div class="card-body">
+        <div class="text-body-secondary small">Heading</div>
+        <div class="fs-4">
+          <span id="stat-heading">—</span>&deg;
+          <span class="text-body-secondary small">(&plusmn;<span id="stat-heading-acc">—</span>&deg;)</span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="col">
+    <div class="card text-center">
+      <div class="card-body">
+        <div class="text-body-secondary small">Speed</div>
+        <div class="fs-4">
+          <span id="stat-speed">—</span> m/s
+          <span class="text-body-secondary small">(&plusmn;<span id="stat-speed-acc">—</span>)</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card mb-4">
+  <div class="card-body">
+    <div class="text-body-secondary small mb-2">Speed (live)</div>
+    <div id="graph"></div>
+  </div>
+</div>
+
+{% include "_command_box.html" %}
+
+<link href="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.min.css" rel="stylesheet">
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.iife.min.js"></script>
+<script>
+const HISTORY_SECONDS = 60;
+const updateHz = {{ nav_update_hz }};
+const maxPoints = Math.ceil(HISTORY_SECONDS * updateHz);
+
+const data = [[], []]; // [time, speed]
+
+const plot = new uPlot({
+  width: document.getElementById("graph").clientWidth,
+  height: 240,
+  legend: { show: false }, // not useful for a scrolling live chart
+  scales: { x: { time: true } },
+  series: [
+    {},
+    { label: "Speed (m/s)", stroke: "#ff8c42" },
+  ],
+}, data, document.getElementById("graph"));
+
+window.addEventListener("resize", () => {
+  plot.setSize({ width: document.getElementById("graph").clientWidth, height: 240 });
+});
+
+connectWs("/ws/nav", (msg) => {
+  const nav = msg.nav || {};
+  const status = msg.status || {};
+  fillFields("status-", status);
+
+  document.getElementById("stat-heading").textContent =
+    nav.Heading !== undefined ? nav.Heading.toFixed(1) : "—";
+  document.getElementById("stat-heading-acc").textContent =
+    status.HeadingAcc !== undefined ? status.HeadingAcc.toFixed(1) : "—";
+
+  let speed = "—";
+  if (nav.Vn !== undefined && nav.Ve !== undefined) {
+    // Horizontal speed only — Vd (vertical) excluded.
+    speed = Math.hypot(nav.Vn, nav.Ve).toFixed(2);
+  }
+  document.getElementById("stat-speed").textContent = speed;
+
+  document.getElementById("stat-speed-acc").textContent =
+    (status.VnAcc !== undefined && status.VeAcc !== undefined)
+      // Matches the horizontal speed above: combine VnAcc/VeAcc only,
+      // VdAcc excluded. RSS combination assumes independent errors.
+      ? Math.hypot(status.VnAcc, status.VeAcc).toFixed(2)
+      : "—";
+
+  if (speed !== "—") {
+    const t = Date.now() / 1000;
+    data[0].push(t);
+    data[1].push(parseFloat(speed));
+    if (data[0].length > maxPoints) {
+      data[0].shift(); data[1].shift();
+    }
+    plot.setData(data);
+  }
+});
+</script>
+{% endblock %}

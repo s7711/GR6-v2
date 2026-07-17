@@ -1,0 +1,28 @@
+# Shared runtime config for GR6-v2 — single source of truth for every
+# service's systemd unit name, web UI host/port, and icon.
+# See top-prd.md ("Shared configuration") and manager/manager-prd.md.
+#
+# Copy this file to config.yaml and fill in real values — config.yaml
+# itself is gitignored since it holds this robot's real IP address.
+
+xnav_ip: 192.168.0.0  # placeholder — set to the real xNAV650 IP
+
+services:
+  manager:
+    unit: robot-manager.service
+    host: 0.0.0.0
+    port: 8000
+    web_ui: true
+
+  hello:
+    unit: robot-hello.service
+    host: 0.0.0.0
+    port: 8001
+    web_ui: true
+
+  oxts-nav:
+    unit: robot-oxts-nav.service
+    host: 0.0.0.0
+    port: 8002
+    web_ui: true
+    nav_update_hz: 2

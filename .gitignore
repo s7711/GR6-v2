@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+venv/
+
+# Real config holds this robot's actual IP addresses — see config.yaml.example
+config.yaml
+
+# Runtime-generated, device-specific — not source
+manager/config-backup/
+oxts-nav/xnav-config/
+*.log

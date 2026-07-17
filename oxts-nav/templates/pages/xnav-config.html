@@ -1,0 +1,19 @@
+{# title: xNAV Config #}
+{% extends "base.html" %}
+{% block title %}GR6 — xNAV Config{% endblock %}
+{% block content %}
+<p class="text-body-secondary">
+  Downloaded from the xNAV650 over FTP at service startup. View-only for now.
+</p>
+{% if files %}
+<ul class="list-group">
+  {% for f in files %}
+  <li class="list-group-item">
+    <a href="/xnav-config/{{ f }}">{{ f }}</a>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p>No config files downloaded yet (or the xNAV650 wasn't reachable at startup).</p>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,141 @@
+{# title: Status #}
+{% extends "base.html" %}
+{% block title %}GR6 — Status{% endblock %}
+{% block content %}
+
+{% macro section(title, rows) %}
+<div class="card mb-4">
+  <div class="card-body">
+    <div class="text-body-secondary small mb-2">{{ title }}</div>
+    <table class="table">
+      <thead><tr><th>Measurement</th><th>Value</th><th>Units</th></tr></thead>
+      <tbody>
+        {% for label, id, unit in rows %}
+        <tr><td>{{ label }}</td><td id="{{ id }}">—</td><td>{{ unit }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endmacro %}
+
+{{ section("Navigation Status", [
+  ("Navigation status", "nav-NavStatus", ""),
+  ("GPS time", "nav-GpsTime", ""),
+  ("UTC time", "nav-UtcTime", ""),
+]) }}
+
+{{ section("Accuracy", [
+  ("Position north accuracy", "status-NorthAcc", "m"),
+  ("Position east accuracy", "status-EastAcc", "m"),
+  ("Position down accuracy", "status-AltAcc", "m"),
+  ("Velocity north accuracy", "status-VnAcc", "m/s"),
+  ("Velocity east accuracy", "status-VeAcc", "m/s"),
+  ("Velocity down accuracy", "status-VdAcc", "m/s"),
+  ("Heading accuracy", "status-HeadingAcc", "deg"),
+  ("Pitch accuracy", "status-PitchAcc", "deg"),
+  ("Roll accuracy", "status-RollAcc", "deg"),
+]) }}
+
+{{ section("GNSS", [
+  ("Number of satellites", "status-GpsNumObs", ""),
+  ("Position mode", "status-GpsPosMode", ""),
+  ("Velocity mode", "status-GpsVelMode", ""),
+  ("Attitude mode", "status-GpsAttMode", ""),
+  ("Satellites used for position", "status-NumSatsUsedPos", ""),
+  ("Satellites used for velocity", "status-NumSatsUsedVel", ""),
+  ("Satellites used for attitude", "status-NumSatsUsedAtt", ""),
+  ("Differential age", "status-GpsDiffAge", "s"),
+  ("Base station ID", "status-BaseStationId", ""),
+  ("Consecutive rejected positions", "status-GpsPosReject", ""),
+  ("Consecutive rejected velocities", "status-GpsVelReject", ""),
+  ("Consecutive rejected attitudes", "status-GpsAttReject", ""),
+]) }}
+
+{{ section("GNSS Dual-antenna", [
+  ("Heading quality", "status-HeadQuality", ""),
+  ("Heading search type", "status-HeadSearchType", ""),
+  ("Heading search status", "status-HeadSearchStatus", ""),
+  ("Heading search ready", "status-HeadSearchReady", ""),
+  ("Initial number of ambiguities", "status-HeadSearchInit", ""),
+  ("Remaining number of ambiguities", "status-HeadSearchNum", ""),
+  ("Number of constraints applied", "status-HeadSearchConstr", ""),
+  ("Heading search duration", "status-HeadSearchTime", "s"),
+  ("Dual-GNSS baseline", "status-BaseLineLength", "m"),
+  ("Heading misalignment", "status-HeadingMisAlign", "deg"),
+]) }}
+
+{{ section("Innovations", [
+  ("Position X", "status-InnPosXFilt", ""),
+  ("Position Y", "status-InnPosYFilt", ""),
+  ("Position Z", "status-InnPosZFilt", ""),
+  ("Velocity X", "status-InnVelXFilt", ""),
+  ("Velocity Y", "status-InnVelYFilt", ""),
+  ("Velocity Z", "status-InnVelZFilt", ""),
+  ("Heading", "status-InnHeadingFilt", ""),
+  ("Pitch", "status-InnPitchFilt", ""),
+  ("No slip", "status-InnNoSlipHFilt", ""),
+  ("Heading lock", "status-InnHeadingHFilt", ""),
+  ("Wheel speed", "status-InnWSpeedFilt", ""),
+]) }}
+
+{{ section("IMU", [
+  ("Gyro X bias", "status-WxBias", "deg/s"),
+  ("Gyro Y bias", "status-WyBias", "deg/s"),
+  ("Gyro Z bias", "status-WzBias", "deg/s"),
+  ("Gyro X scale factor", "status-WxSf", ""),
+  ("Gyro Y scale factor", "status-WySf", ""),
+  ("Gyro Z scale factor", "status-WzSf", ""),
+  ("Accelerometer X bias", "status-AxBias", "m/s²"),
+  ("Accelerometer Y bias", "status-AyBias", "m/s²"),
+  ("Accelerometer Z bias", "status-AzBias", "m/s²"),
+]) }}
+
+{{ section("Internal timing", [
+  ("Time mismatch", "status-TimeMismatch", "ms"),
+  ("IMU time difference", "status-ImuTimeDiff", "ms"),
+  ("IMU time margin", "status-ImuTimeMargin", "ms"),
+  ("IMU loop time", "status-ImuLoopTime", "ms"),
+  ("Output loop time", "status-OpLoopTime", "ms"),
+  ("BNS lag", "status-BnsLag", "ms"),
+  ("Up time", "status-UpTime", "s"),
+]) }}
+
+{{ section("Decoders", [
+  ("GNSS primary chars", "status-GpsPrimaryChars", ""),
+  ("GNSS primary packets", "status-GpsPrimaryPkts", ""),
+  ("GNSS primary chars skipped", "status-GpsPrimaryCharsSkipped", ""),
+  ("GNSS primary packets too old", "status-GpsPrimaryOldPkts", ""),
+  ("GNSS secondary chars", "status-GpsSecondaryChars", ""),
+  ("GNSS secondary packets", "status-GpsSecondaryPkts", ""),
+  ("GNSS secondary chars skipped", "status-GpsSecondaryCharsSkipped", ""),
+  ("GNSS secondary packets too old", "status-GpsSecondaryOldPkts", ""),
+  ("IMU chars", "status-ImuChars", ""),
+  ("IMU packets", "status-ImuPkts", ""),
+  ("IMU skipped", "status-ImuSkipped", ""),
+]) }}
+
+{{ section("System", [
+  ("Serial number", "status-SerialNumber", ""),
+  ("Dev ID", "status-DevId", ""),
+  ("Disk space", "status-DiskSpace", "kiB"),
+  ("File size", "status-FileSize", "kiB"),
+  ("OS version 1", "status-OsVersion1", ""),
+  ("OS version 2", "status-OsVersion2", ""),
+  ("OS version 3", "status-OsVersion3", ""),
+  ("IMU type", "status-ImuType", ""),
+  ("GPS primary type", "status-GpsPrimary", ""),
+  ("GPS secondary type", "status-GpsSecondary", ""),
+]) }}
+
+{% include "_command_box.html" %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+connectWs("/ws/nav", (msg) => {
+  fillFields("nav-", msg.nav || {});
+  fillFields("status-", msg.status || {});
+});
+</script>
+{% endblock %}

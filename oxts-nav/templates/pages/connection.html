@@ -1,0 +1,62 @@
+{# title: Connection #}
+{% extends "base.html" %}
+{% block title %}GR6 — Connection{% endblock %}
+{% block content %}
+<div class="card mb-4">
+  <div class="card-body">
+    <table class="table">
+      <thead>
+        <tr><th>Measurement</th><th>Value</th><th>Units</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>IP address</td>          <td id="conn-ip">—</td>                <td></td></tr>
+        <tr><td>Chars received</td>      <td id="conn-numChars">—</td>          <td></td></tr>
+        <tr><td>Chars skipped</td>       <td id="conn-skippedChars">—</td>      <td></td></tr>
+        <tr><td>Packets received</td>    <td id="conn-numPackets">—</td>       <td></td></tr>
+        <tr><td>Time offset</td>         <td id="conn-timeOffset">—</td>       <td>s</td></tr>
+        <tr><td>Time jitter</td>         <td id="conn-timeJitter_ms">—</td>    <td>ms</td></tr>
+        <tr><td>Time jitter stdev</td>   <td id="conn-timeJitterStdev_ms">—</td> <td>ms</td></tr>
+        <tr><td>Time jitter maximum</td> <td id="conn-timeJitterMax_ms">—</td> <td>ms</td></tr>
+        <tr><td>Repeated UDP</td>        <td id="conn-repeatedUdp">—</td>      <td></td></tr>
+        <tr><td>Unprocessed bytes</td>   <td id="conn-unprocessedBytes">—</td> <td></td></tr>
+        <tr><td>Calculation errors</td>  <td id="conn-moreCalcErrors">—</td>   <td></td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card mb-4">
+  <div class="card-body">
+    <div class="text-body-secondary small mb-2">NCOM status channel errors</div>
+    <table class="table">
+      <thead>
+        <tr><th>Status channel</th><th>Errors</th></tr>
+      </thead>
+      <tbody id="status-errors-body"></tbody>
+    </table>
+  </div>
+</div>
+
+{% include "_command_box.html" %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+connectWs("/ws/nav", (msg) => {
+  const connection = msg.connection || {};
+  fillFields("conn-", connection);
+
+  const tbody = document.getElementById("status-errors-body");
+  tbody.innerHTML = "";
+  for (const [channel, count] of Object.entries(connection.decodeStatusErrors || {})) {
+    const row = document.createElement("tr");
+    const ch = document.createElement("td");
+    ch.textContent = channel;
+    const cnt = document.createElement("td");
+    cnt.textContent = count;
+    row.append(ch, cnt);
+    tbody.appendChild(row);
+  }
+});
+</script>
+{% endblock %}

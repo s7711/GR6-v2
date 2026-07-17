@@ -1,0 +1,28 @@
+{# Partial, not a page — included by pages that want the xNAV650 command
+   box. Lives outside templates/pages/ so the page registry doesn't list
+   it as a navigable page in its own right. #}
+<div class="card mb-4">
+  <div class="card-body">
+    <div class="text-body-secondary small mb-2">
+      Send command to xNAV650 (occasional/manual — e.g. needed indoors)
+    </div>
+    <form id="command-form" class="d-flex gap-2">
+      <input type="text" id="command-input" class="form-control font-monospace"
+             placeholder="!..." autocomplete="off">
+      <button type="submit" class="btn btn-outline-primary">Send</button>
+    </form>
+  </div>
+</div>
+<script>
+document.getElementById("command-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const input = document.getElementById("command-input");
+  if (!input.value) return;
+  fetch("/command", {
+    method: "POST",
+    headers: {"Content-Type": "application/x-www-form-urlencoded"},
+    body: "message=" + encodeURIComponent(input.value),
+  });
+  input.value = "";
+});
+</script>
