@@ -26,3 +26,13 @@ services:
     port: 8002
     web_ui: true
     nav_update_hz: 2
+    nav_feed_socket: /tmp/gr6-oxts-nav-feed.sock  # Unix domain socket — see "Nav data feed" in oxts-nav-prd.md
+    nav_feed_hz: 20
+
+  camera:
+    unit: robot-camera.service
+    host: 0.0.0.0
+    port: 8003
+    web_ui: true
+    camera_fps: 5  # Resolution is fixed (1280x960), not configurable — see camera-prd.md
+    camera_shm_name: gr6-camera-frame

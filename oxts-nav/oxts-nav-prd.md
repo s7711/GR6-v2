@@ -146,14 +146,51 @@ than being surprised commands stop working plainly one day.
 - **GAD aiding data:** still deferred — carried over conceptually from
   `xnav.py`/`gad_aruco.py` but not designed here. Revisit once
   path-following or vision needs to send aiding data back to the
-  xNAV650.
+  xNAV650. (The nav data feed below is what those consumers will read
+  *from* the xNAV — this bullet is the separate, still-undesigned,
+  send-*to*-the-xNAV direction.)
+
+## Nav data feed (cross-process)
+
+Built ahead of need — nothing consumes this yet, but every future
+consumer (aruco/GAD send, path-following) needs the same thing, so it's
+built once now rather than three times later.
+
+- **What:** `nav_feed.py` runs a small Unix domain socket server
+  alongside the web app, publishing the same full `nav`/`status`/
+  `connection` dicts the websocket sends — same "don't tailor what's
+  sent to one consumer" principle as the websocket (see above).
+- **Path/rate:** socket path is `nav_feed_socket`, rate is `nav_feed_hz`,
+  both in shared config, deliberately separate from the web UI's
+  `nav_update_hz` — other services will likely want a higher rate than a
+  browser chart does.
+- **Protocol:** any number of clients may connect. Each gets its own send
+  loop; a 4-byte big-endian length prefix followed by that many bytes of
+  a pickled dict (needs framing since it's a stream socket, unlike the
+  browser's message-based websocket). A stalled/dead client's loop exits
+  independently — it never blocks or backs up delivery to other clients.
+- **Timing:** the one thing that has to survive the move to a separate
+  process is the xNAV's machine-time-to-GPS-time mapping
+  (`connection['timeOffset']`, filtered in `ncomrx.py` from
+  `time.monotonic()` timestamps stamped by `ncomrx_thread.py` on receipt).
+  A consumer with its own `time.monotonic()` timestamp for something else
+  (e.g. a future camera frame's capture time) can correlate it with GPS
+  time via the new standalone `ncomrx.machine_time_to_gps(machine_time,
+  time_offset)` function — a consumer doesn't need a live `NcomRx`
+  decoder instance of its own, just the `timeOffset` this feed already
+  publishes in `connection`. `time.monotonic()` (not `time.perf_counter()`)
+  is the clock in use throughout, since that's what `ncomrx_thread.py`
+  already stamps packets with; both track `CLOCK_MONOTONIC` on Linux, so
+  timestamps are directly comparable across processes on the same
+  machine — no separate time-sync mechanism needed.
 
 ## Config additions (shared config file)
 
 - `xnav_ip` — the xNAV650's IP address (top-level, since other future
   services may also need it, not nested under this service alone).
 - Under this service's own entry: `nav_update_hz` (websocket publish
-  rate), plus the usual `unit`/`host`/`port`/`web_ui` fields every
+  rate), `nav_feed_socket`/`nav_feed_hz` (the cross-process nav feed, see
+  above), plus the usual `unit`/`host`/`port`/`web_ui` fields every
   service has. No command-related config — see "xNAV650 commands" above.
 
 ## Testing Decisions
@@ -166,6 +203,10 @@ than being surprised commands stop working plainly one day.
   client at the service and confirming it receives the full nav dict at
   roughly `nav_update_hz`, without needing a real xNAV650 (feed the
   decoder synthetic/replayed packets instead).
+- The nav feed can be tested the same way: connect a plain
+  `socket.AF_UNIX` client to `nav_feed_socket`, read the 4-byte length
+  prefix then that many bytes, `pickle.loads()` it, and confirm the
+  dicts match what the websocket reports for the same instant.
 
 ## Out of Scope
 

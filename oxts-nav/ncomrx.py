@@ -116,6 +116,28 @@ EARTH_ECCENTRICITY  = (0.0818191908426)
 GPS_STARTTIME = datetime.datetime(1980,1,6,tzinfo=datetime.timezone.utc)
 
 
+def machine_time_to_gps(machine_time, time_offset):
+    """Converts a time.monotonic() timestamp to (GpsWeek, GpsSeconds).
+
+    Standalone version of NcomRx.mt2Gps() that doesn't need a live decoder
+    instance — just the `connection['timeOffset']` value that instance
+    would otherwise hold. This is what lets another process correlate its
+    own time.monotonic() timestamps (e.g. a camera frame capture time)
+    with GPS time using only the `timeOffset` published in oxts-nav's
+    `connection` dict (see nav_feed.py) — no NCOM decoding of its own
+    required. time.monotonic() is used (not time.perf_counter()) because
+    that's what ncomrx_thread.py stamps packets with; both track
+    CLOCK_MONOTONIC on Linux, so timestamps are directly comparable across
+    processes on the same machine.
+    """
+    if time_offset is None:
+        return None
+    gt = machine_time + time_offset
+    GpsWeek = math.floor(gt / 604800)
+    GpsSeconds = gt % 604800
+    return (GpsWeek, GpsSeconds)
+
+
 ########################################################################
 # NCOM class
 class NcomRx:
@@ -318,13 +340,7 @@ class NcomRx:
 
     def mt2Gps(self, machineTime):
         # Converts machineTime to GpsTime
-        if self.connection['timeOffset'] != None:
-            gt = machineTime + self.connection['timeOffset']
-            GpsWeek = math.floor(gt / 604800)
-            GpsSeconds = gt % 604800
-            return (GpsWeek, GpsSeconds)
-        else:
-            return None
+        return machine_time_to_gps(machineTime, self.connection['timeOffset'])
 
     ####################################################################
     # Decoders for status channels.

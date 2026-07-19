@@ -18,13 +18,17 @@ see `top-prd.md` for why and how.
 
 ## Status
 
-Early days. Two of the planned services exist so far:
+Early days. Four of the planned services exist so far:
 
 - **`oxts-nav`** — decodes the xNAV650's NCOM stream and serves live
   nav/status/connection data over a websocket, with web pages for a
   live dashboard, connection diagnostics, full status detail, sending
   ad-hoc commands to the xNAV650, and viewing its downloaded config
   files.
+- **`camera`** — captures frames from the Pi camera and publishes them
+  (shared memory) for other services to consume, with a live preview
+  page and a full checkerboard-based calibration procedure (guided
+  capture across ~33 poses, `cv2.calibrateCamera()`, promote-to-active).
 - **`manager`** — a home-screen-style launcher: icon-grid to jump to
   each service's own web UI, a services table (status/start/stop/
   restart), and a plain-text editor for the shared config file.
@@ -32,10 +36,10 @@ Early days. Two of the planned services exist so far:
   out the shared config/IPC/web conventions for whatever service comes
   next.
 
-Nav decode, then the manager, were deliberately tackled first — see
-"Suggested migration order" in `top-prd.md` for the reasoning and what's
-still to come (vision/ArUco, then path-following/motor control last,
-since that's safety-critical).
+Nav decode, then the manager, were deliberately tackled first, then the
+camera service — see "Suggested migration order" in `top-prd.md` for the
+reasoning and what's still to come (`aruco` marker detection next, then
+path-following/motor control last, since that's safety-critical).
 
 ## Architecture
 
@@ -65,6 +69,7 @@ Run whichever you need in its own terminal:
 ```bash
 python manager/app.py
 python oxts-nav/app.py
+python camera/app.py
 ```
 
 Then visit the manager's home page (port 8000 by default) to reach

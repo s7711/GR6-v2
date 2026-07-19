@@ -1,4 +1,45 @@
 flask
 flask-sock
 pyyaml
-numpy
+numpy<2  # See note below — this pin is load-bearing, not a style choice
+pillow
+opencv-contrib-python-headless  # calibration.py: findChessboardCorners, calibrateCamera. Headless (no GTK/Qt) — nothing here ever calls imshow, this is a headless robot
+scipy      # calibration.py: ConvexHull, for the "is the checkerboard big enough" check
+matplotlib # calibration.py: matplotlib.path.Path, for the point-in-polygon check
+
+# picamera2 is not listed here — it depends on system libcamera bindings
+# and normally can't be pip-installed standalone. On the Pi it's usually
+# already present system-wide (apt install python3-picamera2); the venv
+# needs to see it, e.g. recreated with --system-site-packages, or run
+# camera/ outside the venv. See camera/camera-prd.md.
+#
+# The `numpy<2` pin above is what makes that venv actually work once
+# opencv/scipy are also installed in it. NumPy 2.0 was a deliberate,
+# well-known ABI break — a C extension built against numpy 1.x (like
+# picamera2's `simplejpeg`, matched to Debian's system numpy 1.24.x) and
+# one built against numpy 2.x genuinely cannot both be satisfied by a
+# single numpy install; it's not a "whichever shadows the other wins"
+# situation like a same-major-version mismatch would be. Letting pip
+# resolve opencv-contrib-python-headless/scipy freely picks their latest
+# releases, which pull in numpy 2.x and break picamera2's import with
+# "ValueError: numpy.dtype size changed, may indicate binary
+# incompatibility". Pinning `numpy<2` forces pip's resolver to pick
+# older, numpy-1.x-compatible releases of everything else instead —
+# confirmed this lands on opencv-contrib-python-headless 4.11.0 (which
+# has the `cv2.aruco.ArucoDetector` API the `aruco` service will need —
+# introduced in OpenCV 4.7, so comfortably covered), scipy 1.17.1,
+# matplotlib 3.11.0, all consistent with each other and with picamera2.
+#
+# If a venv already has a broken numpy>=2 in it (e.g. from installing
+# these before this pin existed): `pip uninstall numpy opencv-contrib-
+# python-headless scipy matplotlib -y` then `pip install -r
+# requirements.txt` fresh, so pip re-resolves everything together under
+# the pin rather than leaving a stale numpy 2.x sitting there.
+#
+# apt-installed opencv/scipy/matplotlib were considered instead (same
+# treatment as picamera2 — apt packages are already matched to the
+# system's own numpy, nothing to pin). Not used: Debian's apt opencv
+# package isn't actually installed on amundsen at all currently (only a
+# `pip install --user` copy exists, at 4.11.0), and its apt-candidate
+# version is unverified — risking a downgrade below the 4.7 ArucoDetector
+# cutoff for no real benefit now that the pip route is confirmed to work.

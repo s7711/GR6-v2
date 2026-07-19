@@ -17,3 +17,11 @@
 ## hello icon
 - Source: https://github.com/vaadin/vaadin-icons
 - License: Apache
+
+## camera icon
+- Source: https://github.com/radix-ui/icons (via https://www.svgviewer.dev/s/488599/camera)
+- License: MIT
+
+## favicon (robot icon, shared across every service)
+- Source: Home Assistant Filled Icons, by IonutNeagu (https://github.com/IonutNeagu), via https://www.svgviewer.dev/s/374296/robot
+- License: Public Domain

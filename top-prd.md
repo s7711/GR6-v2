@@ -26,8 +26,11 @@ gr6-v2/
   ui-style.md         <- appearance/UI conventions shared by every service's web UI
   shared/             <- shared code: config loader, IPC helpers, seqlock class
                          (also shared/web/ — see ui-style.md)
-  vision/
-    prd.md
+  camera/
+    camera-prd.md
+    ...
+  aruco/
+    aruco-prd.md
     ...
   oxts-nav/
     oxts-nav-prd.md
@@ -127,7 +130,10 @@ general-purpose sysadmin tool.
    service yet, not being planned in detail at this stage.
 2. Manager — needed early so services gain status/control visibility as
    they come online, rather than bolting it on last.
-3. Vision/ArUco.
+3. Vision, split into two services: `camera` (capture, timing/exposure/
+   gain metadata, shared-memory frame publishing, calibration to follow
+   right after), then `aruco` (marker detection + GAD updates to the
+   xNAV650, consuming the camera's frames).
 4. Path-following/motor control last (safety-critical — most confidence
    wanted before touching it).
 

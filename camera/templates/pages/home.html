@@ -1,0 +1,59 @@
+{# title: Home #}
+{% extends "base.html" %}
+{% block title %}GR6 — Camera{% endblock %}
+
+{% block content %}
+<div class="card mb-4">
+  <div class="card-body p-0 text-center">
+    <img src="/camera.mjpg" class="img-fluid" style="max-height: 70vh;" alt="Live camera preview">
+  </div>
+</div>
+
+<div class="row row-cols-2 row-cols-md-4 g-3">
+  <div class="col">
+    <div class="card text-center">
+      <div class="card-body">
+        <div class="text-body-secondary small">Frame rate (target)</div>
+        <div class="fs-4">{{ camera_fps }} Hz</div>
+      </div>
+    </div>
+  </div>
+  <div class="col">
+    <div class="card text-center">
+      <div class="card-body">
+        <div class="text-body-secondary small">Exposure</div>
+        <div class="fs-4"><span id="stat-exposure">—</span> &micro;s</div>
+      </div>
+    </div>
+  </div>
+  <div class="col">
+    <div class="card text-center">
+      <div class="card-body">
+        <div class="text-body-secondary small">Gain</div>
+        <div class="fs-4"><span id="stat-gain">—</span></div>
+      </div>
+    </div>
+  </div>
+  <div class="col">
+    <div class="card text-center">
+      <div class="card-body">
+        <div class="text-body-secondary small">Frame</div>
+        <div class="fs-4">#<span id="stat-sequence">—</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+connectWs("/ws/camera", (msg) => {
+  document.getElementById("stat-exposure").textContent =
+    msg.exposure_us !== undefined && msg.exposure_us !== null ? msg.exposure_us : "—";
+  document.getElementById("stat-gain").textContent =
+    msg.gain !== undefined && msg.gain !== null ? msg.gain.toFixed(2) : "—";
+  document.getElementById("stat-sequence").textContent =
+    msg.sequence !== undefined ? msg.sequence : "—";
+});
+</script>
+{% endblock %}

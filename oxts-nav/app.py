@@ -23,6 +23,7 @@ from shared.config import load_config  # noqa: E402
 from shared.web import manager_url, register_pages, use_shared_static, use_shared_templates  # noqa: E402
 
 import ncomrx_thread  # noqa: E402
+import nav_feed  # noqa: E402
 
 XNAV_COMMAND_PORT = 3001
 XNAV_CONFIG_FILES = [
@@ -48,6 +49,13 @@ service_cfg = cfg["services"]["oxts-nav"]
 nav_update_hz = service_cfg["nav_update_hz"]
 
 nrxs = ncomrx_thread.NcomRxThread()
+
+nav_feed_server = nav_feed.NavFeedServer(
+    socket_path=service_cfg["nav_feed_socket"],
+    nrxs=nrxs,
+    xnav_ip=xnav_ip,
+    hz=service_cfg["nav_feed_hz"],
+)
 
 
 def send_xnav_command(message: str) -> None:
@@ -122,4 +130,5 @@ def ws_nav(ws):
 
 if __name__ == "__main__":
     threading.Thread(target=download_xnav_config, daemon=True).start()
+    nav_feed_server.start()
     app.run(host=service_cfg["host"], port=service_cfg["port"])

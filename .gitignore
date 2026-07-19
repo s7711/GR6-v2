@@ -9,3 +9,10 @@ config.yaml
 manager/config-backup/
 oxts-nav/xnav-config/
 *.log
+
+# Camera calibration — device/lens-specific, see camera/camera-prd.md
+shared/camera-cal.yaml
+camera/data/
+
+# Claude Code's own local tooling state, not project source
+.claude/

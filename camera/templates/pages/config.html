@@ -1,0 +1,24 @@
+{# title: Config #}
+{% extends "base.html" %}
+{% block title %}GR6 — Camera Config{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div class="card-body">
+    <table class="table">
+      <tbody>
+        <tr>
+          <th scope="row">Resolution</th>
+          <td>{{ resolution }}</td>
+          <td class="text-body-secondary small">Fixed — not configurable, since camera calibration is tied to this exact resolution.</td>
+        </tr>
+        <tr>
+          <th scope="row">Frame rate</th>
+          <td>{{ camera_fps }} Hz</td>
+          <td class="text-body-secondary small">Set via <code>camera_fps</code> in the shared config file (edited from the manager's Config page, not here).</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

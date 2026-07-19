@@ -1,0 +1,128 @@
+{# title: Calibrate #}
+{% extends "base.html" %}
+{% block title %}GR6 — Camera Calibration{% endblock %}
+
+{% block content %}
+<div class="row g-3">
+  <div class="col-lg-8">
+    <div class="card">
+      <div class="card-body p-0 text-center">
+        <img src="/calibration.mjpg" class="img-fluid" style="max-height: 70vh;" alt="Calibration preview">
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-4 d-flex flex-column gap-3">
+    <div class="card">
+      <div class="card-body d-flex gap-2">
+        <button id="btn-start" type="button" class="btn btn-success">Start</button>
+        <button id="btn-abort" type="button" class="btn btn-danger" disabled>Abort</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-body">
+        <div class="text-body-secondary small" id="cal-progress"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-body">
+        <div class="fs-5" id="cal-message">—</div>
+      </div>
+    </div>
+
+    <div class="card text-center">
+      <div class="card-body">
+        <div class="text-body-secondary small">Fit score</div>
+        <div class="fs-4"><span id="stat-cal-fit">—</span></div>
+        <div class="text-body-secondary small">higher is better, &ge;0.80 needed</div>
+      </div>
+    </div>
+
+    <div class="card text-center">
+      <div class="card-body">
+        <div class="text-body-secondary small">Alignment error</div>
+        <div class="fs-4"><span id="stat-cal-alignment">—</span></div>
+        <div class="text-body-secondary small">lower is better, &le;0.50 needed</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-body">
+        <div class="text-body-secondary small">Exposure</div>
+        <div class="fs-5"><span id="stat-exposure">—</span> &micro;s</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-body">
+        <div class="text-body-secondary small">Gain</div>
+        <div class="fs-5"><span id="stat-gain">—</span></div>
+      </div>
+    </div>
+
+    <div class="card" id="cal-results" style="display: none;">
+      <div class="card-body">
+        <h5 class="card-title">Result</h5>
+        <table class="table">
+          <tbody>
+            <tr><th scope="row">RMS reprojection error</th><td id="cal-rms">—</td></tr>
+            <tr><th scope="row">Resolution</th><td id="cal-resolution">—</td></tr>
+            <tr><th scope="row">Images used</th><td id="cal-count">—</td></tr>
+          </tbody>
+        </table>
+        <button id="btn-promote" type="button" class="btn btn-primary">Make this the active calibration</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const btnStart = document.getElementById("btn-start");
+const btnAbort = document.getElementById("btn-abort");
+const btnPromote = document.getElementById("btn-promote");
+
+btnStart.addEventListener("click", () => fetch("/calibrate/start", { method: "POST" }));
+btnAbort.addEventListener("click", () => fetch("/calibrate/abort", { method: "POST" }));
+btnPromote.addEventListener("click", () => fetch("/calibrate/promote", { method: "POST" }));
+
+connectWs("/ws/calibrate", (msg) => {
+  document.getElementById("cal-progress").textContent =
+    msg.state === "capturing" ? `Image ${msg.position + 1} of ${msg.count}` : "";
+  document.getElementById("cal-message").textContent = msg.message || "—";
+  document.getElementById("stat-cal-fit").textContent =
+    msg.fit !== null && msg.fit !== undefined ? msg.fit.toFixed(2) : "—";
+  document.getElementById("stat-cal-alignment").textContent =
+    msg.alignment_error !== null && msg.alignment_error !== undefined ? msg.alignment_error.toFixed(2) : "—";
+
+  const running = msg.state === "capturing" || msg.state === "computing";
+  btnStart.disabled = running;
+  btnAbort.disabled = !running;
+
+  const results = document.getElementById("cal-results");
+  if (msg.state === "done" && msg.result) {
+    results.style.display = "";
+    const rms = msg.result.rms;
+    const level = rms < 0.5 ? "success" : rms < 1.0 ? "warning" : "danger";
+    document.getElementById("cal-rms").innerHTML =
+      `<span class="badge text-bg-${level}">${rms.toFixed(3)} px</span>`;
+    document.getElementById("cal-resolution").textContent = msg.result.resolution;
+    document.getElementById("cal-count").textContent = msg.result.image_count;
+  } else {
+    results.style.display = "none";
+  }
+});
+
+// Reuses the same feed the Home page uses — exposure/gain are just
+// lighting-indicator context here, not something this page needs to own.
+connectWs("/ws/camera", (msg) => {
+  document.getElementById("stat-exposure").textContent =
+    msg.exposure_us !== undefined && msg.exposure_us !== null ? msg.exposure_us : "—";
+  document.getElementById("stat-gain").textContent =
+    msg.gain !== undefined && msg.gain !== null ? msg.gain.toFixed(2) : "—";
+});
+</script>
+{% endblock %}
