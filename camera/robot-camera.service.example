@@ -1,11 +1,11 @@
 [Unit]
-Description=GR6 hello (example child service)
+Description=GR6 camera
 After=network.target
 
 [Service]
 User=pi
 WorkingDirectory=/home/pi/share/GR6-v2
-ExecStart=/home/pi/share/GR6-v2/venv/bin/python3 hello/app.py
+ExecStart=/home/pi/share/GR6-v2/venv/bin/python3 camera/app.py
 Restart=no
 
 [Install]

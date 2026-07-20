@@ -5,7 +5,7 @@ After=network.target
 [Service]
 User=pi
 WorkingDirectory=/home/pi/share/GR6-v2
-ExecStart=/usr/bin/python3 manager/app.py
+ExecStart=/home/pi/share/GR6-v2/venv/bin/python3 manager/app.py
 Restart=on-failure
 
 [Install]

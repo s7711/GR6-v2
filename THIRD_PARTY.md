@@ -25,3 +25,7 @@
 ## favicon (robot icon, shared across every service)
 - Source: Home Assistant Filled Icons, by IonutNeagu (https://github.com/IonutNeagu), via https://www.svgviewer.dev/s/374296/robot
 - License: Public Domain
+
+## drive icon
+- Source: Mary Akveo (https://maryakveo.com/), via https://www.svgviewer.dev/s/499347/steering-wheel
+- License: Public Domain

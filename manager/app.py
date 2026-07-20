@@ -25,6 +25,7 @@ ALLOWED_ACTIONS = {"start", "stop", "restart"}
 STATUS_POLL_SECONDS = 2
 MANAGER_SERVICE_NAME = "manager"
 CONFIG_BACKUP_DIR = Path(__file__).resolve().parent / "config-backup"
+JOURNAL_LINES = 200
 
 app = Flask(__name__)
 use_shared_templates(app)
@@ -110,6 +111,24 @@ def services_action(name, action):
         abort(400)
     control_unit(cfg["unit"], action)
     return "", 204
+
+
+def read_journal(unit: str, lines: int) -> str:
+    result = subprocess.run(
+        ["journalctl", "-u", unit, "-n", str(lines), "--no-pager"],
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout or result.stderr
+
+
+@app.route("/services/<name>/journal")
+def journal_page(name):
+    cfg = services().get(name)
+    if cfg is None:
+        abort(404)
+    text = read_journal(cfg["unit"], JOURNAL_LINES)
+    return render_template("journal.html", name=name, unit=cfg["unit"], text=text)
 
 
 @app.route("/config", methods=["GET", "POST"])

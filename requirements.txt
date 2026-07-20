@@ -6,6 +6,7 @@ pillow
 opencv-contrib-python-headless  # calibration.py: findChessboardCorners, calibrateCamera. Headless (no GTK/Qt) — nothing here ever calls imshow, this is a headless robot
 scipy      # calibration.py: ConvexHull, for the "is the checkerboard big enough" check
 matplotlib # calibration.py: matplotlib.path.Path, for the point-in-polygon check
+pyserial   # drive/serial_link.py: USB-serial connection to the motor-controller microcontroller
 
 # picamera2 is not listed here — it depends on system libcamera bindings
 # and normally can't be pip-installed standalone. On the Pi it's usually

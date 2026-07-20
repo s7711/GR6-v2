@@ -1,0 +1,68 @@
+{# title: Ultrasonics #}
+{% extends "base.html" %}
+{% block title %}GR6 — Drive Ultrasonics{% endblock %}
+
+{% block content %}
+<p class="text-body-secondary small">
+  Sensor ids match the firmware's own <code>U0</code>–<code>U4</code> wire
+  tags (0-indexed) — not currently trusted for automatic obstacle
+  avoidance (see drive-prd.md), this page is purely for judging how well
+  they're working before that's built. "No echo" (grey) can mean either
+  a genuinely clear path or a sensor angle/surface that doesn't reflect
+  well — the two aren't distinguishable from this reading alone.
+</p>
+<div class="card">
+  <div class="card-body text-center">
+    <svg id="diagram" viewBox="0 0 200 300" style="max-width: 320px; width: 100%;">
+      <!-- Robot body, top-down, forward = up -->
+      <rect x="55" y="40" width="90" height="220" rx="12" fill="var(--bs-tertiary-bg)" stroke="var(--bs-border-color)"/>
+      <text x="100" y="30" text-anchor="middle" class="small" fill="currentColor">Forward</text>
+
+      <!-- U4: front-left, facing forward -->
+      <polygon id="wedge-4" points="55,60 75,60 65,20" fill="#6c757d"/>
+      <text id="label-4" x="65" y="80" text-anchor="middle" fill="currentColor">—</text>
+
+      <!-- U0: front-right, facing forward -->
+      <polygon id="wedge-0" points="125,60 145,60 135,20" fill="#6c757d"/>
+      <text id="label-0" x="135" y="80" text-anchor="middle" fill="currentColor">—</text>
+
+      <!-- U1: back-right, facing right -->
+      <polygon id="wedge-1" points="145,210 145,230 185,220" fill="#6c757d"/>
+      <text id="label-1" x="160" y="245" text-anchor="middle" fill="currentColor">—</text>
+
+      <!-- U3: back-left, facing left -->
+      <polygon id="wedge-3" points="55,210 55,230 15,220" fill="#6c757d"/>
+      <text id="label-3" x="40" y="245" text-anchor="middle" fill="currentColor">—</text>
+
+      <!-- U2: back-centre, facing backward -->
+      <polygon id="wedge-2" points="80,260 120,260 100,290" fill="#6c757d"/>
+      <text id="label-2" x="100" y="278" text-anchor="middle" fill="currentColor" font-size="10">—</text>
+    </svg>
+    <div class="text-body-secondary small mt-2">
+      Green &ge; 600mm, amber 200&ndash;599mm, red &lt; 200mm, grey = no echo
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const NEAR_MM = 200;
+const FAR_MM = 600;
+
+function colourFor(mm) {
+  if (mm === undefined || mm === -1) return "#6c757d"; // secondary — no echo
+  if (mm < NEAR_MM) return "#dc3545";  // danger
+  if (mm < FAR_MM) return "#ffc107";   // warning
+  return "#198754";                     // success
+}
+
+connectWs("/ws/drive", (msg) => {
+  for (let i = 0; i <= 4; i++) {
+    const mm = msg[`ultrasonic_${i}_mm`];
+    document.getElementById(`wedge-${i}`).setAttribute("fill", colourFor(mm));
+    document.getElementById(`label-${i}`).textContent = (mm === undefined) ? "—" : (mm === -1 ? "no echo" : `${mm}mm`);
+  }
+});
+</script>
+{% endblock %}

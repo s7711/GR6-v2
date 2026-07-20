@@ -18,7 +18,7 @@ see `top-prd.md` for why and how.
 
 ## Status
 
-Early days. Five of the planned services exist so far:
+Early days. Six of the planned services exist so far:
 
 - **`oxts-nav`** — decodes the xNAV650's NCOM stream and serves live
   nav/status/connection data over a websocket, with web pages for a
@@ -34,18 +34,26 @@ Early days. Five of the planned services exist so far:
   for GNSS-poor spots. Pages for a live view, a vehicle-centred plan-view
   map, surveying a new marker from a live detection, and managing the
   marker list. Field-validated outdoors with real RTK/NTRIP corrections.
+- **`drive`** — talks to the motor-controller microcontroller (Arduino,
+  moving to a Raspberry Pi Pico) over USB serial: motor velocity, water
+  pump, ultrasonic ranges, encoder/PID telemetry. Pages for manual jog
+  control, live PID tuning (with scrolling graphs), an ultrasonic
+  sensor diagram, and config. Publishes a `drive_feed` Unix
+  socket for future services (`navigate`, `missions`, a wheelspeed-GAD
+  sender) to consume. See `drive/drive-prd.md`.
 - **`manager`** — a home-screen-style launcher: icon-grid to jump to
   each service's own web UI, a services table (status/start/stop/
-  restart), and a plain-text editor for the shared config file.
+  restart/journal), and a plain-text editor for the shared config file.
 - **`hello`** — a minimal example child service, mostly there to prove
   out the shared config/IPC/web conventions for whatever service comes
   next.
 
 Nav decode, then the manager, were deliberately tackled first, then
-camera, then aruco — see "Suggested migration order" in `top-prd.md` for
-the reasoning and what's still to come (path-following/motor control
-last, since that's safety-critical, and a network-sharing service to
-give the xNAV650 internet access for NTRIP).
+camera, then aruco, then drive — see "Suggested migration order" in
+`top-prd.md` for the reasoning and what's still to come (`navigate`/
+`missions`/`safety` built on top of `drive`, wheelspeed GAD aiding, and
+a network-sharing service to give the xNAV650 internet access for
+NTRIP).
 
 ## Architecture
 
@@ -77,6 +85,7 @@ python manager/app.py
 python oxts-nav/app.py
 python camera/app.py
 python aruco/app.py
+python drive/app.py
 ```
 
 Then visit the manager's home page (port 8000 by default) to reach

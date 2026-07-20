@@ -58,6 +58,7 @@
 
 {% block scripts %}
 <script src="/static/ncom-strings.js"></script>
+<script src="/static/uplot-utils.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.iife.min.js"></script>
 <script>
 const HISTORY_SECONDS = 60;
@@ -71,6 +72,7 @@ const plot = new uPlot({
   height: 240,
   legend: { show: false }, // not useful for a scrolling live chart
   scales: { x: { time: true } },
+  axes: [{ values: hhmmssAxisValues }],
   series: [
     {},
     { label: "Speed (m/s)", stroke: "#ff8c42" },

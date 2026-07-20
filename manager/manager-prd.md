@@ -73,6 +73,27 @@ requirement to bind a privileged port.
 - **Start/stop/restart:** shells out to `systemctl start/stop/restart
   <unit>`. Must not use `subprocess.Popen` or similar to run services
   directly — see top-prd.md for why (lifecycle coupling, blast radius).
+- **Journal viewer:** a per-service page (`/services/<name>/journal`)
+  showing the last 200 lines of `journalctl -u <unit> --no-pager`. Not
+  managed/cleared from here — `journald`'s own retention/rotation
+  (`/etc/systemd/journald.conf`) handles that at the OS level,
+  independent of any one unit, so there's deliberately no "clear log"
+  button. `pi` can read the journal without `sudo` (member of the `adm`
+  group on this Raspberry Pi OS install) — worth re-checking group
+  membership on a fresh machine if this ever stops working.
+- **Restart policy convention:** the manager's own unit runs
+  `Restart=on-failure` (systemd is the manager's supervisor, so it can
+  restart itself without needing to manage its own process — see
+  top-prd.md's process model). Every other service's unit runs
+  `Restart=no` — a crashed service stays visibly stopped/failed in the
+  services table until an operator restarts it by hand, rather than
+  silently crash-looping. **No unit is `systemctl enable`d** (start-at-
+  boot) at this stage of the project — everything is started manually,
+  by design, while still under active development; a per-service
+  "enabled" toggle calling `enable`/`disable` is a plausible future
+  addition once unattended startup is actually wanted (see
+  `manager/manual.md` for the current one-time install steps and
+  day-to-day startup command).
 - **Privilege:** scoped `sudoers` rule permitting the manager's user to run
   `systemctl {start,stop,restart} robot-*` without a password; nothing
   broader. Do not run the Flask app as root. Runs on a normal (non-

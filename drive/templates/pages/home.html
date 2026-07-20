@@ -1,0 +1,139 @@
+{# title: Home #}
+{% extends "base.html" %}
+{% block title %}GR6 — Drive{% endblock %}
+
+{% block content %}
+<div id="firmware-banner" class="alert alert-warning" style="display: none;"></div>
+
+<div class="row g-3">
+  <div class="col-12 col-md-6">
+    <div class="card">
+      <div class="card-body text-center">
+        <div class="text-body-secondary small mb-2">Jog — drag inside the square, release to stop</div>
+        <div id="joystick" style="touch-action: none; width: 260px; height: 260px; margin: 0 auto; background: var(--bs-tertiary-bg); border: 1px solid var(--bs-border-color); border-radius: 0.5rem; position: relative; cursor: grab;">
+          <div id="joystick-thumb" style="width: 60px; height: 60px; border-radius: 50%; background: var(--bs-primary); position: absolute; left: 100px; top: 100px; pointer-events: none;"></div>
+        </div>
+        <div class="text-body-secondary small mt-2">Controller: <span id="stat-controller">—</span></div>
+        <button id="pump-toggle" class="btn btn-outline-primary mt-3">Pump: <span id="pump-state">—</span></button>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-md-6">
+    <div class="card">
+      <div class="card-body">
+        <table class="table table-sm mb-0">
+          <tbody>
+            <tr><th scope="row">Left / Right position</th><td><span id="stat-LM_position_m">—</span> m / <span id="stat-RM_position_m">—</span> m</td></tr>
+            <tr><th scope="row">Left / Right set velocity</th><td><span id="stat-LM_setvel_mps">—</span> / <span id="stat-RM_setvel_mps">—</span> m/s</td></tr>
+            <tr><th scope="row">Left / Right filtered velocity</th><td><span id="stat-LM_vel_filt_mps">—</span> / <span id="stat-RM_vel_filt_mps">—</span> m/s</td></tr>
+            <tr><th scope="row">Ramp state</th><td><span id="stat-ctrl_enabled">—</span><span class="text-body-secondary small"> (0 = control loop off/coasting; ramps 1→4 over ~400ms when starting, to avoid a jolt — see <code>ctrlEnabled</code> in the firmware)</span></td></tr>
+          </tbody>
+        </table>
+        <a href="/pages/ultrasonics" class="small">Ultrasonics &rarr;</a>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const MAX_SPEED_MPS = {{ max_speed_mps }};
+const JOG_REPEAT_MS = 300;
+
+const joystick = document.getElementById("joystick");
+const thumb = document.getElementById("joystick-thumb");
+const RADIUS = 100; // half of joystick's 260px minus half of thumb's 60px, approx usable travel
+
+let dragging = false;
+let vector = { x: 0, y: 0 }; // -1..1, -1..1
+let repeatTimer = null;
+
+function sendManual(x, y) {
+  // y is inverted: up (negative screen Y) means forward
+  const forward = -y * MAX_SPEED_MPS;
+  const turn = x * MAX_SPEED_MPS;
+  const left_mps = forward - turn;
+  const right_mps = forward + turn;
+  fetch("/command/manual", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ left_mps, right_mps }),
+  });
+}
+
+function setThumb(x, y) {
+  thumb.style.left = `${100 + x * RADIUS}px`;
+  thumb.style.top = `${100 + y * RADIUS}px`;
+}
+
+// Updates the on-screen thumb/vector immediately (cheap, client-only) —
+// does NOT send a command. pointermove can fire dozens of times a
+// second while dragging; actually POSTing on every one of those would
+// flood both the network and (via Werkzeug's access log) the systemd
+// journal. The repeat timer below is the only thing that actually sends
+// a command, at a fixed, bounded rate.
+function updateFromEvent(evt) {
+  const rect = joystick.getBoundingClientRect();
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+  let x = (evt.clientX - cx) / RADIUS;
+  let y = (evt.clientY - cy) / RADIUS;
+  const mag = Math.hypot(x, y);
+  if (mag > 1) { x /= mag; y /= mag; }
+  vector = { x, y };
+  setThumb(x, y);
+}
+
+joystick.addEventListener("pointerdown", (evt) => {
+  dragging = true;
+  joystick.setPointerCapture(evt.pointerId);
+  joystick.style.cursor = "grabbing";
+  updateFromEvent(evt);
+  sendManual(vector.x, vector.y); // send once immediately, so the response feels instant
+  repeatTimer = setInterval(() => sendManual(vector.x, vector.y), JOG_REPEAT_MS);
+});
+
+joystick.addEventListener("pointermove", (evt) => {
+  if (dragging) updateFromEvent(evt);
+});
+
+function stopJogging() {
+  if (!dragging) return;
+  dragging = false;
+  joystick.style.cursor = "grab";
+  clearInterval(repeatTimer);
+  vector = { x: 0, y: 0 };
+  setThumb(0, 0);
+  sendManual(0, 0); // one explicit stop — releasing the joystick means "stop now," not "coast until the 500ms hold lapses"
+}
+
+joystick.addEventListener("pointerup", stopJogging);
+joystick.addEventListener("pointercancel", stopJogging);
+
+let pumpOn = false;
+document.getElementById("pump-toggle").addEventListener("click", () => {
+  pumpOn = !pumpOn;
+  fetch("/pump", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ on: pumpOn }),
+  });
+});
+
+connectWs("/ws/drive", (msg) => {
+  fillFields("stat-", msg);
+  document.getElementById("stat-controller").textContent = msg.control ? msg.control.controller : "—";
+  document.getElementById("pump-state").textContent = msg.pump ? "on" : "off";
+
+  const banner = document.getElementById("firmware-banner");
+  if (msg.firmware && msg.firmware.mismatch) {
+    banner.style.display = "";
+    banner.textContent = `Firmware version mismatch: expected ${msg.firmware.expected || "?"}, got ${msg.firmware.actual || "no version received"}.`;
+  } else {
+    banner.style.display = "none";
+  }
+});
+</script>
+{% endblock %}

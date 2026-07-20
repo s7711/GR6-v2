@@ -47,3 +47,17 @@ services:
     camera_extrinsics:
       hpr_cb: [0, 0, 0]  # camera mount HPR relative to body; unmeasured/assumed — see aruco-prd.md bore-sight note
       d_xc_b: [0.0775, 0.002, -0.07]  # camera displacement in body frame, metres
+
+  drive:
+    unit: robot-drive.service
+    host: 0.0.0.0
+    port: 8005
+    web_ui: true
+    serial_port: /dev/ttyUSB0       # re-check once the Pico is fitted — likely /dev/ttyACM0 or similar
+    baud: 115200
+    counts_per_metre: 250            # from GR6-v1, needs re-measuring on this robot — the wheelspeed-GAD sender will depend on this being right
+    human_control_hold_ms: 500       # how long a manual jog command locks out automatic callers (navigate/missions) — see drive-prd.md
+    expected_firmware_version: "260720#1.GR6"
+    drive_feed_socket: /tmp/gr6-drive-feed.sock  # Unix domain socket — see "Feed naming" in drive-prd.md
+    drive_feed_hz: 20
+    tuning: {}                        # optional, e.g. {Kp: [1.0, 1.0], Ki: [3.0, 3.0]} — pushed to the microcontroller each time drive starts

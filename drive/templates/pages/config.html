@@ -1,0 +1,49 @@
+{# title: Config #}
+{% extends "base.html" %}
+{% block title %}GR6 — Drive Config{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div class="card-body">
+    <table class="table">
+      <tbody>
+        <tr>
+          <th scope="row">Serial port</th>
+          <td>{{ serial_port }} @ {{ baud }} baud</td>
+          <td class="text-body-secondary small">Re-check once the Pico is fitted — likely a different device path.</td>
+        </tr>
+        <tr>
+          <th scope="row">Counts per metre</th>
+          <td>{{ counts_per_metre }}</td>
+          <td class="text-body-secondary small">Wheel/encoder geometry — from GR6-v1, re-measure on this robot before trusting it (see drive-prd.md).</td>
+        </tr>
+        <tr>
+          <th scope="row">Manual control hold</th>
+          <td>{{ human_control_hold_ms }} ms</td>
+          <td class="text-body-secondary small">How long a manual jog command locks out automatic callers (navigate/missions) — see drive-prd.md ("Control arbitration").</td>
+        </tr>
+        <tr>
+          <th scope="row">Expected firmware version</th>
+          <td>{{ expected_firmware_version or "(none set)" }}</td>
+          <td class="text-body-secondary small">Compared against the microcontroller's own reported version at startup — mismatch shows as a banner on the Home page.</td>
+        </tr>
+        <tr>
+          <th scope="row">Configured tuning overrides</th>
+          <td>
+            {% if tuning %}
+            <ul class="mb-0">
+              {% for name, values in tuning.items() %}
+              <li>{{ name }}: {{ values[0] }}, {{ values[1] }}</li>
+              {% endfor %}
+            </ul>
+            {% else %}
+            (none — firmware's own defaults apply)
+            {% endif %}
+          </td>
+          <td class="text-body-secondary small">Pushed to the microcontroller each time `drive` starts. Edit via the manager's Config page, not here.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

@@ -133,8 +133,14 @@ general-purpose sysadmin tool.
    exposure/gain metadata, shared-memory frame publishing, calibration) —
    then `aruco` (marker detection + GAD updates to the xNAV650, consuming
    the camera's frames) — in progress, see `aruco/aruco-prd.md`.
-4. Path-following/motor control last (safety-critical — most confidence
-   wanted before touching it).
+4. Motor control, split into `drive` (low-level: motor velocity, water
+   pump, ultrasonics, encoder/PID telemetry, over USB serial to the
+   motor-controller microcontroller) — done, see `drive/drive-prd.md` —
+   then `navigate` (waypoint/path-following), `missions` (sequencing
+   multiple stops + pump actions), and `safety` (obstacle-avoidance
+   decisions, once the ultrasonics are trusted) built on top of it, in
+   that order. These later three are the safety-critical pieces — most
+   confidence wanted before touching them, hence saved for last.
 5. Network sharing (wifi -> ethernet internet sharing) — not yet built,
    identified as needed while testing `aruco`/`oxts-nav` together: the
    xNAV650 sits on `eth0`, and needs internet access (for NTRIP
@@ -146,6 +152,15 @@ general-purpose sysadmin tool.
    gateway/DNS pointed at it) as a prerequisite, not something the
    service itself can do. No PRD yet — do not build until picked up
    properly.
+6. Wheelspeed GAD aiding — not yet built, identified while surveying
+   ArUco markers with `aruco`: position-only GAD from a stationary/known
+   marker doesn't help the INS solution *between* good fixes, whereas
+   wheelspeed aiding keeps drift much lower while driving through a
+   GNSS-poor patch, making the fix at the next marker (or on return to
+   good sky view) far more accurate. Needs wheel encoder data from the
+   Arduino/Pico first — blocked on the `drive` service (see "motor
+   control", item 4) actually publishing encoder ticks; can't be
+   built before that exists. No PRD yet.
 
 ## Out of Scope (at this level)
 
@@ -157,6 +172,20 @@ general-purpose sysadmin tool.
   separate; different lifecycle and exposure needs.
 - Future idea (not in scope yet): the manager fetching/installing/updating
   service code via git as part of its own duties.
+- Future idea (not in scope yet): per-service config validation. The
+  manager's config editor only checks that `config.yaml` is syntactically
+  valid YAML (see `manager-prd.md`) — it has no idea whether, say, a
+  `drive` PID constant or a `camera` frame rate is a *sane* value for
+  that service, and centralising that knowledge in the manager feels
+  wrong (it would need to know every other service's internals). Raised
+  while designing `drive`'s tuning-constants config (see
+  `drive/drive-prd.md`). A plausible future shape: each service exposes
+  its own config-validation (a callback, or a `--check-config` CLI flag),
+  called by whoever cares — the manager before saving, a service at its
+  own startup, or a standalone script — rather than one central
+  validator trying to know everything. Not needed until a service
+  actually has config values worth getting wrong in a way syntax
+  checking can't catch.
 - Future idea (not in scope yet, not needed for this project, but worth
   trying out): an AI page-configurator — the user describes what they
   want on a page (in a chat-style UI) and an LLM (e.g. via the Claude

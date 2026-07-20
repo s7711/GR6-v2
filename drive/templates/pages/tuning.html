@@ -1,0 +1,125 @@
+{# title: Tuning #}
+{% extends "base.html" %}
+{% block title %}GR6 — Drive Tuning{% endblock %}
+
+{% block content %}
+<p class="text-body-secondary small">
+  Live PID/filter constants for the motor control loop — see
+  <code>drive/firmware/GR6_motor.ino</code> for what each one does.
+  No range validation here (neither of us knows a universally safe
+  bound); a bad value can make the robot lurch, take care. Values set
+  here are live-only — to make a setting durable across restarts, add
+  it to <code>drive:</code> &rarr; <code>tuning:</code> in the shared
+  config file (edited from the manager's Config page) so it's re-applied
+  every time `drive` starts up.
+</p>
+<div class="card">
+  <div class="card-body">
+    <table class="table table-sm align-middle">
+      <thead><tr><th>Param</th><th>Current L</th><th>Current R</th><th>New L</th><th>New R</th><th></th></tr></thead>
+      <tbody>
+        {% for name in tuning_params %}
+        <tr data-param="{{ name }}">
+          <td>{{ name }}</td>
+          <td><span id="stat-tuning_{{ name }}_L">—</span></td>
+          <td><span id="stat-tuning_{{ name }}_R">—</span></td>
+          <td><input type="number" step="any" class="form-control form-control-sm" data-input="left" style="width: 6rem;"></td>
+          <td><input type="number" step="any" class="form-control form-control-sm" data-input="right" style="width: 6rem;"></td>
+          <td><button class="btn btn-sm btn-outline-primary" data-action="set">Set</button></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<p class="text-body-secondary small mt-3 mb-1">
+  Control-loop behaviour, in the firmware's own native units (counts/s,
+  raw PWM) — not m/s — since that's what these gains actually act on.
+</p>
+<div class="row g-3">
+  <div class="col-12 col-md-6">
+    <div class="card"><div class="card-body">
+      <div class="text-body-secondary small mb-1">Left motor</div>
+      <div id="graph-lm"></div>
+    </div></div>
+  </div>
+  <div class="col-12 col-md-6">
+    <div class="card"><div class="card-body">
+      <div class="text-body-secondary small mb-1">Right motor</div>
+      <div id="graph-rm"></div>
+    </div></div>
+  </div>
+</div>
+
+<link href="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.min.css" rel="stylesheet">
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/uplot-utils.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.iife.min.js"></script>
+<script>
+document.querySelectorAll("button[data-action=set]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const row = btn.closest("tr");
+    const name = row.dataset.param;
+    const left = parseFloat(row.querySelector('[data-input="left"]').value);
+    const right = parseFloat(row.querySelector('[data-input="right"]').value);
+    if (Number.isNaN(left) || Number.isNaN(right)) return;
+    fetch("/tuning", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, left, right }),
+    });
+  });
+});
+
+const HISTORY_SECONDS = 15; // PID tuning needs to see recent transients, not a long history
+const GRAPH_HZ = 5; // matches /ws/drive's own push rate — see app.py's DRIVE_STATUS_HZ
+const MAX_POINTS = HISTORY_SECONDS * GRAPH_HZ;
+
+// One series per plotted quantity, in a fixed order shared by both charts —
+// index into `data`/`seriesFields` must line up.
+const SERIES = [
+  { label: "Set velocity", stroke: "red", field: "setvel" },
+  { label: "Filtered velocity", stroke: "green", field: "vel_filt" },
+  { label: "Error", stroke: "blue", field: "err" },
+  { label: "Integrated error", stroke: "orange", field: "integral" },
+  { label: "Differential error", stroke: "deeppink", field: "derr" },
+  { label: "Motor output", stroke: "purple", field: "out" },
+];
+
+function makeChart(el) {
+  const data = SERIES.map(() => []);
+  data.unshift([]); // time axis
+  const plot = new uPlot({
+    width: el.clientWidth,
+    height: 240,
+    scales: { x: { time: true } },
+    axes: [{ values: hhmmssAxisValues }],
+    series: [{}, ...SERIES.map((s) => ({ label: s.label, stroke: s.stroke }))],
+  }, data, el);
+  window.addEventListener("resize", () => plot.setSize({ width: el.clientWidth, height: 240 }));
+  return { plot, data };
+}
+
+const lm = makeChart(document.getElementById("graph-lm"));
+const rm = makeChart(document.getElementById("graph-rm"));
+
+function pushSample(chart, side, msg) {
+  const t = Date.now() / 1000;
+  chart.data[0].push(t);
+  SERIES.forEach((s, i) => chart.data[i + 1].push(msg[`${side}_${s.field}`]));
+  if (chart.data[0].length > MAX_POINTS) {
+    chart.data.forEach((series) => series.shift());
+  }
+  chart.plot.setData(chart.data);
+}
+
+connectWs("/ws/drive", (msg) => {
+  fillFields("stat-", msg);
+  if (msg.LM_setvel !== undefined) pushSample(lm, "LM", msg);
+  if (msg.RM_setvel !== undefined) pushSample(rm, "RM", msg);
+});
+</script>
+{% endblock %}
