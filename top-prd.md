@@ -126,16 +126,26 @@ general-purpose sysadmin tool.
 
 ## Suggested migration order
 
-1. Nav decode (xNAV650 data handling) — sorted out first; no PRD for this
-   service yet, not being planned in detail at this stage.
-2. Manager — needed early so services gain status/control visibility as
-   they come online, rather than bolting it on last.
-3. Vision, split into two services: `camera` (capture, timing/exposure/
-   gain metadata, shared-memory frame publishing, calibration to follow
-   right after), then `aruco` (marker detection + GAD updates to the
-   xNAV650, consuming the camera's frames).
+1. Nav decode (xNAV650 data handling) — done (`oxts-nav`).
+2. Manager — done (`manager`), giving services status/control visibility
+   as they came online.
+3. Vision, split into two services: `camera` — done (capture, timing/
+   exposure/gain metadata, shared-memory frame publishing, calibration) —
+   then `aruco` (marker detection + GAD updates to the xNAV650, consuming
+   the camera's frames) — in progress, see `aruco/aruco-prd.md`.
 4. Path-following/motor control last (safety-critical — most confidence
    wanted before touching it).
+5. Network sharing (wifi -> ethernet internet sharing) — not yet built,
+   identified as needed while testing `aruco`/`oxts-nav` together: the
+   xNAV650 sits on `eth0`, and needs internet access (for NTRIP
+   corrections) shared from the Pi's `wlan0`. A working iptables
+   MASQUERADE + FORWARD script already exists (not yet in this repo) —
+   it needs turning into a proper managed service, since both the
+   iptables rules and `net.ipv4.ip_forward` reset on every reboot as-is.
+   Also needs a static IP configured on `eth0` (and the xNAV650's own
+   gateway/DNS pointed at it) as a prerequisite, not something the
+   service itself can do. No PRD yet — do not build until picked up
+   properly.
 
 ## Out of Scope (at this level)
 

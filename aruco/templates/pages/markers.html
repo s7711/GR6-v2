@@ -1,0 +1,55 @@
+{# title: Markers #}
+{% extends "base.html" %}
+{% block title %}GR6 — Markers{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div class="card-body">
+    <table class="table table-sm align-middle">
+      <thead>
+        <tr>
+          <th>Id</th><th>Size (m)</th><th>Lat</th><th>Lon</th><th>Alt (m)</th>
+          <th>Heading</th><th>Pitch</th><th>Roll</th><th></th>
+        </tr>
+      </thead>
+      <tbody id="marker-rows"></tbody>
+    </table>
+    <p id="empty-note" class="text-body-secondary small" style="display: none;">
+      No markers surveyed yet — use Add Marker to get started.
+    </p>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function loadMarkers() {
+  fetch("/marker-map")
+    .then((r) => r.json())
+    .then((markers) => {
+      document.getElementById("empty-note").style.display = markers.length ? "none" : "";
+      document.getElementById("marker-rows").innerHTML = markers
+        .map((m) => `<tr>
+          <td>${m.id}</td>
+          <td>${m.size}</td>
+          <td>${m.lat}</td>
+          <td>${m.lon}</td>
+          <td>${m.alt}</td>
+          <td>${m.heading}</td>
+          <td>${m.pitch}</td>
+          <td>${m.roll}</td>
+          <td><button class="btn btn-sm btn-outline-danger" data-delete-id="${m.id}">Delete</button></td>
+        </tr>`)
+        .join("");
+      document.querySelectorAll("[data-delete-id]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          if (!confirm(`Delete marker ${btn.dataset.deleteId}? This can't be undone.`)) return;
+          fetch(`/marker-map/${btn.dataset.deleteId}`, { method: "DELETE" }).then(loadMarkers);
+        });
+      });
+    });
+}
+
+loadMarkers();
+</script>
+{% endblock %}

@@ -14,5 +14,8 @@ oxts-nav/xnav-config/
 shared/camera-cal.yaml
 camera/data/
 
+# Surveyed marker positions — this robot's real-world data, see aruco-prd.md
+aruco/data/
+
 # Claude Code's own local tooling state, not project source
 .claude/

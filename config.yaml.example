@@ -28,6 +28,7 @@ services:
     nav_update_hz: 2
     nav_feed_socket: /tmp/gr6-oxts-nav-feed.sock  # Unix domain socket — see "Nav data feed" in oxts-nav-prd.md
     nav_feed_hz: 20
+    hpr_ib: [-90, 90, 0]  # IMU-to-body mounting (mobile.vat) — read by aruco too, for GAD lever-arm/alignment frames
 
   camera:
     unit: robot-camera.service
@@ -36,3 +37,13 @@ services:
     web_ui: true
     camera_fps: 5  # Resolution is fixed (1280x960), not configurable — see camera-prd.md
     camera_shm_name: gr6-camera-frame
+
+  aruco:
+    unit: robot-aruco.service
+    host: 0.0.0.0
+    port: 8004
+    web_ui: true
+    marker_map_file: aruco/data/marker-map.yaml
+    camera_extrinsics:
+      hpr_cb: [0, 0, 0]  # camera mount HPR relative to body; unmeasured/assumed — see aruco-prd.md bore-sight note
+      d_xc_b: [0.0775, 0.002, -0.07]  # camera displacement in body frame, metres

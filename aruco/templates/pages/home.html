@@ -1,0 +1,76 @@
+{# title: Home #}
+{% extends "base.html" %}
+{% block title %}GR6 — ArUco{% endblock %}
+
+{% block content %}
+<div class="card mb-4">
+  <div class="card-body p-0 text-center">
+    <img src="/aruco.mjpg" class="img-fluid" style="max-height: 70vh;" alt="Live camera preview with marker overlay">
+  </div>
+</div>
+
+<div class="row row-cols-2 g-3">
+  <div class="col">
+    <div class="card text-center">
+      <div class="card-body">
+        <div class="text-body-secondary small">Visible markers</div>
+        <div class="fs-4"><span id="stat-visible">—</span></div>
+      </div>
+    </div>
+  </div>
+  <div class="col">
+    <div class="card text-center">
+      <div class="card-body">
+        <div class="text-body-secondary small">GAD</div>
+        <div class="fs-4"><span id="stat-gad">—</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card mt-3" id="debug-card" style="display: none;">
+  <div class="card-body">
+    <div class="text-body-secondary small mb-2">
+      Unmapped-marker diagnostics (for hand-verifying against a tape measure —
+      see aruco-prd.md's coordinate frame notes if a number looks wrong)
+    </div>
+    <table class="table table-sm mb-0">
+      <thead><tr><th>Id</th><th>Size used (m)</th><th>Vehicle H/P/R (deg)</th><th>tvec, camera frame (m)</th><th>Displacement, body frame (m)</th><th>Displacement, NED (m)</th><th>Range (m)</th></tr></thead>
+      <tbody id="debug-rows"></tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+connectWs("/ws/aruco", (msg) => {
+  document.getElementById("stat-visible").textContent = !msg.running
+    ? "waiting for camera feed…"
+    : (msg.visible_ids && msg.visible_ids.length ? msg.visible_ids.join(", ") : "none");
+
+  const gad = msg.gad_status;
+  if (!gad) {
+    document.getElementById("stat-gad").textContent = "not sending";
+  } else {
+    const ago = Math.max(0, Date.now() / 1000 - gad.at);
+    document.getElementById("stat-gad").textContent = `marker ${gad.id}, ${ago.toFixed(0)}s ago`;
+  }
+
+  const debugEntries = Object.entries(msg.debug || {});
+  document.getElementById("debug-card").style.display = debugEntries.length ? "" : "none";
+  const fmt = (arr) => arr.map((v) => v.toFixed(3)).join(", ");
+  document.getElementById("debug-rows").innerHTML = debugEntries
+    .map(([id, d]) => `<tr>
+      <td>${id}</td>
+      <td>${d.marker_size_used.toFixed(3)}</td>
+      <td>${fmt(d.vehicle_heading_pitch_roll)}</td>
+      <td>${fmt(d.tvec_camera_frame)}</td>
+      <td>${fmt(d.displacement_body_frame)}</td>
+      <td>${fmt(d.displacement_ned)}</td>
+      <td>${d.range_m.toFixed(3)}</td>
+    </tr>`)
+    .join("");
+});
+</script>
+{% endblock %}

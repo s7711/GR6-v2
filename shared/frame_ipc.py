@@ -23,7 +23,7 @@ retry. Otherwise the data is consistent.
 """
 
 import struct
-from multiprocessing import shared_memory
+from multiprocessing import resource_tracker, shared_memory
 
 import numpy as np
 
@@ -80,6 +80,19 @@ class FrameReader:
 
     def __init__(self, name):
         self.shm = shared_memory.SharedMemory(name=name, create=False)
+        # multiprocessing.shared_memory has a well-known gotcha (see
+        # https://bugs.python.org/issue38119): even a read-only attach
+        # (create=False) gets registered with THIS process's own
+        # resource_tracker for cleanup-on-exit, as if it had created the
+        # segment. If a reader process then dies abnormally — an abrupt
+        # abort, not a clean shutdown that reaches close() — its
+        # resource_tracker "helpfully" unlinks the segment on the
+        # writer's behalf, destroying a completely unrelated, still-
+        # running process's shared memory. A reader must never be able
+        # to unlink something it doesn't own, so unregister immediately:
+        # only the actual creator (FrameWriter) should ever be
+        # responsible for cleanup.
+        resource_tracker.unregister(self.shm._name, "shared_memory")
 
     def read(self, max_retries=10):
         """Returns the latest frame + metadata dict, or None if

@@ -132,10 +132,12 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="/static/ncom-strings.js"></script>
 <script>
 connectWs("/ws/nav", (msg) => {
   fillFields("nav-", msg.nav || {});
   fillFields("status-", msg.status || {});
+  translateNcomCodes("status-", msg.status || {});
 });
 </script>
 {% endblock %}

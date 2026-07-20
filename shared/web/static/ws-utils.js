@@ -2,9 +2,16 @@
 // See ui-style.md ("no buffering" over flaky wifi).
 
 function connectWs(path, onMessage) {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  connectWsUrl(`${proto}://${location.host}${path}`, onMessage);
+}
+
+// Same as connectWs, but takes a full ws(s):// URL — for a page that
+// needs another service's websocket directly (e.g. aruco's Map page
+// reading oxts-nav's /ws/nav), rather than always assuming same-origin.
+function connectWsUrl(url, onMessage) {
   function connect() {
-    const proto = location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(`${proto}://${location.host}${path}`);
+    const ws = new WebSocket(url);
     ws.onmessage = (event) => onMessage(JSON.parse(event.data));
     // Flaky wifi: just retry — never buffer/replay, always resume with
     // whatever is current when reconnected.

@@ -18,7 +18,7 @@ see `top-prd.md` for why and how.
 
 ## Status
 
-Early days. Four of the planned services exist so far:
+Early days. Five of the planned services exist so far:
 
 - **`oxts-nav`** — decodes the xNAV650's NCOM stream and serves live
   nav/status/connection data over a websocket, with web pages for a
@@ -29,6 +29,11 @@ Early days. Four of the planned services exist so far:
   (shared memory) for other services to consume, with a live preview
   page and a full checkerboard-based calibration procedure (guided
   capture across ~33 poses, `cv2.calibrateCamera()`, promote-to-active).
+- **`aruco`** — detects ArUco markers in the camera's frames and sends
+  known markers' positions/heading to the xNAV650 as GAD aiding updates,
+  for GNSS-poor spots. Pages for a live view, a vehicle-centred plan-view
+  map, surveying a new marker from a live detection, and managing the
+  marker list. Field-validated outdoors with real RTK/NTRIP corrections.
 - **`manager`** — a home-screen-style launcher: icon-grid to jump to
   each service's own web UI, a services table (status/start/stop/
   restart), and a plain-text editor for the shared config file.
@@ -36,10 +41,11 @@ Early days. Four of the planned services exist so far:
   out the shared config/IPC/web conventions for whatever service comes
   next.
 
-Nav decode, then the manager, were deliberately tackled first, then the
-camera service — see "Suggested migration order" in `top-prd.md` for the
-reasoning and what's still to come (`aruco` marker detection next, then
-path-following/motor control last, since that's safety-critical).
+Nav decode, then the manager, were deliberately tackled first, then
+camera, then aruco — see "Suggested migration order" in `top-prd.md` for
+the reasoning and what's still to come (path-following/motor control
+last, since that's safety-critical, and a network-sharing service to
+give the xNAV650 internet access for NTRIP).
 
 ## Architecture
 
@@ -70,6 +76,7 @@ Run whichever you need in its own terminal:
 python manager/app.py
 python oxts-nav/app.py
 python camera/app.py
+python aruco/app.py
 ```
 
 Then visit the manager's home page (port 8000 by default) to reach

@@ -32,6 +32,14 @@ def manager_url(browser_host: str) -> str:
     return f"http://{browser_host}:{manager_cfg['port']}/"
 
 
+def service_url(browser_host: str, service_name: str, scheme: str = "http") -> str:
+    """Build a URL to another service's web UI, e.g. so a page's own JS can
+    open a websocket straight to it (see aruco-prd.md — the Map page reads
+    oxts-nav's /ws/nav directly rather than having aruco re-publish it)."""
+    port = load_config()["services"][service_name]["port"]
+    return f"{scheme}://{browser_host}:{port}"
+
+
 def discover_pages(pages_dir: Path):
     """List (slug, title) for every template in a service's pages/ folder.
 

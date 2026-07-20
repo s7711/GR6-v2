@@ -43,3 +43,9 @@ matplotlib # calibration.py: matplotlib.path.Path, for the point-in-polygon chec
 # `pip install --user` copy exists, at 4.11.0), and its apt-candidate
 # version is unverified — risking a downgrade below the 4.7 ArucoDetector
 # cutoff for no real benefit now that the pip route is confirmed to work.
+
+# oxts_sdk is also not listed here — same situation as picamera2 (see
+# above): it's OxTS's own compiled SDK (pybind11/CMake, not on PyPI),
+# installed separately (see aruco-prd.md). The venv needs to see it the
+# same way it needs to see picamera2 — --system-site-packages, or
+# whatever install method actually put it where Python can find it.

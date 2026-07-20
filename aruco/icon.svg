@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Original icon for the GR6-v2 aruco service — not sourced from any
+     external icon set. Deliberately square (not the black-circle style
+     used elsewhere, see oxts-nav/icon.svg) to read as a physical ArUco
+     marker card: a 1-cell black quiet-zone border around a 4x4 data
+     grid (6x6 total). The inner pattern is fixed (chosen once by hand),
+     not randomised per load — it just needs to look plausibly
+     marker-like, not decode to anything real. -->
+<svg viewBox="0 0 96 96" xmlns="http://www.w3.org/2000/svg">
+  <rect width="96" height="96" fill="#ffffff"/>
+  <!-- Quiet-zone border: outer ring of the 6x6 grid -->
+  <rect x="0" y="0" width="96" height="16" fill="#000000"/>
+  <rect x="0" y="80" width="96" height="16" fill="#000000"/>
+  <rect x="0" y="0" width="16" height="96" fill="#000000"/>
+  <rect x="80" y="0" width="16" height="96" fill="#000000"/>
+  <!-- 4x4 inner data grid, fixed "random" black cells (row, col from 0) -->
+  <!-- row 0: W B W B -->
+  <rect x="32" y="16" width="16" height="16" fill="#000000"/>
+  <rect x="64" y="16" width="16" height="16" fill="#000000"/>
+  <!-- row 1: B B W W -->
+  <rect x="16" y="32" width="16" height="16" fill="#000000"/>
+  <rect x="32" y="32" width="16" height="16" fill="#000000"/>
+  <!-- row 2: W B B W -->
+  <rect x="32" y="48" width="16" height="16" fill="#000000"/>
+  <rect x="48" y="48" width="16" height="16" fill="#000000"/>
+  <!-- row 3: B W W B -->
+  <rect x="16" y="64" width="16" height="16" fill="#000000"/>
+  <rect x="64" y="64" width="16" height="16" fill="#000000"/>
+</svg>

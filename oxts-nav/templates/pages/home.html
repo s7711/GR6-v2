@@ -57,6 +57,7 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="/static/ncom-strings.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.iife.min.js"></script>
 <script>
 const HISTORY_SECONDS = 60;
@@ -84,6 +85,7 @@ connectWs("/ws/nav", (msg) => {
   const nav = msg.nav || {};
   const status = msg.status || {};
   fillFields("status-", status);
+  translateNcomCodes("status-", status);
 
   document.getElementById("stat-heading").textContent =
     nav.Heading !== undefined ? nav.Heading.toFixed(1) : "—";

@@ -1,0 +1,224 @@
+{# title: Map #}
+{% extends "base.html" %}
+{% block title %}GR6 — ArUco Map{% endblock %}
+
+{% block content %}
+<div id="map-wrapper" style="position: relative; width: 100%;">
+  <canvas id="map-canvas" style="display: block; width: 100%; height: 100%;"></canvas>
+
+  <div class="btn-group-vertical position-absolute top-0 end-0 m-2" role="group">
+    <button type="button" class="btn btn-sm zoom-btn" data-zoom="auto">Auto</button>
+    <button type="button" class="btn btn-sm zoom-btn" data-zoom="1">1 m</button>
+    <button type="button" class="btn btn-sm zoom-btn" data-zoom="5">5 m</button>
+    <button type="button" class="btn btn-sm zoom-btn" data-zoom="10">10 m</button>
+    <button type="button" class="btn btn-sm zoom-btn" data-zoom="20">20 m</button>
+    <button type="button" class="btn btn-sm zoom-btn" data-zoom="50">50 m</button>
+    <button type="button" class="btn btn-sm zoom-btn" data-zoom="100">100 m</button>
+    <button type="button" class="btn btn-sm zoom-btn" data-zoom="200">200 m</button>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const canvas = document.getElementById("map-canvas");
+const ctx = canvas.getContext("2d");
+const wrapper = document.getElementById("map-wrapper");
+
+let zoomMode = "auto"; // "auto" or a fixed metres-across number
+let current = null; // {lat, lon} in degrees — the latest nav fix
+const trail = []; // [{lat, lon}]
+const MAX_TRAIL_POINTS = 2000;
+let knownMarkers = []; // [{id, lat, lon}]
+let unmappedMarkers = []; // [{id, lat, lon}]
+
+// --- Zoom buttons ---
+function setZoom(mode) {
+  zoomMode = mode;
+  document.querySelectorAll(".zoom-btn").forEach((btn) => {
+    const active = btn.dataset.zoom === String(mode);
+    btn.classList.toggle("btn-primary", active);
+    btn.classList.toggle("btn-outline-secondary", !active);
+  });
+  draw();
+}
+document.querySelectorAll(".zoom-btn").forEach((btn) => {
+  btn.addEventListener("click", () => setZoom(btn.dataset.zoom === "auto" ? "auto" : parseFloat(btn.dataset.zoom)));
+});
+setZoom("auto");
+
+// --- Sizing: fill the viewport below the navbar, no page scrollbar ---
+function resizeCanvas() {
+  const top = wrapper.getBoundingClientRect().top;
+  const height = Math.max(200, window.innerHeight - top - 16);
+  wrapper.style.height = height + "px";
+  canvas.width = wrapper.clientWidth;
+  canvas.height = wrapper.clientHeight;
+  draw();
+}
+window.addEventListener("resize", resizeCanvas);
+
+// --- Local tangent-plane offset (metres) of (lat, lon) relative to a
+// reference point — recomputed fresh every draw from whatever the
+// reference currently is, rather than a fixed stored origin. Simple
+// equirectangular approximation — fine at this scale, not used for
+// anything aiding-critical (that's shared/geodesy.py's job, server-side).
+function offsetMetres(lat, lon, ref) {
+  const metresPerDegLat = 111320;
+  const metresPerDegLon = 111320 * Math.cos((ref.lat * Math.PI) / 180);
+  return { north: (lat - ref.lat) * metresPerDegLat, east: (lon - ref.lon) * metresPerDegLon };
+}
+
+// Reference point for this frame: the vehicle's current position if we
+// have a fix yet, otherwise the mean of the known markers (nothing else
+// meaningful to centre on), otherwise nothing to draw at all.
+function referencePoint() {
+  if (current) return current;
+  if (knownMarkers.length) {
+    const lat = knownMarkers.reduce((s, m) => s + m.lat, 0) / knownMarkers.length;
+    const lon = knownMarkers.reduce((s, m) => s + m.lon, 0) / knownMarkers.length;
+    return { lat, lon };
+  }
+  return null;
+}
+
+// "Nice" tick spacing (1/2/5 x 10^n) giving roughly 5-10 gridlines
+// across the shorter canvas dimension at the current scale.
+function niceSpacing(metresAcross, targetLines) {
+  const raw = metresAcross / targetLines;
+  const pow10 = Math.pow(10, Math.floor(Math.log10(raw)));
+  const candidates = [1, 2, 5, 10].map((m) => m * pow10);
+  return candidates.reduce((best, c) => (Math.abs(c - raw) < Math.abs(best - raw) ? c : best));
+}
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const ref = referencePoint();
+  if (!ref) {
+    ctx.fillStyle = "#6c757d";
+    ctx.font = "14px sans-serif";
+    ctx.fillText("Waiting for a position fix or a known marker…", 12, 24);
+    return;
+  }
+
+  const points = {
+    trail: trail.map((p) => offsetMetres(p.lat, p.lon, ref)),
+    known: knownMarkers.map((m) => ({ ...offsetMetres(m.lat, m.lon, ref), id: m.id })),
+    unmapped: unmappedMarkers.map((m) => ({ ...offsetMetres(m.lat, m.lon, ref), id: m.id })),
+    current: current ? offsetMetres(current.lat, current.lon, ref) : null,
+  };
+
+  const shortSide = Math.min(canvas.width, canvas.height);
+
+  let metresAcross;
+  if (zoomMode === "auto") {
+    const all = [...points.trail, ...points.known, ...points.unmapped];
+    if (points.current) all.push(points.current);
+    const extent = all.reduce((m, p) => Math.max(m, Math.abs(p.north), Math.abs(p.east)), 1.0);
+    metresAcross = Math.max(2.0, extent * 2 * 1.25); // *2 for radius->diameter, +25% margin
+  } else {
+    metresAcross = zoomMode;
+  }
+
+  const metresPerPx = metresAcross / shortSide;
+  const cx = canvas.width / 2;
+  const cy = canvas.height / 2;
+  const toCanvas = (p) => ({ x: cx + p.east / metresPerPx, y: cy - p.north / metresPerPx });
+
+  // Gridlines, centred on the reference point (offset 0,0). Iterate by
+  // integer multiples of `spacing` (world metres) directly, bounded by
+  // the half-width/half-height actually visible at this scale.
+  const spacing = niceSpacing(metresAcross, 7);
+  const halfWidthM = cx * metresPerPx;
+  const halfHeightM = cy * metresPerPx;
+  ctx.strokeStyle = "#dee2e6";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let i = Math.ceil(-halfWidthM / spacing); i * spacing <= halfWidthM; i++) {
+    const worldOffset = i * spacing;
+    const x = cx + worldOffset / metresPerPx;
+    if (x >= 0 && x <= canvas.width) { ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); }
+  }
+  for (let i = Math.ceil(-halfHeightM / spacing); i * spacing <= halfHeightM; i++) {
+    const worldOffset = i * spacing;
+    const y = cy - worldOffset / metresPerPx;
+    if (y >= 0 && y <= canvas.height) { ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); }
+  }
+  ctx.stroke();
+
+  // Trail
+  ctx.strokeStyle = "#0d6efd";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  points.trail.forEach((p, i) => {
+    const c = toCanvas(p);
+    if (i === 0) ctx.moveTo(c.x, c.y);
+    else ctx.lineTo(c.x, c.y);
+  });
+  ctx.stroke();
+
+  function dot(p, color, label) {
+    const c = toCanvas(p);
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, 5, 0, 2 * Math.PI);
+    ctx.fill();
+    if (label !== undefined) {
+      ctx.fillStyle = "#212529";
+      ctx.font = "12px sans-serif";
+      ctx.fillText(String(label), c.x + 7, c.y - 7);
+    }
+  }
+  points.known.forEach((m) => dot(m, "#198754", m.id));
+  points.unmapped.forEach((m) => dot(m, "#adb5bd", m.id));
+  if (points.current) dot(points.current, "#0d6efd");
+
+  // Scale bar, bottom-left, screen space — deliberately reuses the exact
+  // same `spacing` value as the gridlines (previously it recomputed its
+  // own "nice" spacing with a different target line count, so it could
+  // show a different number than what the gridlines actually were —
+  // e.g. gridlines every 0.5m while the bar claimed "1 m". They must
+  // always agree, since the whole point of the bar is to let you read
+  // the gridlines' scale directly.
+  const barMetres = spacing;
+  const barPx = barMetres / metresPerPx;
+  const bx = 16, by = canvas.height - 16;
+  ctx.strokeStyle = "#212529";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(bx, by); ctx.lineTo(bx + barPx, by);
+  ctx.moveTo(bx, by - 5); ctx.lineTo(bx, by + 5);
+  ctx.moveTo(bx + barPx, by - 5); ctx.lineTo(bx + barPx, by + 5);
+  ctx.stroke();
+  ctx.fillStyle = "#212529";
+  ctx.font = "12px sans-serif";
+  ctx.fillText(`${barMetres} m`, bx, by - 8);
+}
+
+function loadMarkerMap() {
+  fetch("/marker-map")
+    .then((r) => r.json())
+    .then((markers) => {
+      knownMarkers = markers.map((m) => ({ id: m.id, lat: m.lat, lon: m.lon }));
+      draw();
+    });
+}
+
+connectWsUrl("{{ oxtsnav_ws_url }}", (msg) => {
+  const nav = msg.nav || {};
+  if (nav.Lat === undefined || nav.Lon === undefined) return;
+  current = { lat: (nav.Lat * 180) / Math.PI, lon: (nav.Lon * 180) / Math.PI };
+  trail.push(current);
+  if (trail.length > MAX_TRAIL_POINTS) trail.shift();
+  draw();
+});
+
+connectWs("/ws/aruco", (msg) => {
+  unmappedMarkers = Object.entries(msg.unmapped || {}).map(([id, m]) => ({ id, lat: m.lat, lon: m.lon }));
+  draw();
+});
+
+loadMarkerMap();
+resizeCanvas();
+</script>
+{% endblock %}
