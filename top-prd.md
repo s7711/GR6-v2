@@ -35,8 +35,8 @@ gr6-v2/
   oxts-nav/
     oxts-nav-prd.md
     ...
-  path-follow/
-    prd.md
+  navigate/
+    navigate-prd.md
     ...
   manager/
     prd.md
@@ -161,6 +161,22 @@ general-purpose sysadmin tool.
    Arduino/Pico first — blocked on the `drive` service (see "motor
    control", item 4) actually publishing encoder ticks; can't be
    built before that exists. No PRD yet.
+7. Wifi improvements — not yet built, deliberately deferred until
+   `navigate`'s path-following surfaced real pain from it (a jog/drive
+   command arriving late after a wifi reconnect could make the robot
+   behave unexpectedly for a moment — worse under Flask's own request
+   handling than the hand-rolled websocket code GR6-v1 used, though
+   every channel is affected to some degree). Planned approach is
+   hardware/network first, not a software workaround: (a) a dual-band
+   USB wifi adapter already bought, and (b) driving from a tablet
+   hotspotting directly to the Pi (short range, operator right next to
+   the robot) rather than through the house's own wifi.
+   A software mitigation was considered (timestamp browser-originated
+   commands, reject anything too stale by the time `drive` processes
+   it) but explicitly parked — it adds real complexity/latency for the
+   driver, and the hardware/network fix is expected to remove the
+   problem at its source instead. Revisit only if the hardware/hotspot
+   change doesn't actually fix it. No PRD yet.
 
 ## Out of Scope (at this level)
 

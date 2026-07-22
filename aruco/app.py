@@ -20,6 +20,7 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from shared.config import load_config  # noqa: E402
+from shared.feed_client import FeedClient  # noqa: E402
 from shared.frame_ipc import FrameReader  # noqa: E402
 from shared.web import register_pages, service_url, use_shared_static, use_shared_templates  # noqa: E402
 
@@ -30,7 +31,6 @@ import detection  # noqa: E402
 import gad  # noqa: E402
 import marker_map  # noqa: E402
 import survey  # noqa: E402
-from nav_client import NavFeedClient  # noqa: E402
 
 PAGES_DIR = Path(__file__).resolve().parent / "templates" / "pages"
 CAMERA_CAL_FILE = Path(__file__).resolve().parent.parent / "shared" / "camera-cal.yaml"
@@ -78,7 +78,9 @@ def _get_frame_reader(wait=False):
         time.sleep(2.0)
 
 
-nav_client = NavFeedClient(oxtsnav_cfg["nav_feed_socket"])
+nav_client = FeedClient(
+    oxtsnav_cfg["nav_feed_socket"], default={"nav": {}, "status": {}, "connection": {}}
+)
 gad_sender = gad.GadSender(xnav_ip)
 
 app = Flask(__name__)

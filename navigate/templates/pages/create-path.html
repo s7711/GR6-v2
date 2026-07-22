@@ -1,0 +1,290 @@
+{# title: Create Path #}
+{% extends "base.html" %}
+{% block title %}GR6 — Create Path{% endblock %}
+
+{% block content %}
+<div class="card mb-3">
+  <div class="card-body">
+    <div class="row g-3 align-items-end">
+      <div class="col-auto">
+        <div>Points recorded: <span id="point-count">0</span></div>
+        <button id="new-path" class="btn btn-sm btn-outline-secondary mt-1">New (clear)</button>
+      </div>
+      <div class="col-auto">
+        <label class="form-label mb-0">Speed for next segment (m/s)</label>
+        <select id="speed-select" class="form-select">
+          <option value="0.2">0.2</option>
+          <option value="0.3">0.3</option>
+          <option value="0.4">0.4</option>
+          <option value="0.5" selected>0.5</option>
+          <option value="0.6">0.6</option>
+          <option value="0.7">0.7</option>
+          <option value="0.8">0.8</option>
+        </select>
+      </div>
+      <div class="col-auto">
+        <label class="form-label mb-0">Clearance (m)</label>
+        <select id="clearance-input" class="form-select">
+          <option value="0.1">0.1</option>
+          <option value="0.2">0.2</option>
+          <option value="0.5" selected>0.5</option>
+          <option value="1.0">1.0</option>
+          <option value="2.0">2.0</option>
+        </select>
+      </div>
+      <div class="col-auto form-check mb-2">
+        <input id="pump-for-point" class="form-check-input" type="checkbox">
+        <label class="form-check-label" for="pump-for-point">Pump on for this point</label>
+      </div>
+      <div class="col-auto">
+        <button id="drop-point" class="btn btn-primary">Drop point</button>
+      </div>
+      <div class="col-auto">
+        <div class="input-group">
+          <input id="path-name" type="text" class="form-control" placeholder="Path name">
+          <button id="save-path" class="btn btn-success">Save</button>
+        </div>
+      </div>
+      <div class="col-auto">
+        <div id="save-message" class="text-body-secondary small"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="map-wrapper" style="position: relative; width: 100%;">
+  <canvas id="map-canvas" style="display: block; width: 100%; height: 100%;"></canvas>
+
+  <div class="btn-group-vertical position-absolute top-0 end-0 m-2" role="group">
+    <button type="button" class="btn btn-sm zoom-btn" data-zoom="auto">Auto</button>
+    <button type="button" class="btn btn-sm zoom-btn" data-zoom="5">5 m</button>
+    <button type="button" class="btn btn-sm zoom-btn" data-zoom="20">20 m</button>
+    <button type="button" class="btn btn-sm zoom-btn" data-zoom="50">50 m</button>
+  </div>
+
+  <div class="position-absolute top-0 start-0 m-2 px-2 py-1 rounded" style="background: var(--bs-body-bg); opacity: 0.9;">
+    <span class="small text-body-secondary">Horizontal accuracy: <span id="stat-accuracy">—</span> m</span>
+  </div>
+
+  <div class="position-absolute bottom-0 start-0 m-3 text-center" style="opacity: 0.9;">
+    <div class="input-group input-group-sm mb-2">
+      <select id="forward-distance" class="form-select">
+        <option value="0.2">0.2 m</option>
+        <option value="0.5" selected>0.5 m</option>
+        <option value="1.0">1.0 m</option>
+        <option value="2.0">2.0 m</option>
+      </select>
+      <button id="forward-btn" class="btn btn-outline-primary">Move forward</button>
+    </div>
+    <div id="joystick" style="touch-action: none; width: 200px; height: 200px; background: var(--bs-tertiary-bg); border: 1px solid var(--bs-border-color); border-radius: 0.5rem; position: relative; cursor: grab;">
+      <div id="joystick-thumb" style="width: 50px; height: 50px; border-radius: 50%; background: var(--bs-primary); position: absolute; left: 75px; top: 75px; pointer-events: none;"></div>
+    </div>
+    <div class="text-body-secondary small mt-1">Drag to drive, release to stop</div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/geomap.js"></script>
+<script>
+const MAX_SPEED_MPS = 0.8; // matches the top of the speed selector above — not drive's own max, just this widget's jog scale
+const JOG_REPEAT_MS = 300;
+
+const joystick = document.getElementById("joystick");
+const thumb = document.getElementById("joystick-thumb");
+const RADIUS = 75;
+
+let dragging = false;
+let vector = { x: 0, y: 0 };
+let repeatTimer = null;
+
+function sendManual(x, y) {
+  const forward = -y * MAX_SPEED_MPS;
+  // Turning right means the right (inside) wheel slows down and the
+  // left (outside) wheel speeds up — see drive/templates/pages/home.html,
+  // where the inverted version of this was a real bug confirmed on
+  // hardware.
+  const turn = x * MAX_SPEED_MPS;
+  fetch("/jog/manual", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ left_mps: forward + turn, right_mps: forward - turn }),
+  });
+}
+
+function setThumb(x, y) {
+  thumb.style.left = `${75 + x * RADIUS}px`;
+  thumb.style.top = `${75 + y * RADIUS}px`;
+}
+
+function updateFromEvent(evt) {
+  const rect = joystick.getBoundingClientRect();
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+  let x = (evt.clientX - cx) / RADIUS;
+  let y = (evt.clientY - cy) / RADIUS;
+  const mag = Math.hypot(x, y);
+  if (mag > 1) { x /= mag; y /= mag; }
+  vector = { x, y };
+  setThumb(x, y);
+}
+
+joystick.addEventListener("pointerdown", (evt) => {
+  dragging = true;
+  joystick.setPointerCapture(evt.pointerId);
+  joystick.style.cursor = "grabbing";
+  updateFromEvent(evt);
+  sendManual(vector.x, vector.y);
+  repeatTimer = setInterval(() => sendManual(vector.x, vector.y), JOG_REPEAT_MS);
+});
+
+joystick.addEventListener("pointermove", (evt) => {
+  if (dragging) updateFromEvent(evt);
+});
+
+function stopJogging() {
+  if (!dragging) return;
+  dragging = false;
+  joystick.style.cursor = "grab";
+  clearInterval(repeatTimer);
+  vector = { x: 0, y: 0 };
+  setThumb(0, 0);
+  sendManual(0, 0);
+}
+joystick.addEventListener("pointerup", stopJogging);
+joystick.addEventListener("pointercancel", stopJogging);
+
+document.getElementById("forward-btn").addEventListener("click", () => {
+  const btn = document.getElementById("forward-btn");
+  const distance_m = parseFloat(document.getElementById("forward-distance").value);
+  const speed_mps = parseFloat(document.getElementById("speed-select").value);
+  btn.disabled = true;
+  const originalText = btn.textContent;
+  btn.textContent = "Moving…";
+  fetch("/record/forward", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ distance_m, speed_mps }),
+  }).then((r) => r.json()).then((result) => {
+    if (result.state === "aborted") {
+      alert(`Stopped early: ${result.abort_reason}`);
+    } else if (result.ok === false) {
+      alert(result.reason || "Couldn't move forward.");
+    }
+  }).finally(() => {
+    btn.disabled = false;
+    btn.textContent = originalText;
+  });
+});
+
+// --- Map: points recorded so far + live position ---
+
+const map = createGeoMap(document.getElementById("map-canvas"), document.getElementById("map-wrapper"), ".zoom-btn");
+map.setZoom("auto");
+
+let recordedPoints = []; // [{lat, lon}], in drop order
+let currentPosition = null; // {lat, lon}, from oxts-nav's live feed
+const DUPLICATE_POINT_THRESHOLD_M = 0.3;
+
+// Equirectangular approximation, fine at this scale — same approach
+// used elsewhere client-side (e.g. geomap.js), not a precise geodesy
+// calculation.
+function distanceMetres(lat1, lon1, lat2, lon2) {
+  const metresPerDegLat = 111320;
+  const metresPerDegLon = 111320 * Math.cos((lat1 * Math.PI) / 180);
+  const dNorth = (lat2 - lat1) * metresPerDegLat;
+  const dEast = (lon2 - lon1) * metresPerDegLon;
+  return Math.hypot(dNorth, dEast);
+}
+
+function redrawPoints() {
+  map.setLayer("points", recordedPoints, { color: "#198754", dots: true, dotRadius: 5, labels: true });
+  map.draw();
+}
+
+// Sync with the server on load, in case the page was refreshed mid-recording.
+fetch("/record/current").then((r) => r.json()).then((points) => {
+  recordedPoints = points;
+  document.getElementById("point-count").textContent = recordedPoints.length;
+  redrawPoints();
+});
+
+document.getElementById("new-path").addEventListener("click", () => {
+  fetch("/record/new", { method: "POST" }).then(() => {
+    recordedPoints = [];
+    document.getElementById("point-count").textContent = "0";
+    document.getElementById("save-message").textContent = "";
+    redrawPoints();
+  });
+});
+
+function dropPoint() {
+  const speed_mps = parseFloat(document.getElementById("speed-select").value);
+  const clearance_m = parseFloat(document.getElementById("clearance-input").value);
+  const pump = document.getElementById("pump-for-point").checked;
+  fetch("/record/drop", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ speed_mps, clearance_m, pump }),
+  }).then((r) => {
+    if (!r.ok) { alert("No position fix yet — can't drop a point."); return null; }
+    return r.json();
+  }).then((data) => {
+    if (!data) return;
+    document.getElementById("point-count").textContent = data.point_count;
+    recordedPoints.push(data.point);
+    redrawPoints();
+  });
+}
+
+document.getElementById("drop-point").addEventListener("click", () => {
+  // Guard against a lost response leading to an accidental double-press
+  // (wifi hiccup: request likely succeeded, but the confirmation never
+  // arrived) — check client-side against the last dropped point, since
+  // the browser already has it. This can't catch every case (e.g. the
+  // request itself being lost), but it catches the one that actually
+  // happened: two points landing suspiciously close together.
+  if (recordedPoints.length > 0 && currentPosition) {
+    const last = recordedPoints[recordedPoints.length - 1];
+    const dist = distanceMetres(currentPosition.lat, currentPosition.lon, last.lat, last.lon);
+    if (dist < DUPLICATE_POINT_THRESHOLD_M) {
+      const proceed = confirm(
+        `This point is only ${dist.toFixed(2)}m from the last one dropped — ` +
+        `possibly a duplicate from a lost connection. Add it anyway?`
+      );
+      if (!proceed) return;
+    }
+  }
+  dropPoint();
+});
+
+document.getElementById("save-path").addEventListener("click", () => {
+  const name = document.getElementById("path-name").value.trim();
+  if (!name) { alert("Enter a path name first."); return; }
+  fetch("/record/save", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  }).then((r) => {
+    document.getElementById("save-message").textContent =
+      r.ok ? "Saved." : "Couldn't save (need at least 2 points, or an invalid name).";
+  });
+});
+
+connectWsUrl("{{ oxtsnav_ws_url }}", (msg) => {
+  const nav = msg.nav || {};
+  const status = msg.status || {};
+  if (nav.Lat !== undefined && nav.Lon !== undefined) {
+    currentPosition = { lat: (nav.Lat * 180) / Math.PI, lon: (nav.Lon * 180) / Math.PI };
+    map.setCurrent(currentPosition.lat, currentPosition.lon);
+    map.draw();
+  }
+  const acc = (status.NorthAcc !== undefined && status.EastAcc !== undefined)
+    ? Math.hypot(status.NorthAcc, status.EastAcc).toFixed(2)
+    : "—";
+  document.getElementById("stat-accuracy").textContent = acc;
+});
+
+map.resize();
+</script>
+{% endblock %}

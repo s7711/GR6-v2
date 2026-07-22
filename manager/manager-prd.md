@@ -124,6 +124,25 @@ requirement to bind a privileged port.
     Services page afterwards.
 - Explicitly out of scope for the manager: general system administration
   (networking, users, storage, non-robot services).
+- **Shared header status badges** (fulfils `ui-style.md`'s originally-
+  specified but previously-unbuilt "header bar shows wifi/battery/
+  status at a glance"): `shared/sysstats.py` reads host-level brown-out
+  (`vcgencmd get_throttled`, tracked as *age since last event* rather
+  than the firmware's own sticky-forever bit — see below), wifi signal
+  (`/proc/net/wireless`, bucketed to 1-5 bars, not dBm), and CPU% (a
+  `/proc/stat` delta between polls). The manager is the single reader —
+  every other service's header watches it cross-port via a `/ws/system`
+  websocket and the existing `connectWsUrl` mechanism (the same one
+  aruco's Map page already used to read oxts-nav's `/ws/nav` directly),
+  deliberately not a `fetch`+CORS mechanism, to avoid adding a second
+  cross-port pattern for one feature.
+  - **Brown-out badge ("Vs")**: colour-only (red <20s since last event,
+    amber <60s, green otherwise), age tracked in `sysstats.py` itself
+    since `vcgencmd`'s own "happened since boot" bit is sticky forever
+    once set and would otherwise show amber indefinitely after a single
+    brief dip.
+  - Per-service CPU/memory (as opposed to this whole-Pi view) is future
+    work — see Out of Scope.
 
 ## Testing Decisions
 
@@ -141,10 +160,18 @@ requirement to bind a privileged port.
   single user, for now).
 - Fetching/installing/updating service repos via git (future idea, not
   this PRD).
-- Home-page "widgets" beyond service icons — e.g. wifi strength, battery %,
-  other at-a-glance robot status (future idea, not this PRD).
 - Public/remote exposure (LAN/Tailscale-only, consistent with other
   self-hosted services; no Cloudflare Tunnel implied here).
+- **Per-service CPU/memory usage on the Services page** (future idea,
+  not this PRD): the shared header now shows host-wide brown-out/wifi/
+  CPU (see `shared/sysstats.py`), but that's whole-Pi, not per-service —
+  useful now would be each row on the Services page showing how much
+  load *that* service is putting on the system (CPU%, memory), so a
+  hungry service (e.g. `aruco`'s marker detection, observed running
+  flat-out with no throttle) is easy to spot without needing to know
+  its systemd unit name or go to a terminal. Likely `psutil` reading
+  each unit's cgroup, or `systemctl status <unit>` output parsing — not
+  designed yet.
 
 ## Further Notes
 

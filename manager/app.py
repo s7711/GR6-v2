@@ -19,10 +19,12 @@ from flask_sock import Sock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from shared.config import CONFIG_PATH, load_config  # noqa: E402
+from shared.sysstats import snapshot as sysstats_snapshot  # noqa: E402
 from shared.web import manager_url, use_shared_static, use_shared_templates  # noqa: E402
 
 ALLOWED_ACTIONS = {"start", "stop", "restart"}
 STATUS_POLL_SECONDS = 2
+SYSSTATS_POLL_SECONDS = 3
 MANAGER_SERVICE_NAME = "manager"
 CONFIG_BACKUP_DIR = Path(__file__).resolve().parent / "config-backup"
 JOURNAL_LINES = 200
@@ -83,7 +85,7 @@ def home():
                 "url": f"http://{browser_host}:{cfg['port']}/" if cfg.get("web_ui") else None,
             }
         )
-    return render_template("home.html", tiles=tiles)
+    return render_template("home.html", tiles=tiles, current_slug="home")
 
 
 @app.route("/services")
@@ -91,7 +93,7 @@ def services_page():
     rows = []
     for name, cfg in services().items():
         rows.append({"name": name, "unit": cfg["unit"], "status": unit_status(cfg["unit"])})
-    return render_template("services.html", rows=rows)
+    return render_template("services.html", rows=rows, current_slug="services")
 
 
 @app.route("/icons/<name>/<filename>")
@@ -128,7 +130,9 @@ def journal_page(name):
     if cfg is None:
         abort(404)
     text = read_journal(cfg["unit"], JOURNAL_LINES)
-    return render_template("journal.html", name=name, unit=cfg["unit"], text=text)
+    return render_template(
+        "journal.html", name=name, unit=cfg["unit"], text=text, current_slug="services"
+    )
 
 
 @app.route("/config", methods=["GET", "POST"])
@@ -149,7 +153,9 @@ def config_page():
             backup_path.write_text(config_text)
             CONFIG_PATH.write_text(text)
             config_text = text
-    return render_template("config.html", config_text=config_text, error=error)
+    return render_template(
+        "config.html", config_text=config_text, error=error, current_slug="config"
+    )
 
 
 @sock.route("/ws/status")
@@ -158,6 +164,17 @@ def ws_status(ws):
         statuses = {name: unit_status(cfg["unit"]) for name, cfg in services().items()}
         ws.send(json.dumps(statuses))
         time.sleep(STATUS_POLL_SECONDS)
+
+
+@sock.route("/ws/system")
+def ws_system(ws):
+    """Host-level status (brown-out, wifi, CPU) for every service's shared
+    header — see shared/sysstats.py. One reader for the one physical Pi,
+    watched cross-port by every other service via connectWsUrl (same
+    pattern aruco's Map page uses to read oxts-nav's /ws/nav directly)."""
+    while True:
+        ws.send(json.dumps(sysstats_snapshot()))
+        time.sleep(SYSSTATS_POLL_SECONDS)
 
 
 if __name__ == "__main__":

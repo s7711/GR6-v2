@@ -1,0 +1,54 @@
+{# title: Config #}
+{% extends "base.html" %}
+{% block title %}GR6 — Navigate Config{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div class="card-body">
+    <table class="table">
+      <tbody>
+        <tr>
+          <th scope="row">Control loop rate</th>
+          <td>{{ control_hz }} Hz</td>
+          <td class="text-body-secondary small">How often navigate recomputes and sends a velocity command to drive.</td>
+        </tr>
+        <tr>
+          <th scope="row">Path entry tolerance</th>
+          <td>{{ entry_max_distance_m }} m, {{ entry_max_heading_deg }}&deg;</td>
+          <td class="text-body-secondary small">How close to the path (and how well aligned) the robot must be before Start will succeed — from GR6-v1, unchanged.</td>
+        </tr>
+        <tr>
+          <th scope="row">Lookahead distance</th>
+          <td>{{ lookahead_distance_m }} m</td>
+          <td class="text-body-secondary small">Pure-pursuit lookahead — from GR6-v1.</td>
+        </tr>
+        <tr>
+          <th scope="row">Heading / cross-track gains</th>
+          <td>{{ heading_gain }} / {{ cte_gain }}</td>
+          <td class="text-body-secondary small">Pure-pursuit steering gains — from GR6-v1.</td>
+        </tr>
+        <tr>
+          <th scope="row">Localisation accuracy limit</th>
+          <td>{{ localisation_accuracy_limit_m }} m</td>
+          <td class="text-body-secondary small">Aborts if oxts-nav's horizontal accuracy exceeds this.</td>
+        </tr>
+        <tr>
+          <th scope="row">Max heading correction</th>
+          <td>{{ max_heading_correction_deg }}&deg;</td>
+          <td class="text-body-secondary small">Aborts if the heading error to the lookahead point exceeds this.</td>
+        </tr>
+        <tr>
+          <th scope="row">Wheel base</th>
+          <td>{{ wheel_base_m }} m</td>
+          <td class="text-body-secondary small">Read from drive's config, not a separate copy — see navigate-prd.md.</td>
+        </tr>
+        <tr>
+          <th scope="row">Paths directory</th>
+          <td><code>{{ paths_dir }}</code></td>
+          <td class="text-body-secondary small">Where recorded paths are saved. Edit via the manager's Config page, not here.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

@@ -53,9 +53,14 @@ let repeatTimer = null;
 function sendManual(x, y) {
   // y is inverted: up (negative screen Y) means forward
   const forward = -y * MAX_SPEED_MPS;
+  // Turning right means the right (inside) wheel slows down and the
+  // left (outside) wheel speeds up — pushing the stick right (x>0) must
+  // therefore increase left_mps and decrease right_mps, not the other
+  // way round (that inverted version was a real bug: it made the stick
+  // turn the robot the opposite way to the one pushed).
   const turn = x * MAX_SPEED_MPS;
-  const left_mps = forward - turn;
-  const right_mps = forward + turn;
+  const left_mps = forward + turn;
+  const right_mps = forward - turn;
   fetch("/command/manual", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

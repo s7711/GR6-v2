@@ -18,7 +18,7 @@ see `top-prd.md` for why and how.
 
 ## Status
 
-Early days. Six of the planned services exist so far:
+Early days. Seven of the planned services exist so far:
 
 - **`oxts-nav`** — decodes the xNAV650's NCOM stream and serves live
   nav/status/connection data over a websocket, with web pages for a
@@ -41,6 +41,13 @@ Early days. Six of the planned services exist so far:
   sensor diagram, and config. Publishes a `drive_feed` Unix
   socket for future services (`navigate`, `missions`, a wheelspeed-GAD
   sender) to consume. See `drive/drive-prd.md`.
+- **`navigate`** — records a path by driving it once ("drop point"
+  button, per-point speed/pump/clearance), then drives it back
+  autonomously with a pure-pursuit controller against `drive`'s
+  `/command/auto`, aborting cleanly on a per-segment clearance breach or
+  poor GPS accuracy rather than one fixed global tolerance. Pages for
+  running a saved path (with a live map), recording a new one, and
+  managing saved paths. See `navigate/navigate-prd.md`.
 - **`manager`** — a home-screen-style launcher: icon-grid to jump to
   each service's own web UI, a services table (status/start/stop/
   restart/journal), and a plain-text editor for the shared config file.
@@ -49,10 +56,10 @@ Early days. Six of the planned services exist so far:
   next.
 
 Nav decode, then the manager, were deliberately tackled first, then
-camera, then aruco, then drive — see "Suggested migration order" in
-`top-prd.md` for the reasoning and what's still to come (`navigate`/
-`missions`/`safety` built on top of `drive`, wheelspeed GAD aiding, and
-a network-sharing service to give the xNAV650 internet access for
+camera, then aruco, then drive, then navigate — see "Suggested migration
+order" in `top-prd.md` for the reasoning and what's still to come
+(`missions`/`safety` built on top of `navigate`, wheelspeed GAD aiding,
+and a network-sharing service to give the xNAV650 internet access for
 NTRIP).
 
 ## Architecture
@@ -76,9 +83,11 @@ cp config.yaml.example config.yaml
 # edit config.yaml — at minimum, set xnav_ip to the real xNAV650 address
 ```
 
-Each service is a standalone Flask app for now (systemd units come
-later — see the `.service.example` files in each service's folder).
-Run whichever you need in its own terminal:
+Each service normally runs as a systemd unit, managed from the
+manager's Services page (see `manager/manual.md` for the one-time
+`.service.example` → `/etc/systemd/system/` install step). For
+development/debugging, stop a service's unit and run it directly in a
+terminal instead — every service is a standalone Flask app underneath:
 
 ```bash
 python manager/app.py
@@ -86,6 +95,7 @@ python oxts-nav/app.py
 python camera/app.py
 python aruco/app.py
 python drive/app.py
+python navigate/app.py
 ```
 
 Then visit the manager's home page (port 8000 by default) to reach

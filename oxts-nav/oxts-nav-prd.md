@@ -164,6 +164,15 @@ built once now rather than three times later.
   both in shared config, deliberately separate from the web UI's
   `nav_update_hz` — other services will likely want a higher rate than a
   browser chart does.
+- **Headroom above the current `nav_feed_hz: 20`**: the xNAV650 itself
+  can supply NCOM at up to 100Hz (GR6-v1's `path_follow.py` consumed it
+  at full rate), and `top` shows the ncom-decode-and-publish work costs
+  only about 7.3% of one core — plenty of room on this 4-core Pi to run
+  at 100Hz if a future consumer (`navigate` being the obvious one)
+  actually needs finer-grained position updates than 20Hz gives. Not
+  raised now since nothing needs it yet (`navigate`'s ~10Hz control
+  loop is already comfortably served by 20Hz) — noted here as an easy,
+  low-risk dial to turn later rather than something requiring redesign.
 - **Protocol:** any number of clients may connect. Each gets its own send
   loop; a 4-byte big-endian length prefix followed by that many bytes of
   a pickled dict (needs framing since it's a stream socket, unlike the
@@ -225,3 +234,13 @@ built once now rather than three times later.
 - Any consumer-specific display logic (graphs, readouts, tables) — that
   lives in whichever webpage/service consumes this feed, per `ui-style.md`
   and the "server doesn't change for the webpage's sake" principle above.
+- **NCOM → UCOM decoding** (future idea, not designed here): after a
+  2026-07-22 xNAV650 firmware update, `GpsPosMode` no longer reflects a
+  GAD position update being accepted the way it used to (`GAD (34)`) —
+  a welcome change in itself, but it removes the only visibility this
+  project currently has into "is GAD aiding actually doing anything."
+  UCOM apparently carries GAD-acceptance information NCOM doesn't. Full
+  switch to UCOM, or a partial/dual decode (some messages from each),
+  are both on the table — not designed or started, just flagged so
+  it's not forgotten. `ncomrx.py`/`ncomrx_thread.py` would need real
+  changes either way (UCOM is a different message format from NCOM).

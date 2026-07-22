@@ -56,8 +56,26 @@ services:
     serial_port: /dev/ttyUSB0       # re-check once the Pico is fitted — likely /dev/ttyACM0 or similar
     baud: 115200
     counts_per_metre: 250            # from GR6-v1, needs re-measuring on this robot — the wheelspeed-GAD sender will depend on this being right
+    wheel_base_m: 0.42               # distance between the two wheels' contact points, from GR6-v1 — lives here (not under navigate:) alongside counts_per_metre, the other physical-drivetrain constant; navigate reads it from here rather than keeping its own copy
     human_control_hold_ms: 500       # how long a manual jog command locks out automatic callers (navigate/missions) — see drive-prd.md
     expected_firmware_version: "260720#1.GR6"
     drive_feed_socket: /tmp/gr6-drive-feed.sock  # Unix domain socket — see "Feed naming" in drive-prd.md
     drive_feed_hz: 20
     tuning: {}                        # optional, e.g. {Kp: [1.0, 1.0], Ki: [3.0, 3.0]} — pushed to the microcontroller each time drive starts
+
+  navigate:
+    unit: robot-navigate.service
+    host: 0.0.0.0
+    port: 8006
+    web_ui: true
+    paths_dir: navigate/data          # per-path YAML files — this robot's real-world data, not source (see .gitignore)
+    control_hz: 10                    # how often navigate recomputes and sends a velocity command to drive/command/auto
+    entry_max_distance_m: 1.0         # path-entry scan threshold — from GR6-v1, unchanged
+    entry_max_heading_deg: 45         # path-entry scan threshold — from GR6-v1, unchanged
+    lookahead_distance_m: 0.4         # pure-pursuit lookahead distance — from GR6-v1, live-settable via a tuning page
+    heading_gain: 2.0                 # pure-pursuit heading-error gain — from GR6-v1, live-settable
+    cte_gain: 0.6                     # pure-pursuit cross-track-error gain — from GR6-v1, live-settable
+    localisation_accuracy_limit_m: 1.0  # abort if oxts-nav's horizontal accuracy RMS exceeds this — per-segment via clearance_m for cross-track, but this one stays a single global constant, from GR6-v1
+    max_heading_correction_deg: 70    # abort if heading error to the lookahead point exceeds this — from GR6-v1, unchanged
+    navigate_feed_socket: /tmp/gr6-navigate-feed.sock  # Unix domain socket — see navigate-prd.md
+    navigate_feed_hz: 10               # matches control_hz — see navigate-prd.md's "Config additions"

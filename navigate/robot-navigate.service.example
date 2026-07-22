@@ -1,0 +1,12 @@
+[Unit]
+Description=GR6 navigate
+After=network.target
+
+[Service]
+User=pi
+WorkingDirectory=/home/pi/share/GR6-v2
+ExecStart=/home/pi/share/GR6-v2/venv/bin/python3 navigate/app.py
+Restart=no
+
+[Install]
+WantedBy=multi-user.target

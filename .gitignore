@@ -17,6 +17,9 @@ camera/data/
 # Surveyed marker positions — this robot's real-world data, see aruco-prd.md
 aruco/data/
 
+# Recorded paths — this robot's real-world data, see navigate-prd.md
+navigate/data/
+
 # Compiled firmware artifacts — a build output, not source; the .ino is
 # the source of truth, see drive-prd.md
 drive/firmware/*.hex

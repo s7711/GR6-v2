@@ -7,6 +7,7 @@ opencv-contrib-python-headless  # calibration.py: findChessboardCorners, calibra
 scipy      # calibration.py: ConvexHull, for the "is the checkerboard big enough" check
 matplotlib # calibration.py: matplotlib.path.Path, for the point-in-polygon check
 pyserial   # drive/serial_link.py: USB-serial connection to the motor-controller microcontroller
+requests   # navigate/app.py: server-side HTTP calls to drive's /command/auto and /pump
 
 # picamera2 is not listed here — it depends on system libcamera bindings
 # and normally can't be pip-installed standalone. On the Pi it's usually

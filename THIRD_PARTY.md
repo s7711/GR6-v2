@@ -29,3 +29,7 @@
 ## drive icon
 - Source: Mary Akveo (https://maryakveo.com/), via https://www.svgviewer.dev/s/499347/steering-wheel
 - License: Public Domain
+
+## navigate icon
+- Source: Icooon Mono (https://icooon-mono.com/), via https://www.svgviewer.dev/s/383545/road
+- License: Public Domain

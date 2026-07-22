@@ -1,0 +1,137 @@
+{# title: Run #}
+{% extends "base.html" %}
+{% block title %}GR6 — Navigate{% endblock %}
+
+{% block content %}
+<div class="row g-3 mb-3">
+  <div class="col-12 col-md-6">
+    <div class="card">
+      <div class="card-body">
+        <div class="mb-2">
+          <label class="form-label">Path</label>
+          <select id="path-select" class="form-select">
+            <option value="">-- choose a path --</option>
+            {% for p in paths %}
+            <option value="{{ p.name }}">{{ p.name }} ({{ p.point_count }} points, {{ "%.1f"|format(p.length_m) }} m)</option>
+            {% endfor %}
+          </select>
+        </div>
+        <button id="load-btn" class="btn btn-outline-primary me-2">Load</button>
+        <button id="start-btn" class="btn btn-success me-2">Start</button>
+        <button id="stop-btn" class="btn btn-danger">Stop</button>
+        <div id="entry-message" class="text-body-secondary small mt-2"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-md-6">
+    <div class="card">
+      <div class="card-body">
+        <table class="table table-sm mb-0">
+          <tbody>
+            <tr><th scope="row">State</th><td><span id="stat-state">—</span> <span id="stat-abort_reason" class="text-danger small"></span></td></tr>
+            <tr><th scope="row">Speed</th><td><span id="stat-speed">—</span> m/s</td></tr>
+            <tr><th scope="row">Lateral error</th><td><span id="stat-cross_track_error_m">—</span> m (clearance headroom <span id="stat-clearance_headroom_m">—</span> m)</td></tr>
+            <tr><th scope="row">Distance travelled</th><td><span id="stat-distance_travelled_m">—</span> m</td></tr>
+            <tr><th scope="row">GPS position mode</th><td><span id="status-GpsPosMode">—</span></td></tr>
+            <tr><th scope="row">Horizontal accuracy</th><td><span id="stat-accuracy">—</span> m</td></tr>
+            <tr><th scope="row">Differential age</th><td><span id="status-GpsDiffAge">—</span> s</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="map-wrapper" style="position: relative; width: 100%;">
+  <canvas id="map-canvas" style="display: block; width: 100%; height: 100%;"></canvas>
+  <div class="btn-group-vertical position-absolute top-0 end-0 m-2" role="group">
+    <button type="button" class="btn btn-sm zoom-btn" data-zoom="auto">Auto</button>
+    <button type="button" class="btn btn-sm zoom-btn" data-zoom="5">5 m</button>
+    <button type="button" class="btn btn-sm zoom-btn" data-zoom="20">20 m</button>
+    <button type="button" class="btn btn-sm zoom-btn" data-zoom="50">50 m</button>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/ncom-strings.js"></script>
+<script src="/static/geomap.js"></script>
+<script>
+// --- Path load/start/stop ---
+
+document.getElementById("load-btn").addEventListener("click", () => {
+  const name = document.getElementById("path-select").value;
+  if (!name) return;
+  fetch(`/control/load/${encodeURIComponent(name)}`, { method: "POST" }).then(() => loadPathForMap(name));
+});
+
+document.getElementById("start-btn").addEventListener("click", () => {
+  fetch("/control/start", { method: "POST" })
+    .then((r) => r.json())
+    .then((result) => {
+      const msg = document.getElementById("entry-message");
+      if (result.ok) {
+        msg.textContent = "";
+      } else if (result.reason === "no segment within entry tolerance") {
+        msg.textContent = `Too far from the path to start: ${result.distance_m.toFixed(2)}m away, ` +
+          `${result.heading_error_deg.toFixed(0)}° off heading. Drive closer and try again.`;
+      } else {
+        msg.textContent = result.reason || "Couldn't start.";
+      }
+    });
+});
+
+document.getElementById("stop-btn").addEventListener("click", () => {
+  fetch("/control/stop", { method: "POST" });
+});
+
+// --- Live status (navigate's own feed) ---
+
+connectWs("/ws/navigate", (msg) => {
+  fillFields("stat-", msg);
+});
+
+// --- Map: loaded path + driven trail + live position ---
+
+const map = createGeoMap(document.getElementById("map-canvas"), document.getElementById("map-wrapper"), ".zoom-btn");
+map.setZoom("auto");
+
+const trail = [];
+const MAX_TRAIL_POINTS = 2000;
+
+function loadPathForMap(name) {
+  fetch(`/api/paths/${encodeURIComponent(name)}`)
+    .then((r) => r.json())
+    .then((points) => {
+      map.setLayer("path", points, { color: "#6c757d" });
+      map.draw();
+    });
+}
+
+connectWsUrl("{{ oxtsnav_ws_url }}", (msg) => {
+  const nav = msg.nav || {};
+  const status = msg.status || {};
+  fillFields("status-", status);
+  translateNcomCodes("status-", status);
+
+  if (nav.Lat !== undefined && nav.Lon !== undefined) {
+    const current = { lat: (nav.Lat * 180) / Math.PI, lon: (nav.Lon * 180) / Math.PI };
+    trail.push(current);
+    if (trail.length > MAX_TRAIL_POINTS) trail.shift();
+    map.setLayer("trail", trail, { color: "#0d6efd" });
+    map.setCurrent(current.lat, current.lon);
+    map.draw();
+  }
+
+  if (nav.Vn !== undefined && nav.Ve !== undefined) {
+    document.getElementById("stat-speed").textContent = Math.hypot(nav.Vn, nav.Ve).toFixed(2);
+  }
+  if (status.NorthAcc !== undefined && status.EastAcc !== undefined) {
+    document.getElementById("stat-accuracy").textContent = Math.hypot(status.NorthAcc, status.EastAcc).toFixed(2);
+  }
+});
+
+map.resize();
+</script>
+{% endblock %}

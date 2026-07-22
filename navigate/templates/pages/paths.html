@@ -1,0 +1,53 @@
+{# title: Paths #}
+{% extends "base.html" %}
+{% block title %}GR6 — Paths{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div class="card-body">
+    <table class="table align-middle">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Points</th>
+          <th>Length</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in paths %}
+        <tr data-name="{{ p.name }}">
+          <td>{{ p.name }}</td>
+          <td>{{ p.point_count }}</td>
+          <td>{{ "%.1f"|format(p.length_m) }} m</td>
+          <td>
+            <button class="btn btn-sm btn-outline-primary" data-action="run">Run</button>
+            <button class="btn btn-sm btn-outline-danger" data-action="delete">Delete</button>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" class="text-body-secondary">No saved paths yet — record one on the Create Path page.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.querySelectorAll("button[data-action]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const name = btn.closest("tr").dataset.name;
+    if (btn.dataset.action === "run") {
+      fetch(`/control/load/${encodeURIComponent(name)}`, { method: "POST" }).then(() => {
+        window.location.href = "/"; // run page auto-selects nothing, but the path is already loaded server-side
+      });
+    } else if (btn.dataset.action === "delete") {
+      if (!confirm(`Delete path "${name}"? This can't be undone.`)) return;
+      fetch(`/api/paths/${encodeURIComponent(name)}`, { method: "DELETE" }).then(() => location.reload());
+    }
+  });
+});
+</script>
+{% endblock %}
