@@ -197,10 +197,52 @@ built once now rather than three times later.
 
 - `xnav_ip` — the xNAV650's IP address (top-level, since other future
   services may also need it, not nested under this service alone).
-- Under this service's own entry: `nav_update_hz` (websocket publish
-  rate), `nav_feed_socket`/`nav_feed_hz` (the cross-process nav feed, see
+- Under this service's own entry: `protocol` (`ncom` or `ucom` — which
+  decoder/port `app.py` uses, read once at startup; see "NCOM/UCOM
+  protocol switch" below), `nav_update_hz` (websocket publish rate),
+  `nav_feed_socket`/`nav_feed_hz` (the cross-process nav feed, see
   above), plus the usual `unit`/`host`/`port`/`web_ui` fields every
   service has. No command-related config — see "xNAV650 commands" above.
+
+## NCOM/UCOM protocol switch
+
+OXTS is deprecating NCOM in favour of UCOM (a newer, self-describing
+"sources and signals" protocol — see `UCOM_Manual_260707.pdf` in this
+folder). Full field-by-field comparison, design reasoning, and a running
+log of what's been built/found/fixed lives in `ncom-to-ucom-mapping.md`
+rather than here, since it's a large, evolving research document — this
+section is just the summary.
+
+- `ucomrx.py`/`ucomrx_thread.py` mirror `ncomrx.py`/`ncomrx_thread.py`'s
+  structure exactly (own socket on UCOM's fixed port 50487, one explicit
+  `decodeMessageN` per message rather than a generic schema-interpreting
+  decoder, same `nav`/`status`/`connection` dict shape) — deliberately
+  duplicated rather than sharing a base class with the NCOM versions.
+- `oxts-nav.protocol` picks which one `app.py` constructs at startup —
+  restart-only, no dynamic switch, same as every other config value in
+  this project. NCOM remains the default; UCOM is opt-in while it's
+  still being field-validated.
+- `oxts-nav/documentation/` holds the xNAV650's reference `oxts.dbu`/
+  `oxts.dbs` (every message/signal OXTS defines), alongside both manual
+  PDFs and `ncom-to-ucom-mapping.md`. The actual deployed config,
+  `mobile.dbu` (what we've built and uploaded to Amundsen, enabling only
+  what's actually consumed today — nav PVA, accuracies, GNSS status, GAD
+  statuses/innovations, INS status, SDN time offset, plus one custom
+  message — see below), lives at `xnav-config/mobile.dbu.txt` instead —
+  auto-downloaded alongside the NCOM config files (see `app.py`'s
+  `XNAV_CONFIG_FILES`), not documentation, since it's the live deployed
+  artifact rather than reference material.
+- Custom UCOM messages (IDs 64512–65535) are confirmed to work on this
+  firmware even though OXTS's own NAVconfig tool has no way to create
+  one — several fields exist in `oxts.dbs` but aren't packaged into any
+  of OXTS's 93 predefined messages (`BaseStationID`, GNSS reject
+  counters, IMU bias/scale-factor, etc.). `mobile.dbu`'s message 64513
+  pulls these in by hand.
+- All of this was built and field-tested against Amundsen's real
+  xNAV650, not just unit-tested — see `ncom-to-ucom-mapping.md` for the
+  real bugs found and fixed along the way (a CRC32 linearity bug causing
+  false duplicate-packet detection, a missing time-correlation
+  mechanism, message-routing gaps).
 
 ## Testing Decisions
 
@@ -234,13 +276,9 @@ built once now rather than three times later.
 - Any consumer-specific display logic (graphs, readouts, tables) — that
   lives in whichever webpage/service consumes this feed, per `ui-style.md`
   and the "server doesn't change for the webpage's sake" principle above.
-- **NCOM → UCOM decoding** (future idea, not designed here): after a
-  2026-07-22 xNAV650 firmware update, `GpsPosMode` no longer reflects a
-  GAD position update being accepted the way it used to (`GAD (34)`) —
-  a welcome change in itself, but it removes the only visibility this
-  project currently has into "is GAD aiding actually doing anything."
-  UCOM apparently carries GAD-acceptance information NCOM doesn't. Full
-  switch to UCOM, or a partial/dual decode (some messages from each),
-  are both on the table — not designed or started, just flagged so
-  it's not forgotten. `ncomrx.py`/`ncomrx_thread.py` would need real
-  changes either way (UCOM is a different message format from NCOM).
+- ~~NCOM → UCOM decoding (future idea, not designed here)~~ — **done, see
+  "NCOM/UCOM protocol switch" above and `ncom-to-ucom-mapping.md`.**
+  Still out of scope: actually flipping `oxts-nav.protocol` to `ucom` by
+  default (NCOM stays the default until UCOM's had more field time), and
+  a couple of `STR`-type fields (`BaseStationID`, `DevID`) deliberately
+  left out of the custom message for now.

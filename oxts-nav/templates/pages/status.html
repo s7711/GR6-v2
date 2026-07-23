@@ -20,7 +20,7 @@
 {% endmacro %}
 
 {{ section("Navigation Status", [
-  ("Navigation status", "nav-NavStatus", ""),
+  ("Navigation status", "nav-InsNavMode", ""),
   ("GPS time", "nav-GpsTime", ""),
   ("UTC time", "nav-UtcTime", ""),
 ]) }}
@@ -38,31 +38,29 @@
 ]) }}
 
 {{ section("GNSS", [
-  ("Number of satellites", "status-GpsNumObs", ""),
-  ("Position mode", "status-GpsPosMode", ""),
-  ("Velocity mode", "status-GpsVelMode", ""),
-  ("Attitude mode", "status-GpsAttMode", ""),
-  ("Satellites used for position", "status-NumSatsUsedPos", ""),
-  ("Satellites used for velocity", "status-NumSatsUsedVel", ""),
-  ("Satellites used for attitude", "status-NumSatsUsedAtt", ""),
-  ("Differential age", "status-GpsDiffAge", "s"),
-  ("Base station ID", "status-BaseStationId", ""),
-  ("Consecutive rejected positions", "status-GpsPosReject", ""),
-  ("Consecutive rejected velocities", "status-GpsVelReject", ""),
-  ("Consecutive rejected attitudes", "status-GpsAttReject", ""),
+  ("Number of satellites", "status-GnssPosNumSats", ""),
+  ("Position mode", "status-GnssPosMode", ""),
+  ("Velocity mode", "status-GnssVelMode", ""),
+  ("Attitude mode", "status-GnssAttMode", ""),
+  ("Satellites used for position", "status-GnssPosNumSatsUsed", ""),
+  ("Satellites used for velocity", "status-GnssVelNumSatsUsed", ""),
+  ("Satellites used for attitude", "status-GnssAttNumSats", ""),
+  ("Differential age", "status-GnssDiffAge", "s"),
+  ("Base station ID", "status-BaseStationID", ""),
+  ("Consecutive rejected positions", "status-GnssPosReject", ""),
+  ("Consecutive rejected velocities", "status-GnssVelReject", ""),
+  ("Consecutive rejected attitudes", "status-GnssAttReject", ""),
 ]) }}
 
 {{ section("GNSS Dual-antenna", [
-  ("Heading quality", "status-HeadQuality", ""),
-  ("Heading search type", "status-HeadSearchType", ""),
-  ("Heading search status", "status-HeadSearchStatus", ""),
-  ("Heading search ready", "status-HeadSearchReady", ""),
-  ("Initial number of ambiguities", "status-HeadSearchInit", ""),
-  ("Remaining number of ambiguities", "status-HeadSearchNum", ""),
-  ("Number of constraints applied", "status-HeadSearchConstr", ""),
-  ("Heading search duration", "status-HeadSearchTime", "s"),
   ("Dual-GNSS baseline", "status-BaseLineLength", "m"),
   ("Heading misalignment", "status-HeadingMisAlign", "deg"),
+]) }}
+
+{{ section("GAD", [
+  ("Position aiding active", "status-GADPosStatus", ""),
+  ("Velocity aiding active", "status-GADVelStatus", ""),
+  ("Attitude aiding active", "status-GADAttStatus", ""),
 ]) }}
 
 {{ section("Innovations", [
@@ -93,23 +91,18 @@
 
 {{ section("Internal timing", [
   ("Time mismatch", "status-TimeMismatch", "ms"),
-  ("IMU time difference", "status-ImuTimeDiff", "ms"),
-  ("IMU time margin", "status-ImuTimeMargin", "ms"),
-  ("IMU loop time", "status-ImuLoopTime", "ms"),
-  ("Output loop time", "status-OpLoopTime", "ms"),
-  ("BNS lag", "status-BnsLag", "ms"),
   ("Up time", "status-UpTime", "s"),
 ]) }}
 
 {{ section("Decoders", [
-  ("GNSS primary chars", "status-GpsPrimaryChars", ""),
-  ("GNSS primary packets", "status-GpsPrimaryPkts", ""),
-  ("GNSS primary chars skipped", "status-GpsPrimaryCharsSkipped", ""),
-  ("GNSS primary packets too old", "status-GpsPrimaryOldPkts", ""),
-  ("GNSS secondary chars", "status-GpsSecondaryChars", ""),
-  ("GNSS secondary packets", "status-GpsSecondaryPkts", ""),
-  ("GNSS secondary chars skipped", "status-GpsSecondaryCharsSkipped", ""),
-  ("GNSS secondary packets too old", "status-GpsSecondaryOldPkts", ""),
+  ("GNSS primary chars", "status-GnssInt1_Chars", ""),
+  ("GNSS primary packets", "status-GnssInt1_Pkts", ""),
+  ("GNSS primary chars skipped", "status-GnssInt1_CharsSkipped", ""),
+  ("GNSS primary packets too old", "status-GnssInt1_OldPkts", ""),
+  ("GNSS secondary chars", "status-GnssInt2_Chars", ""),
+  ("GNSS secondary packets", "status-GnssInt2_Pkts", ""),
+  ("GNSS secondary chars skipped", "status-GnssInt2_CharsSkipped", ""),
+  ("GNSS secondary packets too old", "status-GnssInt2_OldPkts", ""),
   ("IMU chars", "status-ImuChars", ""),
   ("IMU packets", "status-ImuPkts", ""),
   ("IMU skipped", "status-ImuSkipped", ""),
@@ -117,15 +110,9 @@
 
 {{ section("System", [
   ("Serial number", "status-SerialNumber", ""),
-  ("Dev ID", "status-DevId", ""),
+  ("Dev ID", "status-DevID", ""),
   ("Disk space", "status-DiskSpace", "kiB"),
   ("File size", "status-FileSize", "kiB"),
-  ("OS version 1", "status-OsVersion1", ""),
-  ("OS version 2", "status-OsVersion2", ""),
-  ("OS version 3", "status-OsVersion3", ""),
-  ("IMU type", "status-ImuType", ""),
-  ("GPS primary type", "status-GpsPrimary", ""),
-  ("GPS secondary type", "status-GpsSecondary", ""),
 ]) }}
 
 {% include "_command_box.html" %}

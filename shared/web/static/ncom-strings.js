@@ -13,10 +13,9 @@ const NCOM_GPS_MODE_STRINGS = ["None", "Search", "Doppler", "SPS", "Differential
 const NCOM_HEADING_QUALITY_STRINGS = ["None", "Poor", "OK", "Good"];
 
 const NCOM_STRING_TABLES = {
-  GpsPosMode: NCOM_GPS_MODE_STRINGS,
-  GpsVelMode: NCOM_GPS_MODE_STRINGS,
-  GpsAttMode: NCOM_GPS_MODE_STRINGS,
-  HeadQuality: NCOM_HEADING_QUALITY_STRINGS,
+  GnssPosMode: NCOM_GPS_MODE_STRINGS,
+  GnssVelMode: NCOM_GPS_MODE_STRINGS,
+  GnssAttMode: NCOM_GPS_MODE_STRINGS,
 };
 
 function translateNcomCodes(prefix, data) {

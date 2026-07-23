@@ -25,6 +25,7 @@ services:
     host: 0.0.0.0
     port: 8002
     web_ui: true
+    protocol: ncom  # ncom or ucom - which decoder/port oxts-nav listens with. Read once at startup, restart the service to change - see ncom-to-ucom-mapping.md
     nav_update_hz: 2
     nav_feed_socket: /tmp/gr6-oxts-nav-feed.sock  # Unix domain socket — see "Nav data feed" in oxts-nav-prd.md
     nav_feed_hz: 20

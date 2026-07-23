@@ -1,9 +1,15 @@
-"""GR6-v2 oxts-nav: decodes the xNAV650's NCOM stream and publishes it.
+"""GR6-v2 oxts-nav: decodes the xNAV650's NCOM or UCOM stream and publishes it.
 
 See oxts-nav-prd.md for the requirements this implements. `ncomrx.py` and
 `ncomrx_thread.py` are ported from GR6-v1 close to unchanged (see PRD);
 everything else here is new — a thin publisher in place of GR6-v1's
 xnav.py, built around this project's IPC/web conventions instead.
+
+Which protocol is used (`ncom` or `ucom`) is set by config.yaml's
+oxts-nav.protocol, read once at startup — see ncom-to-ucom-mapping.md.
+Restart the service to switch; this isn't a live/dynamic toggle, same
+as every other config value in this project (see top-prd.md's "Shared
+configuration" decision).
 """
 
 import ftplib
@@ -23,6 +29,7 @@ from shared.config import load_config  # noqa: E402
 from shared.web import manager_url, register_pages, use_shared_static, use_shared_templates  # noqa: E402
 
 import ncomrx_thread  # noqa: E402
+import ucomrx_thread  # noqa: E402
 import nav_feed  # noqa: E402
 
 XNAV_COMMAND_PORT = 3001
@@ -34,6 +41,7 @@ XNAV_CONFIG_FILES = [
     "mobile.vaa",  # Vehicle attitude accuracy
     "mobile.att",  # (GNSS) antenna attitude
     "mobile.ata",  # (GNSS) antenna attitude accuracy
+    "mobile.dbu",  # UCOM stream configuration - see ncom-to-ucom-mapping.md
 ]
 XNAV_CONFIG_DIR = Path(__file__).resolve().parent / "xnav-config"
 PAGES_DIR = Path(__file__).resolve().parent / "templates" / "pages"
@@ -48,7 +56,13 @@ xnav_ip = cfg["xnav_ip"]
 service_cfg = cfg["services"]["oxts-nav"]
 nav_update_hz = service_cfg["nav_update_hz"]
 
-nrxs = ncomrx_thread.NcomRxThread()
+protocol = service_cfg["protocol"]
+if protocol == "ncom":
+    nrxs = ncomrx_thread.NcomRxThread()
+elif protocol == "ucom":
+    nrxs = ucomrx_thread.UcomRxThread()
+else:
+    raise ValueError(f"oxts-nav.protocol must be 'ncom' or 'ucom', got {protocol!r}")
 
 nav_feed_server = nav_feed.NavFeedServer(
     socket_path=service_cfg["nav_feed_socket"],

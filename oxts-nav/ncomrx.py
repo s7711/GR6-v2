@@ -234,17 +234,17 @@ class NcomRx:
         
         # ... Must have a valid packet or we would have returned
         # Decode NavStatus to find what other fields are valid
-        self.nav['NavStatus'] = int(self.ncomBytes[21])
-        self.status['NavStatus'] = int(self.ncomBytes[21])
+        self.nav['InsNavMode'] = int(self.ncomBytes[21])
+        self.status['InsNavMode'] = int(self.ncomBytes[21])
         
-        if self.nav['NavStatus'] in [0,5,6,7]:
+        if self.nav['InsNavMode'] in [0,5,6,7]:
             self.status = {}
             # Remove this packet
             self.ncomBytes = self.ncomBytes[NOUTPUT_PACKET_LENGTH:]
             self.connection['unprocessedBytes'] = len(self.ncomBytes)
             return 1 # All quantities are invalid
         
-        if self.nav['NavStatus'] in [1,2,3,4,20,21,22]:        
+        if self.nav['InsNavMode'] in [1,2,3,4,20,21,22]:        
             # Decode Batch A
             self.nav['GpsSeconds'] = int.from_bytes(self.ncomBytes[1:3], byteorder = 'little', signed=False) * TIME2SEC
             self.nav['Ax'] = int.from_bytes(self.ncomBytes[3:6],   byteorder = 'little', signed=True) * ACC2MPS2
@@ -299,7 +299,7 @@ class NcomRx:
             except:
                 self.connection['timeOffset'] = None
             
-        if self.nav['NavStatus'] in [3,4,20,21,22]:
+        if self.nav['InsNavMode'] in [3,4,20,21,22]:
             # Decode Batch B
             self.nav['Lat'] = struct.unpack("<d",self.ncomBytes[23:31])[0] # Note: radians
             self.nav['Lon'] = struct.unpack("<d",self.ncomBytes[31:39])[0] # Note: radians
@@ -312,7 +312,7 @@ class NcomRx:
             self.nav['Pitch']   = int.from_bytes(self.ncomBytes[55:58], byteorder = 'little', signed=True) * ANG2RAD * RAD2DEG
             self.nav['Roll']    = int.from_bytes(self.ncomBytes[58:61], byteorder = 'little', signed=True) * ANG2RAD * RAD2DEG
 
-        if self.nav['NavStatus'] in [1,2,3,4,10,20,21,22]:
+        if self.nav['InsNavMode'] in [1,2,3,4,10,20,21,22]:
             # Decode Batch S
             statusChannel = int(self.ncomBytes[62])
             try:
@@ -354,17 +354,17 @@ class NcomRx:
         self.status['GpsMinutes'] = int.from_bytes(statusBytes[0:4], byteorder = 'little', signed=False)
         if self.status['GpsMinutes'] < 1000: del self.status['GpsMinutes']
         
-        self.status['GpsNumObs'] = int(statusBytes[4])
-        if self.status['GpsNumObs'] == 255: del self.status['GpsNumObs']
+        self.status['GnssPosNumSats'] = int(statusBytes[4])
+        if self.status['GnssPosNumSats'] == 255: del self.status['GnssPosNumSats']
 
-        self.status['GpsPosMode'] = int(statusBytes[5])
-        if self.status['GpsPosMode'] == 255: del self.status['GpsPosMode']
+        self.status['GnssPosMode'] = int(statusBytes[5])
+        if self.status['GnssPosMode'] == 255: del self.status['GnssPosMode']
 
-        self.status['GpsVelMode'] = int(statusBytes[6])
-        if self.status['GpsVelMode'] == 255: del self.status['GpsVelMode']
+        self.status['GnssVelMode'] = int(statusBytes[6])
+        if self.status['GnssVelMode'] == 255: del self.status['GnssVelMode']
 
-        self.status['GpsAttMode'] = int(statusBytes[7])
-        if self.status['GpsAttMode'] == 255: del self.status['GpsAttMode']
+        self.status['GnssAttMode'] = int(statusBytes[7])
+        if self.status['GnssAttMode'] == 255: del self.status['GnssAttMode']
 
 
     def decodeStatus1(self,statusBytes):
@@ -476,10 +476,10 @@ class NcomRx:
 
     def decodeStatus2(self,statusBytes):
         # Internal information about primary GNSS receiver
-        self._updateLE16(int.from_bytes(statusBytes[0:2], byteorder = 'little', signed=False),'GpsPrimaryChars')
-        self._updateLE16(int.from_bytes(statusBytes[2:4], byteorder = 'little', signed=False),'GpsPrimaryPkts')
-        self._updateLE16(int.from_bytes(statusBytes[4:6], byteorder = 'little', signed=False),'GpsPrimaryCharsSkipped')
-        self._updateLE16(int.from_bytes(statusBytes[6:8], byteorder = 'little', signed=False),'GpsPrimaryOldPkts')
+        self._updateLE16(int.from_bytes(statusBytes[0:2], byteorder = 'little', signed=False),'GnssInt1_Chars')
+        self._updateLE16(int.from_bytes(statusBytes[2:4], byteorder = 'little', signed=False),'GnssInt1_Pkts')
+        self._updateLE16(int.from_bytes(statusBytes[4:6], byteorder = 'little', signed=False),'GnssInt1_CharsSkipped')
+        self._updateLE16(int.from_bytes(statusBytes[6:8], byteorder = 'little', signed=False),'GnssInt1_OldPkts')
 
     def decodeStatus3(self,statusBytes):
         # Position accuracy
@@ -507,8 +507,8 @@ class NcomRx:
             del self.status['VdAcc']       
 
         # Processing method used by blended
-        self.status['BlendedMethod'] = statusBytes[7]
-        if statusBytes[7] == 0: del self.status['BlendedMethod']
+        self.status['Generator'] = statusBytes[7]
+        if statusBytes[7] == 0: del self.status['Generator']
 
 
     def decodeStatus5(self,statusBytes):
@@ -634,13 +634,13 @@ class NcomRx:
 
     def decodeStatus16(self,statusBytes):
         # RT to vehicle rotation
-        self.status['VehHeading'] = int.from_bytes(statusBytes[0:2], byteorder = 'little', signed=True) * GPSATT2RAD * RAD2DEG
-        self.status['VehPitch'] = int.from_bytes(statusBytes[2:4], byteorder = 'little', signed=True) * GPSATT2RAD * RAD2DEG
-        self.status['VehRoll'] = int.from_bytes(statusBytes[4:6], byteorder = 'little', signed=True) * GPSATT2RAD * RAD2DEG
+        self.status['Imu2VehHeading'] = int.from_bytes(statusBytes[0:2], byteorder = 'little', signed=True) * GPSATT2RAD * RAD2DEG
+        self.status['Imu2VehPitch'] = int.from_bytes(statusBytes[2:4], byteorder = 'little', signed=True) * GPSATT2RAD * RAD2DEG
+        self.status['Imu2VehRoll'] = int.from_bytes(statusBytes[4:6], byteorder = 'little', signed=True) * GPSATT2RAD * RAD2DEG
         if statusBytes[6] > 150:
-            del self.status['VehHeading']
-            del self.status['VehPitch']
-            del self.status['VehRoll']       
+            del self.status['Imu2VehHeading']
+            del self.status['Imu2VehPitch']
+            del self.status['Imu2VehRoll']       
 
         self.status['TimeUtcOffset'] = int.from_bytes(statusBytes[7:8], byteorder = 'little', signed=True) >> 1
         if statusBytes[7]&0x1 == 0: del self.status['TimeUtcOffset']
@@ -648,10 +648,10 @@ class NcomRx:
 
     def decodeStatus17(self,statusBytes):
         # Internal information about secondary GNSS receiver
-        self._updateLE16(int.from_bytes(statusBytes[0:2], byteorder = 'little', signed=False),'GpsSecondaryChars')
-        self._updateLE16(int.from_bytes(statusBytes[2:4], byteorder = 'little', signed=False),'GpsSecondaryPkts')
-        self._updateLE16(int.from_bytes(statusBytes[4:6], byteorder = 'little', signed=False),'GpsSecondaryCharsSkipped')
-        self._updateLE16(int.from_bytes(statusBytes[6:8], byteorder = 'little', signed=False),'GpsSecondaryOldPkts')
+        self._updateLE16(int.from_bytes(statusBytes[0:2], byteorder = 'little', signed=False),'GnssInt2_Chars')
+        self._updateLE16(int.from_bytes(statusBytes[2:4], byteorder = 'little', signed=False),'GnssInt2_Pkts')
+        self._updateLE16(int.from_bytes(statusBytes[4:6], byteorder = 'little', signed=False),'GnssInt2_CharsSkipped')
+        self._updateLE16(int.from_bytes(statusBytes[6:8], byteorder = 'little', signed=False),'GnssInt2_OldPkts')
 
 
     def decodeStatus18(self,statusBytes):
@@ -663,14 +663,14 @@ class NcomRx:
 
     def decodeStatus19(self,statusBytes):
         # Software version running on the RT
-        self.status['DevId'] = statusBytes.decode('utf-8')
+        self.status['DevID'] = statusBytes.decode('utf-8')
 
 
     def decodeStatus20(self,statusBytes):
         # Differential corrections configuration
-        self.status['GpsDiffAge'] = int.from_bytes(statusBytes[0:2], byteorder = 'little', signed=True) * DIFFAGE2SEC
-        self.status['BaseStationId'] = statusBytes[2:6].decode('utf-8')
-        if statusBytes[2] == 0: del self.status['BaseStationId']
+        self.status['GnssDiffAge'] = int.from_bytes(statusBytes[0:2], byteorder = 'little', signed=True) * DIFFAGE2SEC
+        self.status['BaseStationID'] = statusBytes[2:6].decode('utf-8')
+        if statusBytes[2] == 0: del self.status['BaseStationID']
 
 
     def decodeStatus21(self,statusBytes):
@@ -707,14 +707,14 @@ class NcomRx:
         elif x < 10800: self.status['UpTime'] = x
         else: self.status['UpTime'] = (x-10620)*60
         
-        self.status['GpsPosReject'] = statusBytes[4]
-        if statusBytes[4] == 255: del self.status['GpsPosReject']
+        self.status['GnssPosReject'] = statusBytes[4]
+        if statusBytes[4] == 255: del self.status['GnssPosReject']
         
-        self.status['GpsVelReject'] = statusBytes[5]
-        if statusBytes[5] == 255: del self.status['GpsVelReject']
+        self.status['GnssVelReject'] = statusBytes[5]
+        if statusBytes[5] == 255: del self.status['GnssVelReject']
 
-        self.status['GpsAttReject'] = statusBytes[6]
-        if statusBytes[6] == 255: del self.status['GpsAttReject']
+        self.status['GnssAttReject'] = statusBytes[6]
+        if statusBytes[6] == 255: del self.status['GnssAttReject']
 
 
     def decodeStatus24(self,statusBytes):
@@ -733,13 +733,13 @@ class NcomRx:
     
     def decodeStatus26(self,statusBytes):
         # Remote lever-arm
-        self.status['RemoveLeverArmX'] = int.from_bytes(statusBytes[0:2], byteorder = 'little', signed=True) * OUTPOS2M
-        self.status['RemoveLeverArmY'] = int.from_bytes(statusBytes[2:4], byteorder = 'little', signed=True) * OUTPOS2M
-        self.status['RemoveLeverArmZ'] = int.from_bytes(statusBytes[4:6], byteorder = 'little', signed=True) * OUTPOS2M
+        self.status['RemoteLeverArmX'] = int.from_bytes(statusBytes[0:2], byteorder = 'little', signed=True) * OUTPOS2M
+        self.status['RemoteLeverArmY'] = int.from_bytes(statusBytes[2:4], byteorder = 'little', signed=True) * OUTPOS2M
+        self.status['RemoteLeverArmZ'] = int.from_bytes(statusBytes[4:6], byteorder = 'little', signed=True) * OUTPOS2M
         if statusBytes[6] > 0:
-            del self.status['RemoveLeverArmX']
-            del self.status['RemoveLeverArmY']
-            del self.status['RemoveLeverArmZ']       
+            del self.status['RemoteLeverArmX']
+            del self.status['RemoteLeverArmY']
+            del self.status['RemoteLeverArmZ']       
 
     def decodeStatus27(self,statusBytes):
         # Internal information about dial antenna ambiguity search
@@ -774,8 +774,8 @@ class NcomRx:
         self.status['OptionGpsAcc'] = statusBytes[2]
         if (statusBytes[2]&0x80) == 0x80: del self.status['OptionGpsAcc']
 
-        self.status['OptionUpd'] = statusBytes[3]
-        if (statusBytes[3]&0x80) == 0x80: del self.status['OptionUpd']
+        self.status['OptionUdp'] = statusBytes[3]
+        if (statusBytes[3]&0x80) == 0x80: del self.status['OptionUdp']
 
         self.status['OptionsSer1'] = statusBytes[4]
         if (statusBytes[4]&0x80) == 0x80: del self.status['OptionsSer1']
@@ -913,14 +913,14 @@ class NcomRx:
         
         # NCOM manual version 180806 shows validity as not 0xF,
         # but I assume this is incorrect. 0xFF used here
-        self.status['NumSatsUsedPos'] = statusBytes[4]
-        if statusBytes[4] == 0xFF: del self.status['NumSatsUsedPos']
+        self.status['GnssPosNumSatsUsed'] = statusBytes[4]
+        if statusBytes[4] == 0xFF: del self.status['GnssPosNumSatsUsed']
         
-        self.status['NumSatsUsedVel'] = statusBytes[5]
-        if statusBytes[5] == 0xFF: del self.status['NumSatsUsedVel']
+        self.status['GnssVelNumSatsUsed'] = statusBytes[5]
+        if statusBytes[5] == 0xFF: del self.status['GnssVelNumSatsUsed']
 
-        self.status['NumSatsUsedAtt'] = statusBytes[7]
-        if statusBytes[7] == 0xFF: del self.status['NumSatsUsedAtt']
+        self.status['GnssAttNumSats'] = statusBytes[7]
+        if statusBytes[7] == 0xFF: del self.status['GnssAttNumSats']
 
 
     def decodeStatus38(self,statusBytes):
@@ -965,7 +965,7 @@ class NcomRx:
         if statusBytes[7] == 0xFF: del self.status['OptionNSRadius']
 
     def decodeStatus40(self,statusBytes):
-        self.status['NComEncoderVersion'] = int.from_bytes(statusBytes[0:2], byteorder = 'little', signed=False)
+        self.status['UCOMVersion'] = int.from_bytes(statusBytes[0:2], byteorder = 'little', signed=False)
         self.status['OutputLatency'] = int.from_bytes(statusBytes[2:4], byteorder = 'little', signed=False) * OUTPUTLATENCY2SEC
         self.status['SerialNumber'] = int.from_bytes(statusBytes[4:6], byteorder = 'little', signed=False)
     
@@ -1030,15 +1030,33 @@ class NcomRx:
         try:
             m = self.status['GpsMinutes'] # May be invalid, hence 'try'
             s = int.from_bytes(statusBytes[4:6], byteorder = 'little', signed=False) * 0.001
-            self.status['WSpeedTime'] = GPS_STARTTIME + \
+            self.status['WSpeedNano'] = GPS_STARTTIME + \
                 datetime.timedelta( minutes=self.status['GpsMinutes'], seconds=self.nav['GpsSeconds'] )
-            if statusBytes[4:6] == b'\xFF\xFF': del self.status['WSpeedTime']
+            if statusBytes[4:6] == b'\xFF\xFF': del self.status['WSpeedNano']
         except:
             pass
         
         self.status['WSpeedTimeUnchanged'] = statusBytes[6] * WSDELAY2S
         if statusBytes[6] == 0xFF: del self.status['WSpeedTimeUnchanged']
-        
+
+        # Byte 7: GAD position/velocity/attitude active flags - added to the
+        # manual 260702, easy to miss since the manual's own table/caption
+        # layout makes this look like it belongs to channel 44 instead (the
+        # caption for a table sits at its end, right before the next
+        # table's content starts - Ben and I both misread this the same
+        # way at first). Named to match UCOM's equivalent signals
+        # (GADPosStatus/GADVelStatus/GADAttStatus, message 37 "GAD
+        # statuses") rather than invent NCOM-only names - see
+        # ncom-to-ucom-mapping.md.
+        gadStatus = statusBytes[7]
+        self.status['GADPosStatus'] = (gadStatus & 0x01) > 0
+        self.status['GADVelStatus'] = (gadStatus & 0x02) > 0
+        self.status['GADAttStatus'] = (gadStatus & 0x04) > 0
+        if gadStatus == 0xFF:
+            del self.status['GADPosStatus']
+            del self.status['GADVelStatus']
+            del self.status['GADAttStatus']
+
         # todo: calculate tacho frequency - see OxTS NCom decoders
 
 
@@ -1082,8 +1100,8 @@ class NcomRx:
         self.status['DatumEllipsoid'] = statusBytes[6]
         if statusBytes[6] == 0xFF: del self.status['DatumEllipsoid']
         
-        self.status['DatumEarthFrame'] = statusBytes[7]
-        if statusBytes[7] == 0xFF: del self.status['DatumEarthFrame']
+        self.status['DatumFrame'] = statusBytes[7]
+        if statusBytes[7] == 0xFF: del self.status['DatumFrame']
 
 
     def decodeStatus49(self,statusBytes):
@@ -1113,54 +1131,54 @@ class NcomRx:
 
     def decodeStatus51(self,statusBytes):
         # Additional slip point 1
-        self.status['SlipPoint1X'] = int.from_bytes(statusBytes[0:2], byteorder = 'little', signed=True) * SP2M
-        self.status['SlipPoint1Y'] = int.from_bytes(statusBytes[2:4], byteorder = 'little', signed=True) * SP2M
-        self.status['SlipPoint1Z'] = int.from_bytes(statusBytes[4:6], byteorder = 'little', signed=True) * SP2M
+        self.status['MeasPt1_PointXv'] = int.from_bytes(statusBytes[0:2], byteorder = 'little', signed=True) * SP2M
+        self.status['MeasPt1_PointYv'] = int.from_bytes(statusBytes[2:4], byteorder = 'little', signed=True) * SP2M
+        self.status['MeasPt1_PointZv'] = int.from_bytes(statusBytes[4:6], byteorder = 'little', signed=True) * SP2M
         if statusBytes[6] > 0:
-            del self.status['SlipPoint1X']
-            del self.status['SlipPoint1Y']
-            del self.status['SlipPoint1Z']       
+            del self.status['MeasPt1_PointXv']
+            del self.status['MeasPt1_PointYv']
+            del self.status['MeasPt1_PointZv']       
 
 
     def decodeStatus52(self,statusBytes):
         # Additional slip point 2
-        self.status['SlipPoint2X'] = int.from_bytes(statusBytes[0:2], byteorder = 'little', signed=True) * SP2M
-        self.status['SlipPoint2Y'] = int.from_bytes(statusBytes[2:4], byteorder = 'little', signed=True) * SP2M
-        self.status['SlipPoint2Z'] = int.from_bytes(statusBytes[4:6], byteorder = 'little', signed=True) * SP2M
+        self.status['MeasPt2_PointXv'] = int.from_bytes(statusBytes[0:2], byteorder = 'little', signed=True) * SP2M
+        self.status['MeasPt2_PointYv'] = int.from_bytes(statusBytes[2:4], byteorder = 'little', signed=True) * SP2M
+        self.status['MeasPt2_PointZv'] = int.from_bytes(statusBytes[4:6], byteorder = 'little', signed=True) * SP2M
         if statusBytes[6] > 0:
-            del self.status['SlipPoint2X']
-            del self.status['SlipPoint2Y']
-            del self.status['SlipPoint2Z']       
+            del self.status['MeasPt2_PointXv']
+            del self.status['MeasPt2_PointYv']
+            del self.status['MeasPt2_PointZv']       
 
 
     def decodeStatus53(self,statusBytes):
         # Additional slip point 3
-        self.status['SlipPoint3X'] = int.from_bytes(statusBytes[0:2], byteorder = 'little', signed=True) * SP2M
-        self.status['SlipPoint3Y'] = int.from_bytes(statusBytes[2:4], byteorder = 'little', signed=True) * SP2M
-        self.status['SlipPoint3Z'] = int.from_bytes(statusBytes[4:6], byteorder = 'little', signed=True) * SP2M
+        self.status['MeasPt3_PointXv'] = int.from_bytes(statusBytes[0:2], byteorder = 'little', signed=True) * SP2M
+        self.status['MeasPt3_PointYv'] = int.from_bytes(statusBytes[2:4], byteorder = 'little', signed=True) * SP2M
+        self.status['MeasPt3_PointZv'] = int.from_bytes(statusBytes[4:6], byteorder = 'little', signed=True) * SP2M
         if statusBytes[6] > 0:
-            del self.status['SlipPoint3X']
-            del self.status['SlipPoint3Y']
-            del self.status['SlipPoint3Z']       
+            del self.status['MeasPt3_PointXv']
+            del self.status['MeasPt3_PointYv']
+            del self.status['MeasPt3_PointZv']       
 
 
     def decodeStatus54(self,statusBytes):
         # Additional slip point 4
-        self.status['SlipPoint4X'] = int.from_bytes(statusBytes[0:2], byteorder = 'little', signed=True) * SP2M
-        self.status['SlipPoint4Y'] = int.from_bytes(statusBytes[2:4], byteorder = 'little', signed=True) * SP2M
-        self.status['SlipPoint4Z'] = int.from_bytes(statusBytes[4:6], byteorder = 'little', signed=True) * SP2M
+        self.status['MeasPt4_PointXv'] = int.from_bytes(statusBytes[0:2], byteorder = 'little', signed=True) * SP2M
+        self.status['MeasPt4_PointYv'] = int.from_bytes(statusBytes[2:4], byteorder = 'little', signed=True) * SP2M
+        self.status['MeasPt4_PointZv'] = int.from_bytes(statusBytes[4:6], byteorder = 'little', signed=True) * SP2M
         if statusBytes[6] > 0:
-            del self.status['SlipPoint4X']
-            del self.status['SlipPoint4Y']
-            del self.status['SlipPoint4Z']       
+            del self.status['MeasPt4_PointXv']
+            del self.status['MeasPt4_PointYv']
+            del self.status['MeasPt4_PointZv']       
 
     def decodeStatus55(self,statusBytes):
         # Status information about primary GNSS receiver
         self.status['GpsPrimaryAntStatus'] = statusBytes[0] & 0x03
         if (statusBytes[0] & 0x03) == 0x03: del self.status['GpsPrimaryAntStatus']
         
-        self.status['GpsPrimaryAntPower'] = (statusBytes[0] & 0x0C) >> 2
-        if (statusBytes[0] & 0x0C) == 0x0C: del self.status['GpsPrimaryAntPower']
+        self.status['GnssInt1_AntPower'] = (statusBytes[0] & 0x0C) >> 2
+        if (statusBytes[0] & 0x0C) == 0x0C: del self.status['GnssInt1_AntPower']
 
         self.status['GpsPrimaryCpuUsed'] = statusBytes[1]
         if statusBytes[1] == 0xFF: del self.status['GpsPrimaryCpuUsed']
@@ -1171,8 +1189,8 @@ class NcomRx:
         self.status['GpsPrimaryBaud'] = statusBytes[3]
         if statusBytes[3] == 0xFF: del self.status['GpsPrimaryBaud']
         
-        self.status['GpsPrimaryNumSats'] = statusBytes[4]
-        if statusBytes[4] == 0xFF: del self.status['GpsPrimaryNumSats']
+        self.status['GnssInt1_NumSats'] = statusBytes[4]
+        if statusBytes[4] == 0xFF: del self.status['GnssInt1_NumSats']
         
         self.status['GpsPrimaryPosMode'] = statusBytes[5]
         if statusBytes[5] == 0xFF: del self.status['GpsPrimaryPosMode']
@@ -1189,8 +1207,8 @@ class NcomRx:
         self.status['GpsSecondaryAntStatus'] = statusBytes[0] & 0x03
         if (statusBytes[0] & 0x03) == 0x03: del self.status['GpsSecondaryAntStatus']
         
-        self.status['GpsSecondaryAntPower'] = (statusBytes[0] & 0x0C) >> 2
-        if (statusBytes[0] & 0x0C) == 0x0C: del self.status['GpsSecondaryAntPower']
+        self.status['GnssInt2_AntPower'] = (statusBytes[0] & 0x0C) >> 2
+        if (statusBytes[0] & 0x0C) == 0x0C: del self.status['GnssInt2_AntPower']
 
         self.status['GpsSecondaryCpuUsed'] = statusBytes[1]
         if statusBytes[1] == 0xFF: del self.status['GpsSecondaryCpuUsed']
@@ -1201,8 +1219,8 @@ class NcomRx:
         self.status['GpsSecondaryBaud'] = statusBytes[3]
         if statusBytes[3] == 0xFF: del self.status['GpsSecondaryBaud']
         
-        self.status['GpsSecondaryNumSats'] = statusBytes[4]
-        if statusBytes[4] == 0xFF: del self.status['GpsSecondaryNumSats']
+        self.status['GnssInt2_NumSats'] = statusBytes[4]
+        if statusBytes[4] == 0xFF: del self.status['GnssInt2_NumSats']
         
         self.status['GpsSecondaryPosMode'] = statusBytes[5]
         if statusBytes[5] == 0xFF: del self.status['GpsSecondaryPosMode']
@@ -1256,19 +1274,19 @@ class NcomRx:
 
     def decodeStatus61(self,statusBytes):
         # Internal information about external GNSS receiver
-        self._updateLE16(int.from_bytes(statusBytes[0:2], byteorder = 'little', signed=False),'GpsExternalChars')
-        self._updateLE16(int.from_bytes(statusBytes[2:4], byteorder = 'little', signed=False),'GpsExternalPkts')
-        self._updateLE16(int.from_bytes(statusBytes[4:6], byteorder = 'little', signed=False),'GpsExternalCharsSkipped')
-        self._updateLE16(int.from_bytes(statusBytes[6:8], byteorder = 'little', signed=False),'GpsExternalOldPkts')
+        self._updateLE16(int.from_bytes(statusBytes[0:2], byteorder = 'little', signed=False),'GnssExt1_Chars')
+        self._updateLE16(int.from_bytes(statusBytes[2:4], byteorder = 'little', signed=False),'GnssExt1_Pkts')
+        self._updateLE16(int.from_bytes(statusBytes[4:6], byteorder = 'little', signed=False),'GnssExt1_CharsSkipped')
+        self._updateLE16(int.from_bytes(statusBytes[6:8], byteorder = 'little', signed=False),'GnssExt1_OldPkts')
 
 
     def decodeStatus62(self,statusBytes):
         # Status information about external GNSS receiver
-        self.status['GpsExternalAntStatus'] = statusBytes[0] & 0x03
-        if (statusBytes[0] & 0x03) == 0x03: del self.status['GpsExternalAntStatus']
+        self.status['GnssExt1_AntStatus'] = statusBytes[0] & 0x03
+        if (statusBytes[0] & 0x03) == 0x03: del self.status['GnssExt1_AntStatus']
         
-        self.status['GpsExternalAntPower'] = (statusBytes[0] & 0x0C) >> 2
-        if (statusBytes[0] & 0x0C) == 0x0C: del self.status['GpsExternalAntPower']
+        self.status['GnssExt1_AntPower'] = (statusBytes[0] & 0x0C) >> 2
+        if (statusBytes[0] & 0x0C) == 0x0C: del self.status['GnssExt1_AntPower']
 
         self.status['GpsExternalCpuUsed'] = statusBytes[1]
         if statusBytes[1] == 0xFF: del self.status['GpsExternalCpuUsed']
@@ -1279,8 +1297,8 @@ class NcomRx:
         self.status['GpsExternalBaud'] = statusBytes[3]
         if statusBytes[3] == 0xFF: del self.status['GpsExternalBaud']
         
-        self.status['GpsExternalNumSats'] = statusBytes[4]
-        if statusBytes[4] == 0xFF: del self.status['GpsExternalNumSats']
+        self.status['GnssExt1_NumSats'] = statusBytes[4]
+        if statusBytes[4] == 0xFF: del self.status['GnssExt1_NumSats']
         
         self.status['GpsExternalPosMode'] = statusBytes[5]
         if statusBytes[5] == 0xFF: del self.status['GpsExternalPosMode']
@@ -1350,21 +1368,21 @@ class NcomRx:
 
     def decodeStatus66(self,statusBytes):
         # Extended local co-ordinate/reference frame for latitude and longitude
-        self.status['RefFrameLat'] = int.from_bytes(statusBytes[0:4], byteorder = 'little', signed=True) * FINEANG2RAD * RAD2DEG
-        if statusBytes[0:4] == b'\x00\x00\x00\x80': del self.status['RefFrameLat']
+        self.status['RefLat'] = int.from_bytes(statusBytes[0:4], byteorder = 'little', signed=True) * FINEANG2RAD * RAD2DEG
+        if statusBytes[0:4] == b'\x00\x00\x00\x80': del self.status['RefLat']
         
-        self.status['RefFrameLon'] = int.from_bytes(statusBytes[4:8], byteorder = 'little', signed=True) * FINEANG2RAD * RAD2DEG
-        if statusBytes[4:8] == b'\x00\x00\x00\x80': del self.status['RefFrameLon']
+        self.status['RefLon'] = int.from_bytes(statusBytes[4:8], byteorder = 'little', signed=True) * FINEANG2RAD * RAD2DEG
+        if statusBytes[4:8] == b'\x00\x00\x00\x80': del self.status['RefLon']
         self.computeRefFrame()
 
 
     def decodeStatus67(self,statusBytes):
         # Extended local co-ordinate/reference frame for altitude and heading
-        self.status['RefFrameAlt'] = int.from_bytes(statusBytes[0:4], byteorder = 'little', signed=True) * ALT2M
-        if statusBytes[0:4] == b'\x00\x00\x00\x80': del self.status['RefFrameAlt']
+        self.status['RefAlt'] = int.from_bytes(statusBytes[0:4], byteorder = 'little', signed=True) * ALT2M
+        if statusBytes[0:4] == b'\x00\x00\x00\x80': del self.status['RefAlt']
         
-        self.status['RefFrameHeading'] = int.from_bytes(statusBytes[4:8], byteorder = 'little', signed=True) * FINEANG2RAD * RAD2DEG
-        if statusBytes[4:8] == b'\x00\x00\x00\x80': del self.status['RefFrameHeading']
+        self.status['RefHeading'] = int.from_bytes(statusBytes[4:8], byteorder = 'little', signed=True) * FINEANG2RAD * RAD2DEG
+        if statusBytes[4:8] == b'\x00\x00\x00\x80': del self.status['RefHeading']
         self.computeRefFrame()
 
 
@@ -1373,24 +1391,24 @@ class NcomRx:
         # Note that, if the reference frame changes then there will be a glitch
         # because the reference frame lat/lon won't match the refernce frame alt/heading
         # Not sure how to avoid this. Should go away quite quickly when both are updated.
-        if 'RefFrameLat' in self.status \
-        and 'RefFrameLon' in self.status \
-        and 'RefFrameAlt' in self.status \
-        and 'RefFrameHeading' in self.status:
+        if 'RefLat' in self.status \
+        and 'RefLon' in self.status \
+        and 'RefAlt' in self.status \
+        and 'RefHeading' in self.status:
             # Compute the local reference frame constants
             # These are used to compute LocalX, LocalY, etc. in self.nav
-            tmp = EARTH_ECCENTRICITY * math.sin(self.status['RefFrameLat']*DEG2RAD)
+            tmp = EARTH_ECCENTRICITY * math.sin(self.status['RefLat']*DEG2RAD)
             tmp = 1.0 - tmp * tmp
             sqt = math.sqrt(tmp)
             # These are the earth radii
             rho_e = EARTH_EQUAT_RADIUS * (1.0 - EARTH_ECCENTRICITY * EARTH_ECCENTRICITY) / (sqt * tmp)
             rho_n = EARTH_EQUAT_RADIUS / sqt
             # Set the Ref...Radius in units of m/degree
-            self.status['RefLatRadius'] = (rho_e + self.status['RefFrameAlt']) * DEG2RAD
-            self.status['RefLonRadius'] = (rho_n + self.status['RefFrameAlt']) * math.cos(self.status['RefFrameLat'] * DEG2RAD) * DEG2RAD
+            self.status['RefLatRadius'] = (rho_e + self.status['RefAlt']) * DEG2RAD
+            self.status['RefLonRadius'] = (rho_n + self.status['RefAlt']) * math.cos(self.status['RefLat'] * DEG2RAD) * DEG2RAD
             # For easier rotation from Northing/Easting to XY
-            self.status['RefHeadingCos'] = math.cos(self.status['RefFrameHeading'] * DEG2RAD)
-            self.status['RefHeadingSin'] = math.sin(self.status['RefFrameHeading'] * DEG2RAD)
+            self.status['RefHeadingCos'] = math.cos(self.status['RefHeading'] * DEG2RAD)
+            self.status['RefHeadingSin'] = math.sin(self.status['RefHeading'] * DEG2RAD)
         else:
             # Remove any computed values
             try:
@@ -1403,46 +1421,46 @@ class NcomRx:
 
     def decodeStatus68(self,statusBytes):
         # Additional slip point 5
-        self.status['SlipPoint5X'] = int.from_bytes(statusBytes[0:2], byteorder = 'little', signed=True) * SP2M
-        self.status['SlipPoint5Y'] = int.from_bytes(statusBytes[2:4], byteorder = 'little', signed=True) * SP2M
-        self.status['SlipPoint5Z'] = int.from_bytes(statusBytes[4:6], byteorder = 'little', signed=True) * SP2M
+        self.status['MeasPt5_PointXv'] = int.from_bytes(statusBytes[0:2], byteorder = 'little', signed=True) * SP2M
+        self.status['MeasPt5_PointYv'] = int.from_bytes(statusBytes[2:4], byteorder = 'little', signed=True) * SP2M
+        self.status['MeasPt5_PointZv'] = int.from_bytes(statusBytes[4:6], byteorder = 'little', signed=True) * SP2M
         if statusBytes[6] > 0:
-            del self.status['SlipPoint5X']
-            del self.status['SlipPoint5Y']
-            del self.status['SlipPoint5Z']       
+            del self.status['MeasPt5_PointXv']
+            del self.status['MeasPt5_PointYv']
+            del self.status['MeasPt5_PointZv']       
 
 
     def decodeStatus69(self,statusBytes):
         # Additional slip point 6
-        self.status['SlipPoint6X'] = int.from_bytes(statusBytes[0:2], byteorder = 'little', signed=True) * SP2M
-        self.status['SlipPoint6Y'] = int.from_bytes(statusBytes[2:4], byteorder = 'little', signed=True) * SP2M
-        self.status['SlipPoint6Z'] = int.from_bytes(statusBytes[4:6], byteorder = 'little', signed=True) * SP2M
+        self.status['MeasPt6_PointXv'] = int.from_bytes(statusBytes[0:2], byteorder = 'little', signed=True) * SP2M
+        self.status['MeasPt6_PointYv'] = int.from_bytes(statusBytes[2:4], byteorder = 'little', signed=True) * SP2M
+        self.status['MeasPt6_PointZv'] = int.from_bytes(statusBytes[4:6], byteorder = 'little', signed=True) * SP2M
         if statusBytes[6] > 0:
-            del self.status['SlipPoint6X']
-            del self.status['SlipPoint6Y']
-            del self.status['SlipPoint6Z']       
+            del self.status['MeasPt6_PointXv']
+            del self.status['MeasPt6_PointYv']
+            del self.status['MeasPt6_PointZv']       
 
 
     def decodeStatus70(self,statusBytes):
         # Additional slip point 7
-        self.status['SlipPoint7X'] = int.from_bytes(statusBytes[0:2], byteorder = 'little', signed=True) * SP2M
-        self.status['SlipPoint7Y'] = int.from_bytes(statusBytes[2:4], byteorder = 'little', signed=True) * SP2M
-        self.status['SlipPoint7Z'] = int.from_bytes(statusBytes[4:6], byteorder = 'little', signed=True) * SP2M
+        self.status['MeasPt7_PointXv'] = int.from_bytes(statusBytes[0:2], byteorder = 'little', signed=True) * SP2M
+        self.status['MeasPt7_PointYv'] = int.from_bytes(statusBytes[2:4], byteorder = 'little', signed=True) * SP2M
+        self.status['MeasPt7_PointZv'] = int.from_bytes(statusBytes[4:6], byteorder = 'little', signed=True) * SP2M
         if statusBytes[6] > 0:
-            del self.status['SlipPoint7X']
-            del self.status['SlipPoint7Y']
-            del self.status['SlipPoint7Z']       
+            del self.status['MeasPt7_PointXv']
+            del self.status['MeasPt7_PointYv']
+            del self.status['MeasPt7_PointZv']       
 
 
     def decodeStatus71(self,statusBytes):
         # Additional slip point 8
-        self.status['SlipPoint8X'] = int.from_bytes(statusBytes[0:2], byteorder = 'little', signed=True) * SP2M
-        self.status['SlipPoint8Y'] = int.from_bytes(statusBytes[2:4], byteorder = 'little', signed=True) * SP2M
-        self.status['SlipPoint8Z'] = int.from_bytes(statusBytes[4:6], byteorder = 'little', signed=True) * SP2M
+        self.status['MeasPt8_PointXv'] = int.from_bytes(statusBytes[0:2], byteorder = 'little', signed=True) * SP2M
+        self.status['MeasPt8_PointYv'] = int.from_bytes(statusBytes[2:4], byteorder = 'little', signed=True) * SP2M
+        self.status['MeasPt8_PointZv'] = int.from_bytes(statusBytes[4:6], byteorder = 'little', signed=True) * SP2M
         if statusBytes[6] > 0:
-            del self.status['SlipPoint8X']
-            del self.status['SlipPoint8Y']
-            del self.status['SlipPoint8Z']       
+            del self.status['MeasPt8_PointXv']
+            del self.status['MeasPt8_PointYv']
+            del self.status['MeasPt8_PointZv']       
 
 
     def decodeStatus72(self,statusBytes):
@@ -1456,9 +1474,9 @@ class NcomRx:
             del self.status['AzSf']
         # Number of GPS differential corrections
         x = statusBytes[7] & 0x0F
-        self.status['NumGpsDiffL1'] = x if x != 0x0F else -1
+        self.status['GnssDiffNumGpsL1'] = x if x != 0x0F else -1
         x = statusBytes[7] >> 4
-        self.status['NumGpsDiffL2'] = x if x != 0x0F else -1
+        self.status['GnssDiffNumGpsL2'] = x if x != 0x0F else -1
 
 
     def decodeStatus73(self,statusBytes):
@@ -1472,9 +1490,9 @@ class NcomRx:
             del self.status['AzSfAcc']
         # Number of GLONASS differential corrections
         x = statusBytes[7] & 0x0F
-        self.status['NumGloDiffL1'] = x if x != 0x0F else -1
+        self.status['GnssDiffNumGlonassL1'] = x if x != 0x0F else -1
         x = statusBytes[7] >> 4
-        self.status['NumGloDiffL2'] = x if x != 0x0F else -1       
+        self.status['GnssDiffNumGlonassL2'] = x if x != 0x0F else -1       
 
     # decodeStatus74 todo: low pass filter for accelerometers
 
@@ -1485,22 +1503,22 @@ class NcomRx:
             self.status['FirmwareExpiryDate'] = GPS_STARTTIME + datetime.timedelta(days=x)
         else:
             del self.status['FirmwareExpiryDate']
-        self.status['SupplyVoltage'] = statusBytes[2] * 0.2
-        if statusBytes[2] == 0xFF: del self.status['SupplyVoltage']
+        self.status['SupplyVolt'] = statusBytes[2] * 0.2
+        if statusBytes[2] == 0xFF: del self.status['SupplyVolt']
         self.status['ImuRate'] = int.from_bytes(statusBytes[3:5], byteorder = 'little', signed=False) * 0.02
         if statusBytes[3:5] == b'\xFF\xFF': del self.status['ImuRate']
         
 
     def decodeStatus76(self,statusBytes):
         # Differential GPS received
-        self._updateLE16(int.from_bytes(statusBytes[0:2], byteorder = 'little', signed=False),'DGpsChars')
-        self._updateLE16(int.from_bytes(statusBytes[2:4], byteorder = 'little', signed=False),'DGpsPkts')
-        self._updateLE16(int.from_bytes(statusBytes[4:6], byteorder = 'little', signed=False),'DGpsCharsSkipped')
-        #self.status['DGpsChars'] = int.from_bytes(statusBytes[0:2], byteorder = 'little', signed=False)
-        #self.status['DGpsPkts'] = int.from_bytes(statusBytes[2:4], byteorder = 'little', signed=False)
-        #self.status['DGpsCharsSkipped'] = int.from_bytes(statusBytes[4:6], byteorder = 'little', signed=False)
-        self.status['DGpsNtripStatus'] = statusBytes[6]
-        self.status['WifiConnectionStatus'] = statusBytes[7]
+        self._updateLE16(int.from_bytes(statusBytes[0:2], byteorder = 'little', signed=False),'GnssDiffChars')
+        self._updateLE16(int.from_bytes(statusBytes[2:4], byteorder = 'little', signed=False),'GnssDiffPkts')
+        self._updateLE16(int.from_bytes(statusBytes[4:6], byteorder = 'little', signed=False),'GnssDiffCharsSkipped')
+        #self.status['GnssDiffChars'] = int.from_bytes(statusBytes[0:2], byteorder = 'little', signed=False)
+        #self.status['GnssDiffPkts'] = int.from_bytes(statusBytes[2:4], byteorder = 'little', signed=False)
+        #self.status['GnssDiffCharsSkipped'] = int.from_bytes(statusBytes[4:6], byteorder = 'little', signed=False)
+        self.status['GnssDiffNtripStatus'] = statusBytes[6]
+        self.status['WiFiConnectionStatus'] = statusBytes[7]
 
     def decodeStatus79(self,statusBytes):
         # Trigger 1 output event timings (falling edge triggers)
@@ -1537,8 +1555,8 @@ class NcomRx:
         # GAD updates: Only the last one is saved here
         # But it might be better to have an array, one for each GAD stream ID
         if statusBytes[0] != 0:
-            self.status['GadStreamId'] = statusBytes[0]
-            self.status['GadReject'] = statusBytes[1]
+            self.status['GADLatestStreamID'] = statusBytes[0]
+            self.status['GADLatestStatus'] = statusBytes[1]
             self._updateInnovation( 'GadInn1', statusBytes[2:3] )
             self._updateInnovation( 'GadInn2', statusBytes[3:4] )
             self._updateInnovation( 'GadInn3', statusBytes[4:5] )
