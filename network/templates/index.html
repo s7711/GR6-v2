@@ -10,7 +10,7 @@
 
 {% if revert_pending %}
 <div class="alert alert-warning d-flex justify-content-between align-items-center">
-  <div>A change is pending confirmation — every interface with a recovery profile set will revert automatically in
+  <div>A change is pending confirmation — every interface with a recovery setting will revert automatically in
     up to {{ revert_timeout_s }}s if not confirmed.</div>
   <form method="post" action="{{ url_for('confirm') }}">
     <button type="submit" class="btn btn-warning">Confirm change is good</button>
@@ -31,48 +31,31 @@
       | IPv4: {{ iface.ipv4_method or '—' }}{% if iface.ipv4_address %} ({{ iface.ipv4_address }}){% endif %}
     </div>
 
-    <div class="text-body-secondary small mb-2">Configuration</div>
-    <form method="post" action="{{ url_for('apply_interface', device=iface.device) }}" class="row g-2 mb-4">
-      {% if iface.type == "wifi" %}
+    <div class="text-body-secondary small mb-2">Set to</div>
+    <form method="post" action="{{ url_for('apply_interface', device=iface.device) }}" class="row g-2 align-items-center mb-4">
       <div class="col-auto">
-        <select name="mode" class="form-select form-select-sm mode-select">
-          <option value="client" {{ "selected" if iface.mode != "hotspot" }}>Client (join a network)</option>
-          <option value="hotspot" {{ "selected" if iface.mode == "hotspot" }}>Hotspot (broadcast a network)</option>
+        <select name="connection_name" class="form-select form-select-sm">
+          <option value="{{ none_value }}" {{ "selected" if not iface.connection }}>None (disconnected)</option>
+          {% for name in iface.matching_connections %}
+          <option value="{{ name }}" {{ "selected" if name == iface.connection }}>
+            {{ name }} — {{ connection_descriptions[name] }}
+            {%- if name in iface.connections_active_elsewhere %} (currently active on {{ iface.connections_active_elsewhere[name] }}){% endif -%}
+          </option>
+          {% endfor %}
         </select>
-      </div>
-      <div class="col-auto"><input name="ssid" class="form-control form-control-sm" placeholder="SSID" value="{{ iface.ssid or '' }}"></div>
-      <div class="col-auto"><input name="password" type="password" class="form-control form-control-sm" placeholder="Password"></div>
-      {% endif %}
-      {% if iface.type == "ethernet" %}
-      <div class="col-auto form-check align-self-center">
-        <input class="form-check-input share-toggle" type="checkbox" name="share" id="share-{{ iface.device }}"
-               {{ "checked" if iface.ipv4_method == "shared" }}>
-        <label class="form-check-label small" for="share-{{ iface.device }}">Share internet (NAT via wifi)</label>
-      </div>
-      {% endif %}
-      <div class="col-auto ipv4-mode-field">
-        <select name="ipv4_mode" class="form-select form-select-sm">
-          <option value="dhcp" {{ "selected" if iface.ipv4_method != "manual" }}>DHCP</option>
-          <option value="static" {{ "selected" if iface.ipv4_method == "manual" }}>Static</option>
-        </select>
-      </div>
-      <div class="col-auto">
-        <input name="address" class="form-control form-control-sm address-field"
-               placeholder="Address (e.g. 192.168.1.50/24)" value="{{ iface.ipv4_address or '' }}">
-      </div>
-      <div class="col-auto ipv4-gateway-field">
-        <input name="gateway" class="form-control form-control-sm" placeholder="Gateway" value="{{ iface.ipv4_gateway or '' }}">
       </div>
       <div class="col-auto"><button type="submit" class="btn btn-primary btn-sm">Apply</button></div>
     </form>
 
-    <div class="text-body-secondary small mb-2">Recovery — what this interface falls back to if a change isn't confirmed</div>
+    <div class="text-body-secondary small mb-2">Recovers to — what this interface falls back to if a change isn't confirmed</div>
     <form method="post" action="{{ url_for('set_recovery', device=iface.device) }}" class="row g-2 align-items-center">
       <div class="col-auto">
         <select name="recovery_connection" class="form-select form-select-sm recovery-select">
           <option value="" data-description="Nothing happens to this interface if a change elsewhere isn't confirmed."
                   {{ "selected" if not iface.recovery_connection }}>Don't care — leave alone</option>
-          {% for name in all_connections %}
+          <option value="{{ recovery_none_value }}" data-description="This interface is actively disconnected if a change elsewhere isn't confirmed."
+                  {{ "selected" if iface.recovery_connection == recovery_none_value }}>None (disconnect)</option>
+          {% for name in iface.matching_connections %}
           <option value="{{ name }}" data-description="{{ connection_descriptions[name] }}"
                   {{ "selected" if name == iface.recovery_connection }}>{{ name }}</option>
           {% endfor %}
@@ -85,55 +68,17 @@
 </div>
 {% endfor %}
 
+<div class="mb-4">
+  <a href="{{ url_for('new_wifi') }}" class="btn btn-outline-primary btn-sm">New wifi configuration</a>
+  <a href="{{ url_for('new_ethernet') }}" class="btn btn-outline-primary btn-sm">New ethernet configuration</a>
+</div>
+
 {% endblock %}
 
 {% block scripts %}
 <script>
-// A hotspot, and an ethernet interface with "Share internet" ticked,
-// are both NetworkManager's ipv4.method: shared under the hood — an
-// interface like that always owns its own address *and* runs its own
-// DHCP server for whatever's plugged into/connecting to it, so there's
-// no separate DHCP-vs-static choice to make, unlike a plain wifi
-// client or ethernet connection. Hide the (otherwise silently-ignored)
-// DHCP/Static and Gateway fields whenever either applies, rather than
-// leave a control on the page that looks like a real choice but has no
-// effect — see nm.py's apply_hotspot()/apply_ethernet(share=True),
-// neither of which ever reads ipv4_mode/gateway.
-const HOTSPOT_DEFAULT_ADDRESS = "192.168.4.1/24";
-
-function isShared(form) {
-  const modeSelect = form.querySelector(".mode-select");
-  const shareToggle = form.querySelector(".share-toggle");
-  return (modeSelect && modeSelect.value === "hotspot") || (shareToggle && shareToggle.checked);
-}
-
-function updateIpv4FieldsVisibility(form) {
-  const shared = isShared(form);
-  form.querySelectorAll(".ipv4-mode-field, .ipv4-gateway-field").forEach((el) => {
-    el.classList.toggle("d-none", shared);
-  });
-  // Only a hotspot gets a proposed default address filled in — an
-  // ethernet interface being shared should keep whatever address it
-  // already has (pre-filled from the interface's current state), not
-  // have it replaced with the wifi hotspot's default.
-  const modeSelect = form.querySelector(".mode-select");
-  if (!modeSelect) return;
-  const isHotspot = modeSelect.value === "hotspot";
-  const addressField = form.querySelector(".address-field");
-  if (isHotspot && addressField.value === "") {
-    addressField.value = HOTSPOT_DEFAULT_ADDRESS;
-  } else if (!isHotspot && addressField.value === HOTSPOT_DEFAULT_ADDRESS) {
-    addressField.value = "";
-  }
-}
-
-document.querySelectorAll(".mode-select, .share-toggle").forEach((el) => {
-  updateIpv4FieldsVisibility(el.closest("form"));
-  el.addEventListener("change", () => updateIpv4FieldsVisibility(el.closest("form")));
-});
-
 // Recovery options are just bare NetworkManager connection names
-// (e.g. "preconfigured"), meaningless on their own — show what the
+// (e.g. "CoffeebeanWifi"), meaningless on their own — show what the
 // currently-selected one actually means as plain text below the
 // dropdown (not a tooltip — this page is as likely to be used from a
 // phone/tablet, which has no hover state to reveal one).

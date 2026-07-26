@@ -46,6 +46,22 @@ class TestLoadSetRecovery(_IsolatedRecoveryFile):
             recovery.load_recovery(), {"wlan0": "preconfigured", "eth0": "Wired connection 1"}
         )
 
+    def test_none_sentinel_stored_as_is(self):
+        recovery.set_recovery("wlan0", recovery.NONE)
+        self.assertEqual(recovery.load_recovery(), {"wlan0": recovery.NONE})
+
+    def test_refuses_same_profile_as_another_devices_recovery(self):
+        recovery.set_recovery("wlan0", "CoffeebeanWifi")
+        with self.assertRaises(recovery.RecoveryConflict):
+            recovery.set_recovery("wlan1", "CoffeebeanWifi")
+        # the conflicting set must not have partially applied
+        self.assertEqual(recovery.load_recovery(), {"wlan0": "CoffeebeanWifi"})
+
+    def test_re_setting_the_same_device_to_the_same_profile_is_not_a_conflict(self):
+        recovery.set_recovery("wlan0", "CoffeebeanWifi")
+        recovery.set_recovery("wlan0", "CoffeebeanWifi")  # must not raise
+        self.assertEqual(recovery.load_recovery(), {"wlan0": "CoffeebeanWifi"})
+
 
 class TestRevertNow(_IsolatedRecoveryFile):
     def test_reactivates_every_stored_connection(self):
@@ -53,8 +69,9 @@ class TestRevertNow(_IsolatedRecoveryFile):
         recovery.set_recovery("eth0", "Wired connection 1")
         with patch("subprocess.run", return_value=_completed()) as mock_run:
             recovery.revert_now()
-        activated = [call.args[0][-1] for call in mock_run.call_args_list]
-        self.assertEqual(sorted(activated), ["Wired connection 1", "preconfigured"])
+        calls = [call.args[0] for call in mock_run.call_args_list]
+        self.assertTrue(any("preconfigured" in c and "wlan0" in c for c in calls))
+        self.assertTrue(any("Wired connection 1" in c and "eth0" in c for c in calls))
 
     def test_devices_marked_dont_care_are_skipped(self):
         recovery.set_recovery("wlan0", "preconfigured")
@@ -68,6 +85,13 @@ class TestRevertNow(_IsolatedRecoveryFile):
         recovery.set_recovery("eth0", "Wired connection 1")
         with patch("subprocess.run", return_value=_completed(returncode=1)):
             recovery.revert_now()  # must not raise
+
+    def test_none_sentinel_disconnects_instead_of_activating(self):
+        recovery.set_recovery("wlan0", recovery.NONE)
+        with patch("subprocess.run", return_value=_completed()) as mock_run:
+            recovery.revert_now()
+        calls = [call.args[0] for call in mock_run.call_args_list]
+        self.assertTrue(any("disconnect" in c and "wlan0" in c for c in calls))
 
 
 class TestScheduleCancel(unittest.TestCase):

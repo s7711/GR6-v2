@@ -89,27 +89,67 @@ A single wifi radio can't be both an AP and a client at the same time —
 this is *why* the hotspot and roaming-client roles are split across two
 different radios, not a UI restriction `network` invents.
 
-### Page shape
+### Page shape (v2 — see "v1 → v2" below for why this changed)
 
-One page per interface (`wlan0`, `wlan1`/dongle once fitted, `eth0`,
-...), each with two sections:
+One page, one card per interface (`wlan0`, `wlan1`, `eth0`, ...). No
+inline "edit this interface's settings" form anymore — a card only
+ever *selects* an already-existing NetworkManager connection profile,
+never edits one in place:
 
-1. **Configuration** — the interface's live/normal settings: DHCP vs
-   static (+ address/gateway/DNS if static), and for a wifi interface,
-   SSID/password, or hotspot mode (SSID/password/DHCP range for
-   *its* clients).
-2. **Recovery** — *not* a separate top-level page (an earlier sketch of
-   this PRD had it as one; per-interface is simpler and matches how
-   Ben actually thinks about it: "what should this adaptor do if
-   something's gone wrong?"). Lets the operator define a known-good
-   fallback profile for *this* interface, or explicitly mark it
-   "don't care, leave alone" (this is what `eth0` gets — see below).
+1. **Set to** — a dropdown of every existing connection profile of the
+   matching type (wifi profiles for `wlan0`/`wlan1`, ethernet profiles
+   for `eth0`), plus a **"None (disconnected)"** option (`nmcli device
+   disconnect <device>` — a normal NetworkManager state, not a fake
+   one), plus a single **Apply** button.
+2. **Recovers to** — the same style of dropdown (same profile list plus
+   "None (disconnected)"), for the known-good fallback this interface
+   reverts to if a change isn't confirmed in time, or "don't care,
+   leave alone" (distinct from "None" — "don't care" means recovery
+   skips this interface entirely, "None" means recovery actively
+   disconnects it).
+3. A single **Apply** button per card, not one per section — applying
+   activates whichever profile is selected in "Set to"; changing
+   "Recovers to" saves immediately on its own (no separate profile is
+   created for either action).
+
+Creating or editing a profile's actual settings (SSID/password,
+DHCP/static, hotspot broadcast address, etc.) happens somewhere else
+entirely: **"New wifi configuration"** / **"New ethernet
+configuration"** buttons at the bottom of the page open a small
+form (name + the relevant settings) that creates a brand-new named
+profile and adds it to every matching dropdown on the page. There is
+no "adjust an existing profile" — if a profile's settings need to
+change, retire it and create a new one with a new name instead.
 
 A page also shows, for the whole machine: which interface(s) currently
 have a real internet route (not just a link), and which interfaces
 are set to share/route through which — the "highlight which has
 internet, which need to route through it" piece from the original
 discussion.
+
+### Connection profiles are shared, not per-device
+
+A NetworkManager connection profile with no device pinned (the normal
+case here, e.g. `CoffeebeanWifi`) can be activated on *any* matching
+device, but only on **one device at a time** — activating it on a
+second device silently deactivates it on the first (confirmed the hard
+way, see "v1 → v2" below). `network` deliberately does not "fix" this
+by pinning profiles to a specific device (e.g. via `interface-name`) —
+Ben's call: that would need the app to silently disambiguate
+same-named profiles per device (e.g. hidden `wlan0-`/`wlan1-`
+prefixing), which is exactly the kind of hidden-from-the-operator
+magic this project avoids. Instead:
+
+- Two wifi devices that both need to be "on Coffeebean" get **two
+  separate, identically-configured profiles** — `CoffeebeanWifi` and
+  `CoffeebeanWifiSpare` — one per device, both visible, both plain
+  `nmcli` profiles an operator could activate by hand.
+- Before activating (or setting as Recovery) a profile that's already
+  active on a *different* device, `network` checks first and refuses
+  with a plain message, rather than letting NetworkManager silently
+  evict it from wherever it currently is.
+- Only one hotspot profile (`AmundsenHotspot`) is needed for now — it's
+  not something two devices would ever want active simultaneously.
 
 ### Recovery / safe-apply
 
@@ -131,10 +171,12 @@ Ben's actual answer for what recovery means today:
   of "Coffeebean" (hotspot mode off). Rationale: the dongle is a cable
   that can physically fall out; the onboard chip can't, so it's the
   more trustworthy fallback, even though the dongle roams better
-  day-to-day. (Confirmed live: this is *already* almost exactly
-  `wlan0`'s current NM profile — `preconfigured`, SSID `Coffeebean`,
-  DHCP — so the recovery profile for `wlan0` may end up being "the
-  profile that's already there today," not a new one to invent.)
+  day-to-day. In practice: `wlan0` recovers to `CoffeebeanWifi`, `wlan1`
+  recovers to `CoffeebeanWifiSpare` — never the same profile as each
+  other's recovery target (see "Connection profiles are shared, not
+  per-device" above — the same conflict check applies to *setting*
+  recovery, not just to Apply, otherwise two interfaces could be
+  configured to fight over one profile the moment a revert fires).
 - `eth0`: recovery = **don't care, leave alone**. Explicitly agreed:
   during a network-config session nothing is navigating (the xNAV650's
   state genuinely doesn't matter then), and if the operator is
@@ -142,19 +184,21 @@ Ben's actual answer for what recovery means today:
   sharing), an auto-revert would fight them for no reason. "A user who
   changes the network while the xNAV650 is navigating gets what they
   deserve" — not a case this service needs to protect against.
-- The dongle's own recovery: presumably also "don't care" (it's not
-  the trusted path), but Ben should confirm once it's fitted and has
-  an interface name to configure against.
 
 ## User Stories
 
 - As the operator, I can see every network interface on amundsen, its
   current mode (DHCP/static/hotspot) and settings, on one page per
   interface.
-- As the operator, I can change an interface's mode/settings (wifi
-  client SSID+password, static IP, or turn it into a hotspot with its
-  own SSID/password), and the change applies immediately via
-  NetworkManager.
+- As the operator, I can switch an interface to any already-existing
+  connection profile (or disconnect it entirely), and the change
+  applies immediately via NetworkManager — with a plain refusal if the
+  profile I picked is already active on a different interface, instead
+  of it being silently pulled off that interface.
+- As the operator, I can create a brand-new named profile (wifi
+  client/hotspot SSID+password, or ethernet DHCP/static/share) when I
+  need one that doesn't already exist, separately from switching an
+  interface to it.
 - As the operator, after changing a risky setting, I get a countdown to
   confirm the change is good — if I don't (e.g. because it broke my
   access), every interface with a defined recovery profile reverts to
@@ -185,6 +229,14 @@ Ben's actual answer for what recovery means today:
 - Following `manager`'s "no live reload" convention for `config.yaml`
   itself (this service's *own* host/port), but NOT for the network
   settings it manages — those are inherently live, that's the point.
+- Before activating a profile (Apply or setting Recovery), check
+  whether it's currently active on a *different* device
+  (`nmcli -t -f NAME,DEVICE connection show --active`, or equivalent)
+  and refuse with a plain message if so — this is the only guard
+  against the profile-sharing conflict described above; there is no
+  device-pinning at the NetworkManager level.
+- "None (disconnected)" is `nmcli device disconnect <device>` — a
+  normal state, not a fake/synthetic option.
 
 ## Config additions (proposed)
 
@@ -215,6 +267,11 @@ network:
 
 ## Out of Scope (v1 of this service)
 
+- Editing an existing connection profile's settings in place (SSID,
+  password, address, ...) — v2's page can only select an
+  already-existing profile or create a brand-new one; if a profile's
+  settings need to change, retire it and create a new one with a new
+  name via "New wifi/ethernet configuration" instead.
 - Encryption/security beyond ordinary WPA2-PSK — "not too worried about
   encryption, unless it's easy" (Ben's words); no enterprise auth, no
   captive portal, no per-client access control on the hotspot.
@@ -226,7 +283,77 @@ network:
   (same convention as every other service — edited via the manager's
   Config page).
 
-## Implementation Status (as of 2026-07-26)
+## v1 → v2: why the page shape changed (2026-07-26)
+
+v1 (below, "Implementation Status") shipped a per-interface
+Configuration form that always created/replaced a `gr6-<device>`
+profile, plus a separate "use an existing connection" control added
+afterwards, plus an inline create-or-select Recovery dropdown — three
+different mechanisms doing overlapping jobs, and it showed: using the
+real page surfaced a live incident. Ben renamed `wlan0`'s existing
+client profile to `CoffeebeanWifi`, then used the new "use an existing
+connection" control to activate that same profile on `wlan1`. It
+looked like nothing happened — until NetworkManager's own autoconnect
+policy noticed `wlan0` had gone idle (activating a profile on `wlan1`
+had *silently deactivated it on `wlan0`*, since one connection profile
+can only be active on one device at a time) and auto-started
+`AmundsenHotspot` on `wlan0` instead, unasked. Nobody's access was
+actually lost (the operator's session happened to already be reaching
+amundsen via `wlan1`), but it was a real "did the tool just do
+something I didn't ask for" moment.
+
+Root cause: a connection profile with no device pinned is genuinely
+shared across every matching device, not "available to any one of
+them" — this project's earlier "two wifi interfaces can join the same
+SSID at once" finding (see v1 status below) was tested with two
+*separate* profiles, not one profile reused across two devices, and
+that distinction got lost when `network`'s UI let you point one
+profile at either device without warning.
+
+The fix is a design simplification, not just a bug patch — see "Page
+shape (v2)" and "Connection profiles are shared, not per-device"
+above: no more inline create-or-edit, only select-existing-or-refuse,
+plus explicit per-role profiles (`CoffeebeanWifi` / `CoffeebeanWifiSpare`)
+so the conflict can't arise for the one case (both wifi devices on
+Coffeebean) where it would actually come up day-to-day.
+
+## Implementation Status (v2, as of 2026-07-26)
+
+Built and installed (`robot-network.service` restarted with the v2
+code, port 8007). Confirmed live, safely, without ever touching
+`wlan0`/`wlan1`/`eth0`'s working connections:
+
+- The page now shows the "Set to" / "Recovers to" dropdown pair per
+  interface described above, with an inline note on any option that's
+  "currently active on <other device>".
+- The conflict check works end-to-end: applying `CoffeebeanWifiSpare`
+  (active on `wlan1`) to `wlan0` was correctly refused with a plain
+  message, and neither device's real connection changed.
+- The same check works for Recovery: setting `wlan1`'s recovery to
+  `CoffeebeanWifi` (already `wlan0`'s recovery target) was correctly
+  refused, `recovery.json` unchanged.
+- A blocked Apply/Recovery attempt does not arm the revert timer (only
+  a successful change should start the countdown) — confirmed the
+  timer stayed inactive through both blocked attempts above.
+- "New wifi configuration" creates a profile without activating it —
+  confirmed a throwaway profile appeared in `nmcli connection show`
+  but no device's active connection changed, then deleted it.
+- `wlan0` recovers to `CoffeebeanWifi`, `wlan1` recovers to
+  `CoffeebeanWifiSpare` (fixed from a stale pre-v2 `recovery.json` that
+  had both pointing at `CoffeebeanWifi` — exactly the conflict v2
+  exists to prevent).
+- 36 unit tests (`test_nm.py`, `test_recovery.py`), all `nmcli`/
+  `systemd` calls stubbed, no real device ever touched by a test.
+
+**Not yet tested live** (deliberately left alone — same safety-first
+order as v1):
+
+- Actually applying "None (disconnected)" to a real wifi device.
+- `wlan0` switched into hotspot mode via the v2 page itself (confirmed
+  working previously via direct `nmcli`, not yet via "Set to").
+- `eth0`'s "Share internet" via a "New ethernet configuration" profile.
+
+## Implementation Status (v1, as of 2026-07-26 — superseded by v2 above, kept as a historical record of what was tested)
 
 Built and installed (`robot-network.service`, port 8007, shown on the
 manager's home page). Confirmed live, safely, without ever touching

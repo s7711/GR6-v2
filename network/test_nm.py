@@ -63,6 +63,20 @@ class TestListConnectionNames(unittest.TestCase):
         self.assertEqual(names, ["preconfigured", "Wired connection 1"])
 
 
+class TestListConnections(unittest.TestCase):
+    def test_maps_connection_type_to_device_type(self):
+        out = "preconfigured:802-11-wireless\nWired connection 1:802-3-ethernet\n"
+        with patch("subprocess.run", return_value=_completed(out)):
+            connections = nm.list_connections()
+        self.assertEqual(
+            connections,
+            [
+                {"name": "preconfigured", "device_type": "wifi"},
+                {"name": "Wired connection 1", "device_type": "ethernet"},
+            ],
+        )
+
+
 class TestDescribeConnection(unittest.TestCase):
     def test_wifi_client_dhcp(self):
         out = "connection.type:802-11-wireless\n802-11-wireless.mode:infrastructure\n802-11-wireless.ssid:Coffeebean\nipv4.method:auto\n"
@@ -83,10 +97,37 @@ class TestDescribeConnection(unittest.TestCase):
             self.assertEqual(nm.describe_connection("Wired connection 1"), "ethernet — static 192.168.196.22/24")
 
 
-class TestApplyEthernet(unittest.TestCase):
+class TestCreateWifiClient(unittest.TestCase):
+    def test_creates_unbound_profile(self):
+        with patch("subprocess.run", return_value=_completed()) as mock_run:
+            nm.create_wifi_client("MyWifi", "MySSID", "password123")
+        add_call = next(c for c in mock_run.call_args_list if "add" in c.args[0])
+        args = add_call.args[0]
+        self.assertIn("MyWifi", args)
+        self.assertIn("MySSID", args)
+        self.assertNotIn("ifname", args)  # deliberately device-unbound, see nm.py's create_* docstrings
+
+    def test_refuses_if_name_already_exists(self):
+        with patch("subprocess.run", return_value=_completed("MyWifi:802-11-wireless\n")):
+            with self.assertRaises(nm.NmError):
+                nm.create_wifi_client("MyWifi", "SSID", "pw")
+
+
+class TestCreateHotspot(unittest.TestCase):
+    def test_creates_ap_mode_unbound_profile(self):
+        with patch("subprocess.run", return_value=_completed()) as mock_run:
+            nm.create_hotspot("MyHotspot", "MySSID", "password123", address="192.168.4.1/24")
+        add_call = next(c for c in mock_run.call_args_list if "add" in c.args[0])
+        args = add_call.args[0]
+        self.assertIn("ap", args)
+        self.assertIn("shared", args)
+        self.assertNotIn("ifname", args)
+
+
+class TestCreateEthernet(unittest.TestCase):
     def test_share_sets_shared_method_and_address_only(self):
         with patch("subprocess.run", return_value=_completed()) as mock_run:
-            nm.apply_ethernet("eth0", "gr6-eth0", address="192.168.196.22/24", gateway="1.2.3.4", share=True)
+            nm.create_ethernet("MyEth", address="192.168.196.22/24", gateway="1.2.3.4", share=True)
         add_call = next(c for c in mock_run.call_args_list if "add" in c.args[0])
         args = add_call.args[0]
         self.assertIn("shared", args)
@@ -94,14 +135,50 @@ class TestApplyEthernet(unittest.TestCase):
         # gateway is meaningless for a shared interface (it *is* the
         # gateway) — must never be passed even though one was given.
         self.assertNotIn("1.2.3.4", args)
+        self.assertNotIn("ifname", args)
 
     def test_static_without_share_still_uses_manual(self):
         with patch("subprocess.run", return_value=_completed()) as mock_run:
-            nm.apply_ethernet("eth0", "gr6-eth0", ipv4_method="manual", address="192.168.1.5/24", gateway="192.168.1.1")
+            nm.create_ethernet("MyEth", ipv4_method="manual", address="192.168.1.5/24", gateway="192.168.1.1")
         add_call = next(c for c in mock_run.call_args_list if "add" in c.args[0])
         args = add_call.args[0]
         self.assertIn("manual", args)
         self.assertIn("192.168.1.1", args)
+
+
+class TestActivateConnection(unittest.TestCase):
+    def test_pins_to_device_when_given(self):
+        with patch("subprocess.run", return_value=_completed()) as mock_run:
+            nm.activate_connection("CoffeebeanWifi", device="wlan1")
+        args = mock_run.call_args[0][0]
+        self.assertIn("ifname", args)
+        self.assertIn("wlan1", args)
+
+    def test_no_ifname_when_device_omitted(self):
+        with patch("subprocess.run", return_value=_completed()) as mock_run:
+            nm.activate_connection("CoffeebeanWifi")
+        args = mock_run.call_args[0][0]
+        self.assertNotIn("ifname", args)
+
+
+class TestDisconnectDevice(unittest.TestCase):
+    def test_calls_device_disconnect(self):
+        with patch("subprocess.run", return_value=_completed()) as mock_run:
+            nm.disconnect_device("wlan0")
+        args = mock_run.call_args[0][0]
+        self.assertIn("device", args)
+        self.assertIn("disconnect", args)
+        self.assertIn("wlan0", args)
+
+
+class TestActiveConnections(unittest.TestCase):
+    def test_maps_name_to_device(self):
+        out = "CoffeebeanWifi:wlan0\nCoffeebeanWifiSpare:wlan1\n"
+        with patch("subprocess.run", return_value=_completed(out)):
+            self.assertEqual(
+                nm.active_connections(),
+                {"CoffeebeanWifi": "wlan0", "CoffeebeanWifiSpare": "wlan1"},
+            )
 
 
 class TestRun(unittest.TestCase):
