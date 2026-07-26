@@ -48,6 +48,7 @@ def index():
     interfaces = nm.list_interfaces()
     recovery_map = recovery.load_recovery()
     all_connections = nm.list_connection_names()
+    connection_descriptions = {name: nm.describe_connection(name) for name in all_connections}
     for iface in interfaces:
         iface.update(nm.interface_detail(iface["device"], iface["connection"]))
         iface["recovery_connection"] = recovery_map.get(iface["device"], "")
@@ -55,6 +56,7 @@ def index():
         "index.html",
         interfaces=interfaces,
         all_connections=all_connections,
+        connection_descriptions=connection_descriptions,
         revert_pending=recovery.revert_pending(),
         revert_timeout_s=service_cfg["revert_timeout_s"],
     )
@@ -85,7 +87,10 @@ def apply_interface(device):
                     ipv4_method=ipv4_method, address=address, gateway=gateway,
                 )
         else:
-            nm.apply_ethernet(device, connection_name, ipv4_method=ipv4_method, address=address, gateway=gateway)
+            nm.apply_ethernet(
+                device, connection_name, ipv4_method=ipv4_method, address=address, gateway=gateway,
+                share=form.get("share") == "on",
+            )
     except nm.NmError as e:
         # A failed apply (bad password, unreachable SSID, ...) is an
         # expected, recoverable outcome here, not a server error — show

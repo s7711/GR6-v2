@@ -55,6 +55,55 @@ class TestInterfaceDetail(unittest.TestCase):
         self.assertEqual(detail, {"mode": None, "ssid": None, "ipv4_method": None, "ipv4_address": None, "ipv4_gateway": None})
 
 
+class TestListConnectionNames(unittest.TestCase):
+    def test_excludes_loopback(self):
+        out = "preconfigured:802-11-wireless\nlo:loopback\nWired connection 1:802-3-ethernet\n"
+        with patch("subprocess.run", return_value=_completed(out)):
+            names = nm.list_connection_names()
+        self.assertEqual(names, ["preconfigured", "Wired connection 1"])
+
+
+class TestDescribeConnection(unittest.TestCase):
+    def test_wifi_client_dhcp(self):
+        out = "connection.type:802-11-wireless\n802-11-wireless.mode:infrastructure\n802-11-wireless.ssid:Coffeebean\nipv4.method:auto\n"
+        with patch("subprocess.run", return_value=_completed(out)):
+            self.assertEqual(nm.describe_connection("preconfigured"), "wifi client — SSID Coffeebean, DHCP")
+
+    def test_wifi_hotspot(self):
+        out = "connection.type:802-11-wireless\n802-11-wireless.mode:ap\n802-11-wireless.ssid:amundsen\nipv4.method:shared\nipv4.addresses:192.168.4.1/24\n"
+        with patch("subprocess.run", return_value=_completed(out)):
+            self.assertEqual(
+                nm.describe_connection("gr6-wlan0"),
+                "wifi hotspot — SSID amundsen, broadcasting at 192.168.4.1/24",
+            )
+
+    def test_ethernet_static(self):
+        out = "connection.type:802-3-ethernet\nipv4.method:manual\nipv4.addresses:192.168.196.22/24\n"
+        with patch("subprocess.run", return_value=_completed(out)):
+            self.assertEqual(nm.describe_connection("Wired connection 1"), "ethernet — static 192.168.196.22/24")
+
+
+class TestApplyEthernet(unittest.TestCase):
+    def test_share_sets_shared_method_and_address_only(self):
+        with patch("subprocess.run", return_value=_completed()) as mock_run:
+            nm.apply_ethernet("eth0", "gr6-eth0", address="192.168.196.22/24", gateway="1.2.3.4", share=True)
+        add_call = next(c for c in mock_run.call_args_list if "add" in c.args[0])
+        args = add_call.args[0]
+        self.assertIn("shared", args)
+        self.assertIn("192.168.196.22/24", args)
+        # gateway is meaningless for a shared interface (it *is* the
+        # gateway) — must never be passed even though one was given.
+        self.assertNotIn("1.2.3.4", args)
+
+    def test_static_without_share_still_uses_manual(self):
+        with patch("subprocess.run", return_value=_completed()) as mock_run:
+            nm.apply_ethernet("eth0", "gr6-eth0", ipv4_method="manual", address="192.168.1.5/24", gateway="192.168.1.1")
+        add_call = next(c for c in mock_run.call_args_list if "add" in c.args[0])
+        args = add_call.args[0]
+        self.assertIn("manual", args)
+        self.assertIn("192.168.1.1", args)
+
+
 class TestRun(unittest.TestCase):
     def test_raises_nm_error_on_failure(self):
         with patch("subprocess.run", return_value=_completed(returncode=1, stderr="boom")):

@@ -71,12 +71,7 @@ def connection_settings(name: str) -> dict:
     return settings
 
 
-def interface_detail(device: str, connection: str | None) -> dict:
-    """One interface's full picture for the page: its own device-level
-    info plus (if connected) its connection profile's settings. Returns
-    {"device", "type", "state", "mode", "ssid", "ipv4_method",
-    "ipv4_address", "ipv4_gateway"} — mode/ssid are None for ethernet."""
-    settings = connection_settings(connection) if connection else {}
+def _summarize(settings: dict) -> dict:
     is_wifi = settings.get("connection.type") == "802-11-wireless"
     return {
         "mode": (
@@ -87,6 +82,35 @@ def interface_detail(device: str, connection: str | None) -> dict:
         "ipv4_address": (settings.get("ipv4.addresses") or None),
         "ipv4_gateway": (settings.get("ipv4.gateway") or None),
     }
+
+
+def interface_detail(device: str, connection: str | None) -> dict:
+    """One interface's full picture for the page: its own device-level
+    info plus (if connected) its connection profile's settings. Returns
+    {"device", "type", "state", "mode", "ssid", "ipv4_method",
+    "ipv4_address", "ipv4_gateway"} — mode/ssid are None for ethernet."""
+    settings = connection_settings(connection) if connection else {}
+    return _summarize(settings)
+
+
+def describe_connection(name: str) -> str:
+    """A short, human-readable summary of a connection profile — for the
+    Recovery dropdown, where the bare NetworkManager connection name
+    (e.g. "preconfigured") means nothing on its own (see
+    network-prd.md's "Recovery" discussion — Ben couldn't tell what the
+    options meant from the name alone)."""
+    summary = _summarize(connection_settings(name))
+    if summary["mode"] == "hotspot":
+        return f"wifi hotspot — SSID {summary['ssid']}, broadcasting at {summary['ipv4_address'] or '?'}"
+    if summary["mode"] == "client":
+        return f"wifi client — SSID {summary['ssid']}, {_ipv4_desc(summary)}"
+    if summary["ipv4_method"] == "shared":
+        return f"ethernet — sharing another interface's internet, at {summary['ipv4_address'] or '?'}"
+    return f"ethernet — {_ipv4_desc(summary)}"
+
+
+def _ipv4_desc(summary: dict) -> str:
+    return "DHCP" if summary["ipv4_method"] != "manual" else f"static {summary['ipv4_address'] or '?'}"
 
 
 def apply_wifi_client(
@@ -128,17 +152,28 @@ def apply_hotspot(
 
 def apply_ethernet(
     device: str, connection_name: str, ipv4_method: str = "auto",
-    address: str | None = None, gateway: str | None = None,
+    address: str | None = None, gateway: str | None = None, share: bool = False,
 ) -> None:
     """Create (or replace) `connection_name`, bound to `device`, as a
-    plain wired connection — DHCP or static, no SSID/password concept."""
+    plain wired connection — DHCP, static, or `share=True` to NAT/route
+    another interface's internet connection through this one (the
+    xNAV650's NTRIP corrections use-case, see network-prd.md — this is
+    the same NetworkManager `ipv4.method: shared` mechanism
+    apply_hotspot() uses, just on a wired interface instead of wifi, and
+    with no DHCP-vs-static choice for the same reason a hotspot has
+    none: a shared interface always both owns `address` itself *and*
+    runs its own DHCP server for whatever's plugged into it)."""
     _run(["connection", "delete", connection_name], sudo=True) if _connection_exists(connection_name) else None
+    if share:
+        method, extra = "shared", ["ipv4.addresses", address]
+    elif ipv4_method == "manual":
+        method, extra = "manual", ["ipv4.addresses", address, "ipv4.gateway", gateway]
+    else:
+        method, extra = "auto", []
     args = [
         "connection", "add", "type", "ethernet", "con-name", connection_name,
-        "ifname", device, "ipv4.method", ipv4_method,
-    ]
-    if ipv4_method == "manual":
-        args += ["ipv4.addresses", address, "ipv4.gateway", gateway]
+        "ifname", device, "ipv4.method", method,
+    ] + extra
     _run(args, sudo=True)
     _run(["connection", "up", connection_name], sudo=True)
 
@@ -152,8 +187,20 @@ def activate_connection(connection_name: str) -> None:
 
 
 def list_connection_names() -> list[str]:
-    out = _run(["-t", "-f", "NAME", "connection", "show"])
-    return [line for line in out.splitlines() if line]
+    """Every connection profile NetworkManager knows about, excluding
+    the loopback pseudo-connection — not a real interface a device can
+    fall back to, but nmcli's connection list includes it alongside
+    real ones (unlike `device status`, which is already filtered by
+    _IGNORED_TYPES in list_interfaces)."""
+    out = _run(["-t", "-f", "NAME,TYPE", "connection", "show"])
+    names = []
+    for line in out.splitlines():
+        if not line:
+            continue
+        name, _, conn_type = line.rpartition(":")
+        if conn_type not in _IGNORED_TYPES:
+            names.append(name)
+    return names
 
 
 def _connection_exists(name: str) -> bool:

@@ -259,14 +259,34 @@ touching anything the operator's own access might depend on):
 - `eth0` switched between DHCP/static through the app (its existing
   static profile, set up directly via `nmcli` before this app existed,
   has never been touched by it).
-- Internet sharing (`ipv4.method: shared` routing another interface's
-  connection to `eth0`, for the xNAV650's NTRIP corrections) — the
-  mechanism `nm.apply_hotspot` relies on for its own DHCP server is the
-  same one this would need, so it's *believed* to work, but nothing
-  has actually verified an interface routing through another yet.
+- Internet sharing — `apply_ethernet(..., share=True)` now exists (a
+  "Share internet" checkbox on `eth0`'s Configuration form, forcing
+  `ipv4.method: shared` the same way `apply_hotspot` already does),
+  confirmed the xNAV650's own gateway is already pointed at the Pi's
+  `eth0` address (`mobile.cfg.txt`'s `-gateway_address192.168.196.22`)
+  so this prerequisite is already satisfied — but the checkbox itself
+  hasn't been ticked live yet. `eth0`'s Address field is pre-filled
+  with its current real address (`192.168.196.22/24`) specifically so
+  ticking "Share" and applying without touching that field preserves
+  xNAV650 compatibility rather than needing it typed in.
 - The real Coffeebean SSID/password through `wlan1`'s Configuration
   form (only a throwaway nonexistent SSID has been tried) — recovery
   is armed (`wlan1` → `preconfigured`) ready for this test.
+
+Also fixed three real UX bugs found by Ben using the page rather than
+just reading the code: a hotspot's default address (`192.168.4.1/24`)
+was shown as placeholder text too long for its box, invisible/truncated
+— now the actual proposed value, editable, as the field's real value
+(and every address/gateway field now pre-fills from the interface's
+*current* state, not just the hotspot default); the DHCP/Static/Gateway
+fields were shown-but-silently-ignored whenever Hotspot mode was
+selected (a hotspot is always `ipv4.method: shared`, no such choice
+exists) — now hidden, same treatment given to `eth0`'s new "Share"
+checkbox; and the Recovery dropdown's options were bare NetworkManager
+connection names ("preconfigured") with no way to tell what any of them
+actually configure — now shows a plain-text description of whichever
+is selected (deliberately not a tooltip — this page is as likely to be
+used from a phone/tablet, which has no hover state).
 
 ## Further Notes
 
