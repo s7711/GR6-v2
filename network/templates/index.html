@@ -35,7 +35,7 @@
     <form method="post" action="{{ url_for('apply_interface', device=iface.device) }}" class="row g-2 mb-4">
       {% if iface.type == "wifi" %}
       <div class="col-auto">
-        <select name="mode" class="form-select form-select-sm">
+        <select name="mode" class="form-select form-select-sm mode-select">
           <option value="client" {{ "selected" if iface.mode != "hotspot" }}>Client (join a network)</option>
           <option value="hotspot" {{ "selected" if iface.mode == "hotspot" }}>Hotspot (broadcast a network)</option>
         </select>
@@ -43,14 +43,17 @@
       <div class="col-auto"><input name="ssid" class="form-control form-control-sm" placeholder="SSID" value="{{ iface.ssid or '' }}"></div>
       <div class="col-auto"><input name="password" type="password" class="form-control form-control-sm" placeholder="Password"></div>
       {% endif %}
-      <div class="col-auto">
+      <div class="col-auto ipv4-mode-field">
         <select name="ipv4_mode" class="form-select form-select-sm">
           <option value="dhcp" {{ "selected" if iface.ipv4_method != "manual" }}>DHCP</option>
           <option value="static" {{ "selected" if iface.ipv4_method == "manual" }}>Static</option>
         </select>
       </div>
-      <div class="col-auto"><input name="address" class="form-control form-control-sm" placeholder="Address (e.g. 192.168.1.50/24)"></div>
-      <div class="col-auto"><input name="gateway" class="form-control form-control-sm" placeholder="Gateway"></div>
+      <div class="col-auto">
+        <input name="address" class="form-control form-control-sm address-field"
+               placeholder="Address (e.g. 192.168.1.50/24)">
+      </div>
+      <div class="col-auto ipv4-gateway-field"><input name="gateway" class="form-control form-control-sm" placeholder="Gateway"></div>
       <div class="col-auto"><button type="submit" class="btn btn-primary btn-sm">Apply</button></div>
     </form>
 
@@ -70,4 +73,32 @@
 </div>
 {% endfor %}
 
+{% endblock %}
+
+{% block scripts %}
+<script>
+// A hotspot is always its own DHCP server (NetworkManager's
+// ipv4.method: shared) — there's no DHCP-vs-static choice to make for
+// one, unlike a wifi client or ethernet, which do have that choice. So
+// hide the (otherwise silently-ignored) DHCP/Static and Gateway fields
+// whenever Hotspot is selected, rather than leave a control on the page
+// that looks like a real choice but has no effect — see nm.py's
+// apply_hotspot(), which never reads ipv4_mode/gateway at all.
+function updateModeFields(modeSelect) {
+  const form = modeSelect.closest("form");
+  const isHotspot = modeSelect.value === "hotspot";
+  form.querySelectorAll(".ipv4-mode-field, .ipv4-gateway-field").forEach((el) => {
+    el.classList.toggle("d-none", isHotspot);
+  });
+  const addressField = form.querySelector(".address-field");
+  addressField.placeholder = isHotspot
+    ? "Hotspot address (default 192.168.4.1/24)"
+    : "Address (e.g. 192.168.1.50/24)";
+}
+
+document.querySelectorAll(".mode-select").forEach((select) => {
+  updateModeFields(select);
+  select.addEventListener("change", () => updateModeFields(select));
+});
+</script>
 {% endblock %}
