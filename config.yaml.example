@@ -74,9 +74,16 @@ services:
     entry_max_distance_m: 1.0         # path-entry scan threshold — from GR6-v1, unchanged
     entry_max_heading_deg: 45         # path-entry scan threshold — from GR6-v1, unchanged
     lookahead_distance_m: 0.4         # pure-pursuit lookahead distance — from GR6-v1, live-settable via a tuning page
-    heading_gain: 2.0                 # pure-pursuit heading-error gain — from GR6-v1, live-settable
-    cte_gain: 0.6                     # pure-pursuit cross-track-error gain — from GR6-v1, live-settable
+    heading_gain: 0.8                 # pure-pursuit curvature gain (multiplies 2*sin(heading_error)/lookahead_distance_m, then forward speed — see geometry.py's turn_command) — field-tested 2026-07-23, tracks well
+    cte_gain: 0.3                     # pure-pursuit cross-track-error gain, same rewrite/speed-scaling as heading_gain above — lowered from an untested 1.2 after a slow-decaying oscillation was seen live; the un-lookahead'd cte term has no phase lead, unlike the heading term, so it's the likely source of underdamping
     localisation_accuracy_limit_m: 1.0  # abort if oxts-nav's horizontal accuracy RMS exceeds this — per-segment via clearance_m for cross-track, but this one stays a single global constant, from GR6-v1
     max_heading_correction_deg: 70    # abort if heading error to the lookahead point exceeds this — from GR6-v1, unchanged
     navigate_feed_socket: /tmp/gr6-navigate-feed.sock  # Unix domain socket — see navigate-prd.md
     navigate_feed_hz: 10               # matches control_hz — see navigate-prd.md's "Config additions"
+
+  network:
+    unit: robot-network.service
+    host: 0.0.0.0
+    port: 8007
+    web_ui: true
+    revert_timeout_s: 30              # how long an unconfirmed network change has before recovery profiles are re-applied — see network-prd.md

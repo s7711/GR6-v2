@@ -26,7 +26,7 @@ from flask_sock import Sock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from shared.config import load_config  # noqa: E402
-from shared.web import manager_url, register_pages, use_shared_static, use_shared_templates  # noqa: E402
+from shared.web import manager_url, register_pages, service_url, use_shared_static, use_shared_templates  # noqa: E402
 
 import ncomrx_thread  # noqa: E402
 import ucomrx_thread  # noqa: E402
@@ -98,7 +98,15 @@ def download_xnav_config() -> None:
 
 @app.context_processor
 def inject_manager_url():
-    return {"manager_url": manager_url(request.host.split(":")[0])}
+    browser_host = request.host.split(":")[0]
+    return {
+        "manager_url": manager_url(browser_host),
+        # For the shared header's GNSS/Aruco status badges — see
+        # shared/web/static/sysstatus.js. oxts-nav's own pages loop back
+        # to themselves here, same as any other service's — harmless.
+        "oxtsnav_ws_url": service_url(browser_host, "oxts-nav", scheme="ws") + "/ws/nav",
+        "aruco_ws_url": service_url(browser_host, "aruco", scheme="ws") + "/ws/aruco",
+    }
 
 
 @app.route("/command", methods=["POST"])
@@ -145,4 +153,13 @@ def ws_nav(ws):
 if __name__ == "__main__":
     threading.Thread(target=download_xnav_config, daemon=True).start()
     nav_feed_server.start()
-    app.run(host=service_cfg["host"], port=service_cfg["port"])
+    # threaded=True: without it, Flask's dev server handles one connection
+    # at a time, and /ws/nav's handler never returns (infinite loop) — so
+    # a second simultaneous connection just hangs forever. Every page now
+    # needs its own /ws/nav (for the shared header's "G" badge) *in
+    # addition to* whatever a page like status.html already opens for
+    # itself — on oxts-nav's own pages that's two concurrent connections
+    # to this same process, which a single-threaded server can't serve at
+    # once. Found live (2026-07-25) as "page load got much slower" right
+    # after the header badges shipped.
+    app.run(host=service_cfg["host"], port=service_cfg["port"], threaded=True)

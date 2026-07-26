@@ -51,10 +51,14 @@ def read_brownout() -> dict:
     return {"active": active, "age_seconds": age}
 
 
-def read_wifi_bars() -> int | None:
-    """Signal strength as 1-5 bars (not dBm), from /proc/net/wireless's
-    link-quality column. None if there's no wireless interface up (e.g.
-    wired connection, or the wifi is down)."""
+def read_wifi_percent() -> float | None:
+    """Signal quality as a 0-100 percentage (not dBm — this Pi's own wifi
+    driver doesn't report a trustworthy signal-level column), from
+    /proc/net/wireless's link-quality column (typically 0-70 raw). None
+    if there's no wireless interface up (e.g. wired connection, or the
+    wifi is down). Left as a plain percentage rather than pre-quantized
+    into bars — see manager-prd.md's header status badges — so the
+    header can pick its own red/amber/green transition points."""
     try:
         lines = _WIRELESS_PROC.read_text().splitlines()[2:]
     except FileNotFoundError:
@@ -64,8 +68,7 @@ def read_wifi_bars() -> int | None:
         if len(parts) < 3:
             continue
         quality = float(parts[2].rstrip("."))
-        bars = round(quality / 70 * 5)
-        return max(1, min(5, bars))
+        return max(0.0, min(100.0, quality / 70 * 100))
     return None
 
 
@@ -94,6 +97,6 @@ def read_cpu_percent() -> float | None:
 def snapshot() -> dict:
     return {
         "brownout": read_brownout(),
-        "wifi_bars": read_wifi_bars(),
+        "wifi_percent": read_wifi_percent(),
         "cpu_percent": read_cpu_percent(),
     }

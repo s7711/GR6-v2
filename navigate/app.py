@@ -157,6 +157,9 @@ def inject_urls():
     return {
         "manager_url": service_url(browser_host, "manager") + "/",
         "oxtsnav_ws_url": service_url(browser_host, "oxts-nav", scheme="ws") + "/ws/nav",
+        # For the shared header's Aruco status badge — see
+        # shared/web/static/sysstatus.js.
+        "aruco_ws_url": service_url(browser_host, "aruco", scheme="ws") + "/ws/aruco",
     }
 
 
@@ -413,4 +416,4 @@ if __name__ == "__main__":
     feed = NavigateFeedServer(service_cfg["navigate_feed_socket"], _snapshot, service_cfg["navigate_feed_hz"])
     feed.start()
 
-    app.run(host=service_cfg["host"], port=service_cfg["port"])
+    app.run(host=service_cfg["host"], port=service_cfg["port"], threaded=True)

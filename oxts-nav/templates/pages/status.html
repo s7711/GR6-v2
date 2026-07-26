@@ -119,7 +119,6 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/ncom-strings.js"></script>
 <script>
 connectWs("/ws/nav", (msg) => {
   fillFields("nav-", msg.nav || {});

@@ -229,16 +229,38 @@ def differential_drive(forward_mps, turn, wheel_base_m, max_mps=None):
     return left, right
 
 
-def turn_command(heading_error_deg, cross_track_error_m, heading_gain, cte_gain):
+def turn_command(heading_error_deg, cross_track_error_m, forward_mps, heading_gain, cte_gain, lookahead_distance_m):
     """Blend heading error (degrees) and cross-track error (metres) into
-    a single turn command. Positive = turn right (matches
-    differential_drive's convention). heading_error_deg is positive when
-    the target is to the robot's right, so its contribution is added
-    directly. cross_track_error_m is positive when the robot is east of
-    a path heading north (see find_lookahead_point) — being east of the
-    path means it needs to turn LEFT to correct, so this term is
+    a single turn command (an angular velocity, rad/s — differential_drive
+    multiplies it by wheel_base_m/2, not this function). Positive = turn
+    right (matches differential_drive's convention). heading_error_deg is
+    positive when the target is to the robot's right, so its contribution
+    is added directly. cross_track_error_m is positive when the robot is
+    east of a path heading north (see find_lookahead_point) — being east
+    of the path means it needs to turn LEFT to correct, so this term is
     subtracted, not added. GR6-v1's own equivalent formula added it
     instead — its code comment admitted the cte sign was "not... even
     verified"; this is that verification, done from first principles
-    rather than copied unverified (see navigate-prd.md)."""
-    return heading_gain * math.radians(heading_error_deg) - cte_gain * cross_track_error_m
+    rather than copied unverified (see navigate-prd.md).
+
+    Curvature-based (real pure-pursuit), not a fixed angular rate: the
+    heading term is the standard pure-pursuit curvature 2*sin(alpha)/L_d
+    (alpha = heading_error_deg, L_d = lookahead_distance_m), and the whole
+    curvature (heading term + cte term) is multiplied by forward_mps to
+    get an actual angular velocity. This is a deliberate fix over an
+    earlier version that computed the angular velocity directly from
+    heading_error_deg with no speed term at all — since curvature (path
+    bend per metre travelled) is what actually matters for staying on the
+    path, and a fixed angular-RATE response to a given heading error gets
+    proportionally sharper (more curvature) the slower the robot is going,
+    that version oscillated more at low speed, not less — the opposite of
+    what you'd want approaching a tight corner. Multiplying by speed here
+    (not dividing anything by it) means forward_mps=0 just yields turn=0,
+    not a division error — see navigate-prd.md's "Speed-scaled pure
+    pursuit" section for the field-testing story behind this.
+    Use the *commanded* speed (the tracked point's speed_mps), not a
+    measured one — this is a geometry function and shouldn't depend on
+    how well the robot is currently hitting its target speed."""
+    curvature = heading_gain * 2.0 * math.sin(math.radians(heading_error_deg)) / lookahead_distance_m
+    curvature -= cte_gain * cross_track_error_m
+    return curvature * forward_mps

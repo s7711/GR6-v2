@@ -18,7 +18,7 @@ see `top-prd.md` for why and how.
 
 ## Status
 
-Early days. Seven of the planned services exist so far:
+Early days. Eight of the planned services exist so far:
 
 - **`oxts-nav`** — decodes the xNAV650's NCOM stream and serves live
   nav/status/connection data over a websocket, with web pages for a
@@ -54,13 +54,22 @@ Early days. Seven of the planned services exist so far:
 - **`hello`** — a minimal example child service, mostly there to prove
   out the shared config/IPC/web conventions for whatever service comes
   next.
+- **`network`** — a thin web UI over NetworkManager (`nmcli`) for
+  amundsen's network interfaces: DHCP/static, wifi client/hotspot, and
+  a per-interface "recovery" safety net (an unconfirmed change
+  auto-reverts) so a bad wifi/IP edit doesn't require physical access
+  to undo. **Built but only partly field-tested (2026-07-26)**: the
+  external wifi dongle's client-mode config and the recovery/
+  auto-revert mechanism are confirmed working live; the onboard wifi
+  chip's hotspot mode and `eth0`'s static/DHCP switching are built but
+  deliberately untested so far, per the safety-first order in
+  `network/network-prd.md`.
 
 Nav decode, then the manager, were deliberately tackled first, then
-camera, then aruco, then drive, then navigate — see "Suggested migration
-order" in `top-prd.md` for the reasoning and what's still to come
-(`missions`/`safety` built on top of `navigate`, wheelspeed GAD aiding,
-and a network-sharing service to give the xNAV650 internet access for
-NTRIP).
+camera, then aruco, then drive, then navigate, then network — see
+"Suggested migration order" in `top-prd.md` for the reasoning and
+what's still to come (`missions`/`safety` built on top of `navigate`,
+wheelspeed GAD aiding).
 
 ## Architecture
 
@@ -96,6 +105,7 @@ python camera/app.py
 python aruco/app.py
 python drive/app.py
 python navigate/app.py
+python network/app.py
 ```
 
 Then visit the manager's home page (port 8000 by default) to reach

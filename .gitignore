@@ -20,6 +20,10 @@ aruco/data/
 # Recorded paths — this robot's real-world data, see navigate-prd.md
 navigate/data/
 
+# Per-interface recovery choices — this robot's own runtime state, see
+# network/network-prd.md
+network/recovery.json
+
 # Compiled firmware artifacts — a build output, not source; the .ino is
 # the source of truth, see drive-prd.md
 drive/firmware/*.hex

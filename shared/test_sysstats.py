@@ -62,12 +62,12 @@ def _completed(stdout):
     return subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout)
 
 
-class TestWifiBars(unittest.TestCase):
+class TestWifiPercent(unittest.TestCase):
     def test_no_wireless_interface(self):
         fake_path = unittest.mock.MagicMock()
         fake_path.read_text.side_effect = FileNotFoundError
         with patch.object(sysstats, "_WIRELESS_PROC", fake_path):
-            self.assertIsNone(sysstats.read_wifi_bars())
+            self.assertIsNone(sysstats.read_wifi_percent())
 
     def test_full_quality(self):
         text = (
@@ -78,18 +78,29 @@ class TestWifiBars(unittest.TestCase):
         fake_path = unittest.mock.MagicMock()
         fake_path.read_text.return_value = text
         with patch.object(sysstats, "_WIRELESS_PROC", fake_path):
-            self.assertEqual(sysstats.read_wifi_bars(), 5)
+            self.assertAlmostEqual(sysstats.read_wifi_percent(), 100.0)
 
-    def test_low_quality_clamped_to_one(self):
+    def test_low_quality_clamped_to_zero(self):
         text = (
             "Inter-| sta-|   Quality        |\n"
             " face | tus | link level noise |\n"
-            "wlan0: 0000    2.  -90.  -256\n"
+            "wlan0: 0000    0.  -90.  -256\n"
         )
         fake_path = unittest.mock.MagicMock()
         fake_path.read_text.return_value = text
         with patch.object(sysstats, "_WIRELESS_PROC", fake_path):
-            self.assertEqual(sysstats.read_wifi_bars(), 1)
+            self.assertAlmostEqual(sysstats.read_wifi_percent(), 0.0)
+
+    def test_partial_quality(self):
+        text = (
+            "Inter-| sta-|   Quality        |\n"
+            " face | tus | link level noise |\n"
+            "wlan0: 0000   42.  -60.  -256\n"
+        )
+        fake_path = unittest.mock.MagicMock()
+        fake_path.read_text.return_value = text
+        with patch.object(sysstats, "_WIRELESS_PROC", fake_path):
+            self.assertAlmostEqual(sysstats.read_wifi_percent(), 60.0)
 
 
 class TestCpuPercent(unittest.TestCase):

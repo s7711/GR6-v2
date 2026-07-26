@@ -39,8 +39,13 @@ having been written by a summer student):
   1. Signal values are used as-is - the DataType/ScaleFactor/Offset
      fields in a message's SignalsInMessage entry are NOT applied
      during decoding (confirmed: ucom_data.cpp never reads them).
-     Native units already match what we want (e.g. Ax in m/s^2,
-     Lat in degrees) - see oxts.dbs for each signal's native unit.
+     Native units mostly match what we want (e.g. Ax in m/s^2) - see
+     oxts.dbs for each signal's native unit. Exception: Lat/Lon are
+     native deg, but nav['Lat']/['Lon'] are kept in radians to match
+     ncomrx.py's convention (every consumer - aruco/survey.py,
+     navigate/app.py - calls math.degrees() on these), so
+     decodeMessage1/1v1 convert on the way in. Found this the hard way:
+     Ben spotted bad Lat/Lon values while field-testing UCOM.
   2. The CRC is NOT the same as zlib.crc32(). OXTS's variant starts
      the running value at 0 (not 0xFFFFFFFF) and only complements the
      result once, at the very end - see ucom_crc32() below.
@@ -59,6 +64,8 @@ import struct
 import math
 import re
 import datetime
+
+DEG2RAD = math.pi / 180.0
 
 ########################################################################
 # Definitions: from UCOM_Manual_260707.pdf and the reference C++ decoder
@@ -402,9 +409,12 @@ class UcomRx:
         (Nano, Lat, Lon, Alt, Vn, Ve, Vd, Heading, Pitch, Roll) = struct.unpack("<qddddddddd", payload)
         self.nav['Nano'] = Nano
         if Nano == 0x7FFFFFFFFFFFFFFF: del self.nav['Nano']
-        self.nav['Lat'] = Lat
+        # oxts.dbs: Lat/Lon's NativeUnit is deg, but nav['Lat']/['Lon'] follow
+        # ncomrx.py's convention (radians) - every consumer (aruco/survey.py,
+        # navigate/app.py) calls math.degrees() on these.
+        self.nav['Lat'] = Lat * DEG2RAD
         if math.isnan(Lat): del self.nav['Lat']
-        self.nav['Lon'] = Lon
+        self.nav['Lon'] = Lon * DEG2RAD
         if math.isnan(Lon): del self.nav['Lon']
         self.nav['Alt'] = Alt
         if math.isnan(Alt): del self.nav['Alt']
@@ -424,9 +434,10 @@ class UcomRx:
     def decodeMessage1v1(self, payload):
         # Message 1 v1: "OXTS navigation frame PVA"
         (Lat, Lon, Alt, Vn, Ve, Vd, Heading, Pitch, Roll) = struct.unpack("<ddddddddd", payload)
-        self.nav['Lat'] = Lat
+        # See decodeMessage1's comment: convert deg (native) to rad (nav dict convention).
+        self.nav['Lat'] = Lat * DEG2RAD
         if math.isnan(Lat): del self.nav['Lat']
-        self.nav['Lon'] = Lon
+        self.nav['Lon'] = Lon * DEG2RAD
         if math.isnan(Lon): del self.nav['Lon']
         self.nav['Alt'] = Alt
         if math.isnan(Alt): del self.nav['Alt']
@@ -702,24 +713,25 @@ class UcomRx:
         (Nano, Ax, Ay, Az, Jx, Jy, Jz, Wx, Wy, Wz, Yx, Yy, Yz) = struct.unpack("<qdddddddddddd", payload)
         self.status['Nano'] = Nano
         if Nano == 0x7FFFFFFFFFFFFFFF: del self.status['Nano']
-        self.status['Ax'] = Ax
-        if math.isnan(Ax): del self.status['Ax']
-        self.status['Ay'] = Ay
-        if math.isnan(Ay): del self.status['Ay']
-        self.status['Az'] = Az
-        if math.isnan(Az): del self.status['Az']
+        # Ax/Ay/Az/Wx/Wy/Wz go to self.nav (not self.status) to match ncomrx.py's placement.
+        self.nav['Ax'] = Ax
+        if math.isnan(Ax): del self.nav['Ax']
+        self.nav['Ay'] = Ay
+        if math.isnan(Ay): del self.nav['Ay']
+        self.nav['Az'] = Az
+        if math.isnan(Az): del self.nav['Az']
         self.status['Jx'] = Jx
         if math.isnan(Jx): del self.status['Jx']
         self.status['Jy'] = Jy
         if math.isnan(Jy): del self.status['Jy']
         self.status['Jz'] = Jz
         if math.isnan(Jz): del self.status['Jz']
-        self.status['Wx'] = Wx
-        if math.isnan(Wx): del self.status['Wx']
-        self.status['Wy'] = Wy
-        if math.isnan(Wy): del self.status['Wy']
-        self.status['Wz'] = Wz
-        if math.isnan(Wz): del self.status['Wz']
+        self.nav['Wx'] = Wx
+        if math.isnan(Wx): del self.nav['Wx']
+        self.nav['Wy'] = Wy
+        if math.isnan(Wy): del self.nav['Wy']
+        self.nav['Wz'] = Wz
+        if math.isnan(Wz): del self.nav['Wz']
         self.status['Yx'] = Yx
         if math.isnan(Yx): del self.status['Yx']
         self.status['Yy'] = Yy
@@ -729,19 +741,20 @@ class UcomRx:
 
     def decodeMessage10v1(self, payload):
         # Message 10 v1: "OXTS vehicle frame linear accelerations and angular rates"
+        # Written to self.nav (not self.status) to match ncomrx.py's Ax/Ay/Az/Wx/Wy/Wz placement.
         (Ax, Ay, Az, Wx, Wy, Wz) = struct.unpack("<dddddd", payload)
-        self.status['Ax'] = Ax
-        if math.isnan(Ax): del self.status['Ax']
-        self.status['Ay'] = Ay
-        if math.isnan(Ay): del self.status['Ay']
-        self.status['Az'] = Az
-        if math.isnan(Az): del self.status['Az']
-        self.status['Wx'] = Wx
-        if math.isnan(Wx): del self.status['Wx']
-        self.status['Wy'] = Wy
-        if math.isnan(Wy): del self.status['Wy']
-        self.status['Wz'] = Wz
-        if math.isnan(Wz): del self.status['Wz']
+        self.nav['Ax'] = Ax
+        if math.isnan(Ax): del self.nav['Ax']
+        self.nav['Ay'] = Ay
+        if math.isnan(Ay): del self.nav['Ay']
+        self.nav['Az'] = Az
+        if math.isnan(Az): del self.nav['Az']
+        self.nav['Wx'] = Wx
+        if math.isnan(Wx): del self.nav['Wx']
+        self.nav['Wy'] = Wy
+        if math.isnan(Wy): del self.nav['Wy']
+        self.nav['Wz'] = Wz
+        if math.isnan(Wz): del self.nav['Wz']
 
     def decodeMessage11(self, payload):
         # Message 11 v0: "OXTS navigation frame inertial measurements"

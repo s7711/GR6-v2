@@ -141,17 +141,19 @@ general-purpose sysadmin tool.
    decisions, once the ultrasonics are trusted) built on top of it, in
    that order. These later three are the safety-critical pieces — most
    confidence wanted before touching them, hence saved for last.
-5. Network sharing (wifi -> ethernet internet sharing) — not yet built,
-   identified as needed while testing `aruco`/`oxts-nav` together: the
-   xNAV650 sits on `eth0`, and needs internet access (for NTRIP
-   corrections) shared from the Pi's `wlan0`. A working iptables
-   MASQUERADE + FORWARD script already exists (not yet in this repo) —
-   it needs turning into a proper managed service, since both the
-   iptables rules and `net.ipv4.ip_forward` reset on every reboot as-is.
-   Also needs a static IP configured on `eth0` (and the xNAV650's own
-   gateway/DNS pointed at it) as a prerequisite, not something the
-   service itself can do. No PRD yet — do not build until picked up
-   properly.
+5. Network sharing (wifi -> ethernet internet sharing) — **in progress,
+   see `network/network-prd.md`**. Originally identified while testing
+   `aruco`/`oxts-nav` together: the xNAV650 sits on `eth0` (already
+   given a static IP via NetworkManager) and needs internet access (for
+   NTRIP corrections) shared from the Pi's wifi. Superseded the
+   originally-planned hand-rolled iptables MASQUERADE+FORWARD script
+   with NetworkManager's own `ipv4.method: shared` mechanism instead,
+   once wifi improvements (item 7, brought forward to 2026-07-26) made
+   building the `network` app itself the natural place to add this too
+   — one mechanism for interface config, hotspot, and internet sharing,
+   rather than a separate service. Internet-sharing itself not yet
+   tested as of 2026-07-26 (see `network/network-prd.md`'s
+   implementation-status notes for exactly what has/hasn't been).
 6. Wheelspeed GAD aiding — not yet built, identified while surveying
    ArUco markers with `aruco`: position-only GAD from a stationary/known
    marker doesn't help the INS solution *between* good fixes, whereas
@@ -161,22 +163,26 @@ general-purpose sysadmin tool.
    Arduino/Pico first — blocked on the `drive` service (see "motor
    control", item 4) actually publishing encoder ticks; can't be
    built before that exists. No PRD yet.
-7. Wifi improvements — not yet built, deliberately deferred until
-   `navigate`'s path-following surfaced real pain from it (a jog/drive
-   command arriving late after a wifi reconnect could make the robot
-   behave unexpectedly for a moment — worse under Flask's own request
-   handling than the hand-rolled websocket code GR6-v1 used, though
-   every channel is affected to some degree). Planned approach is
-   hardware/network first, not a software workaround: (a) a dual-band
-   USB wifi adapter already bought, and (b) driving from a tablet
-   hotspotting directly to the Pi (short range, operator right next to
-   the robot) rather than through the house's own wifi.
-   A software mitigation was considered (timestamp browser-originated
-   commands, reject anything too stale by the time `drive` processes
-   it) but explicitly parked — it adds real complexity/latency for the
-   driver, and the hardware/network fix is expected to remove the
-   problem at its source instead. Revisit only if the hardware/hotspot
-   change doesn't actually fix it. No PRD yet.
+7. Wifi improvements — **in progress, see `network/network-prd.md`**,
+   picked up 2026-07-26 once the external USB wifi adapter arrived and
+   outdoor signal was still marginal ahead of real watering runs.
+   Deliberately deferred until then, since `navigate`'s path-following
+   is what surfaced real pain from it first (a jog/drive command
+   arriving late after a wifi reconnect could make the robot behave
+   unexpectedly for a moment — worse under Flask's own request handling
+   than the hand-rolled websocket code GR6-v1 used, though every
+   channel is affected to some degree). Approach ended up
+   hardware-*and*-network (not hardware alone as first planned): the
+   dual-band USB adapter handles day-to-day roaming between access
+   points, the onboard wifi chip is dedicated to hotspot mode (for a
+   tablet to connect directly at short range) *and* doubles as a
+   trusted recovery fallback, and the `network` app's per-interface
+   recovery/auto-revert mechanism is the software safety net that makes
+   experimenting with any of this over-the-network survivable. A
+   software mitigation for stale drive commands (timestamp browser-
+   originated commands, reject anything too stale) was considered
+   separately and stays parked — revisit only if the hardware/hotspot
+   change doesn't fully fix the underlying pain.
 
 ## Out of Scope (at this level)
 

@@ -20,7 +20,7 @@ speed), `BNS_TRG`/`BNS_CAM` (trigger/camera events), `BNS_LOC` (local coordinate
 
 | NCOM field | UCOM signal | Source | Confidence | Notes |
 |---|---|---|---|---|
-| Lat, Lon, Alt | Lat, Lon, Alt | BNS_SDN | confirmed | same units (deg, deg, m) |
+| Lat, Lon, Alt | Lat, Lon, Alt | BNS_SDN | confirmed (corrected) | **Not** the same units — NCOM's wire format for Lat/Lon is radians (see `ncomrx.py`'s decode comment), but UCOM's is degrees (`oxts.dbs`'s `NativeUnit: "deg"` for both). Alt is metres in both. This line originally (wrongly) said "same units" and is why `ucomrx.py` shipped without a conversion — Ben spotted bad Lat/Lon values while field-testing UCOM. Fixed: `decodeMessage1`/`decodeMessage1v1` now convert UCOM's native deg to rad on the way in, so `nav['Lat']`/`nav['Lon']` are radians under both protocols (matching every consumer — `aruco/survey.py`, `navigate/app.py` — which calls `math.degrees()` on them). |
 | Vn, Ve, Vd | Vn, Ve, Vd | BNS_SDN | confirmed | m/s |
 | Heading, Pitch, Roll | Heading, Pitch, Roll | BNS_SDN | confirmed | deg |
 | Ax, Ay, Az | Ax, Ay, Az | BNS_SDN | confirmed (corrected) | Initial pass wrongly called this a frame mismatch. NCOM's own manual (Table 4) describes Ax/Ay/Az as "the host object's acceleration... after the IMU to host attitude matrix has been applied" — i.e. already vehicle frame (per `mobile.vat`'s IMU→vehicle rotation), same as UCOM's Ax/Ay/Az ("acceleration in the x axis of the vehicle frame"). Direct match, not a design decision. |

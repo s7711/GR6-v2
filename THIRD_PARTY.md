@@ -33,3 +33,7 @@
 ## navigate icon
 - Source: Icooon Mono (https://icooon-mono.com/), via https://www.svgviewer.dev/s/383545/road
 - License: Public Domain
+
+## network icon
+- Source: Lucide (https://lucide.dev/icons/network), via https://www.svgviewer.dev/s/462347/network
+- License: ISC

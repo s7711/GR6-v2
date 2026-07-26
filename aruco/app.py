@@ -95,6 +95,10 @@ def inject_urls():
     return {
         "manager_url": service_url(browser_host, "manager") + "/",
         "oxtsnav_ws_url": service_url(browser_host, "oxts-nav", scheme="ws") + "/ws/nav",
+        # For the shared header's Aruco status badge — see
+        # shared/web/static/sysstatus.js. Loops back to this same
+        # service, same as any other service's — harmless.
+        "aruco_ws_url": service_url(browser_host, "aruco", scheme="ws") + "/ws/aruco",
     }
 
 
@@ -360,7 +364,10 @@ if __name__ == "__main__":
     nav_client.start()
     threading.Thread(target=_detection_loop, daemon=True).start()
     try:
-        app.run(host=service_cfg["host"], port=service_cfg["port"])
+        # threaded=True — see oxts-nav/app.py's app.run() comment: the
+        # shared header's "A" badge now needs its own /ws/aruco
+        # connection on top of whatever a page already opens for itself.
+        app.run(host=service_cfg["host"], port=service_cfg["port"], threaded=True)
     except KeyboardInterrupt:
         pass
     finally:

@@ -35,6 +35,8 @@
         <span id="sys-brownout" class="badge text-bg-secondary" title="Power / brown-out">&mdash;</span>
         <span id="sys-wifi" class="badge text-bg-secondary" title="Wifi signal">&mdash;</span>
         <span id="sys-cpu" class="badge text-bg-secondary" title="CPU load">&mdash;</span>
+        <span id="sys-gnss" class="badge text-bg-secondary" title="GPS position mode">&mdash;</span>
+        <span id="sys-aruco" class="badge text-bg-secondary" title="Aruco marker status">&mdash;</span>
         {% endblock %}
       </div>
     </div>
@@ -44,7 +46,14 @@
   </div>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   <script src="/static/ws-utils.js"></script>
-  <script>const MANAGER_URL = "{{ manager_url }}";</script>
+  <script>
+    const MANAGER_URL = "{{ manager_url }}";
+    // Cross-port, straight from oxts-nav/aruco's own websockets, same
+    // pattern as MANAGER_URL above — see sysstatus.js.
+    const OXTSNAV_WS_URL = "{{ oxtsnav_ws_url|default('') }}";
+    const ARUCO_WS_URL = "{{ aruco_ws_url|default('') }}";
+  </script>
+  <script src="/static/ncom-strings.js"></script>
   <script src="/static/sysstatus.js"></script>
   {% block scripts %}{% endblock %}
 </body>

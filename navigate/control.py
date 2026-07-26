@@ -153,8 +153,9 @@ class PathRunner:
                 return
 
             turn = geometry.turn_command(
-                heading_err, result.cross_track_error_m,
+                heading_err, result.cross_track_error_m, result.speed_mps,
                 self.config["heading_gain"], self.config["cte_gain"],
+                self.config["lookahead_distance_m"],
             )
             left, right = geometry.differential_drive(result.speed_mps, turn, self.config["wheel_base_m"])
             self.send_velocity(left, right)

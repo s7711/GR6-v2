@@ -258,10 +258,14 @@ class TestDifferentialDrive(unittest.TestCase):
 
 
 class TestTurnCommand(unittest.TestCase):
-    def test_heading_error_contribution_matches_gr6v1_magnitude(self):
+    def test_heading_error_contribution_matches_pure_pursuit_curvature(self):
+        # Standard pure-pursuit curvature 2*sin(alpha)/L_d, times heading_gain,
+        # times forward speed to get an actual angular velocity.
         result = geometry.turn_command(heading_error_deg=10, cross_track_error_m=0.0,
-                                        heading_gain=2.0, cte_gain=0.6)
-        self.assertAlmostEqual(result, 2.0 * math.radians(10))
+                                        forward_mps=1.0, heading_gain=1.0, cte_gain=0.6,
+                                        lookahead_distance_m=0.4)
+        expected = 1.0 * 2.0 * math.sin(math.radians(10)) / 0.4 * 1.0
+        self.assertAlmostEqual(result, expected)
 
     def test_being_east_of_the_path_turns_left_not_right(self):
         # Positive cross-track error = robot is east of a path heading
@@ -273,12 +277,38 @@ class TestTurnCommand(unittest.TestCase):
         # never verified — this test locks in the corrected, verified
         # direction.
         result = geometry.turn_command(heading_error_deg=0, cross_track_error_m=0.5,
-                                        heading_gain=2.0, cte_gain=0.6)
+                                        forward_mps=1.0, heading_gain=1.0, cte_gain=0.6,
+                                        lookahead_distance_m=0.4)
         self.assertLess(result, 0)
-        self.assertAlmostEqual(result, -0.6 * 0.5)
+        self.assertAlmostEqual(result, -0.6 * 0.5 * 1.0)
 
     def test_zero_error_is_zero_turn(self):
-        self.assertAlmostEqual(geometry.turn_command(0, 0, 2.0, 0.6), 0.0)
+        self.assertAlmostEqual(
+            geometry.turn_command(0, 0, forward_mps=1.0, heading_gain=2.0, cte_gain=0.6,
+                                   lookahead_distance_m=0.4), 0.0)
+
+    def test_zero_speed_is_zero_turn_not_a_division_error(self):
+        # Speed multiplies the curvature (never divides anything), so
+        # forward_mps=0 is safe — not a ZeroDivisionError risk.
+        result = geometry.turn_command(heading_error_deg=30, cross_track_error_m=0.2,
+                                        forward_mps=0.0, heading_gain=2.0, cte_gain=0.6,
+                                        lookahead_distance_m=0.4)
+        self.assertAlmostEqual(result, 0.0)
+
+    def test_slower_speed_gives_a_gentler_turn_for_the_same_heading_error(self):
+        # The whole point of the speed-scaled rewrite: a fixed heading
+        # error should produce a SMALLER turn (less path curvature-per-
+        # metre overshoot risk) at lower speed, not the same fixed
+        # angular-rate response regardless of speed — see turn_command's
+        # docstring for the oscillation-at-low-speed story this fixes.
+        fast = geometry.turn_command(heading_error_deg=30, cross_track_error_m=0.0,
+                                      forward_mps=0.8, heading_gain=1.0, cte_gain=0.6,
+                                      lookahead_distance_m=0.4)
+        slow = geometry.turn_command(heading_error_deg=30, cross_track_error_m=0.0,
+                                      forward_mps=0.2, heading_gain=1.0, cte_gain=0.6,
+                                      lookahead_distance_m=0.4)
+        self.assertLess(abs(slow), abs(fast))
+        self.assertAlmostEqual(slow / fast, 0.2 / 0.8)
 
 
 if __name__ == "__main__":

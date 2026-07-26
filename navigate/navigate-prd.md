@@ -451,6 +451,62 @@ without data.
   not by a hardware test of path-following itself (that hasn't
   happened yet) — worth double-checking against a real low-speed test
   run once one's possible, per "If a run aborts" in manual.md.
+- **`turn_command` computed a fixed angular velocity from heading error
+  alone, with no forward-speed term at all** — found via a real abort
+  on `HouseFrontEight2.yaml` (2026-07-23, first live UCOM path-following
+  test — see `oxts-nav/documentation/ncom-to-ucom-mapping.md`, this
+  wasn't a UCOM/nav-decoding bug, position tracking was fine throughout).
+  Ben noticed the robot oscillated around the path *more* at lower
+  speed, which is the tell: a fixed angular-rate response to a given
+  heading error implies path curvature (turn per metre travelled) gets
+  proportionally sharper the slower you go — the opposite of what you
+  want approaching a tight corner, and the opposite of how real
+  pure-pursuit works (curvature `2*sin(alpha)/L_d`, then multiplied by
+  speed to get an angular velocity — so a slow approach traces a wider,
+  gentler arc, not a tighter one). Rewrote `turn_command` to that
+  standard form; `control.py`'s `step()` now passes the tracked point's
+  *commanded* `speed_mps` (not any measured speed) into it, and
+  multiplies — never divides — by it, so `forward_mps=0` is safe by
+  construction, not a hazard needing a guard. `heading_gain`/`cte_gain`
+  changed units in the process (from a fixed rad/s-per-rad(-or-metre)
+  gain to a curvature gain), so old defaults (2.0/0.6) would have been
+  far too aggressive left as-is — re-derived to 0.8/1.2, anchored to
+  give roughly the old response magnitude at 0.5 m/s, but **not yet
+  field-verified** — retune during the next test drive. If this alone
+  doesn't fix the oscillation, Ben's other suspect is `nav_feed_hz`
+  (currently 20, vs GR6-v1's 100) — less feedback latency than a gain
+  change might matter more.
+  Also moved `HouseFrontEight2.yaml`'s point 25 (0-indexed) 0.3m south
+  to ease the sharp turn there (was a ~49° direction change vertex-to-
+  vertex; now ~20°) — this pushed the *next* vertex (26) from ~36° to
+  ~52°, worth watching in case it just moved the tight spot along by
+  one point rather than removing it.
+
+  Field test result (same day, follow-up): it made the corner,
+  `heading_gain: 0.8` tracks well. But Ben saw a slow-decaying
+  oscillation/overshoot approaching the path, and asked whether a
+  derivative term was needed. Diagnosis: the `cte_gain` term has no
+  phase lead (it reacts to current cross-track displacement, not a
+  point ahead), unlike the heading-to-lookahead-point term, which
+  already has lead built into it geometrically — two proportional paths
+  into the same actuator, one of them lead-free, is a standard recipe
+  for underdamped overshoot. A derivative term was considered and
+  deliberately rejected for now: differentiating heading/position is
+  risky when the input is already noisy (low-speed GNSS-course heading
+  noise, gravel wheel slip decoupling commanded from actual motion —
+  see the UCOM Lat/Lon session's field notes) — a raw D term would
+  amplify exactly that noise, worst case right when things are already
+  oscillating. If damping is still needed later, the lower-noise
+  equivalent is rate-limiting/low-pass-filtering the *output* (the
+  commanded turn, step to step), not differentiating the input.
+  Cheaper first move: lowered `cte_gain` from the untested 1.2 to 0.3 —
+  not yet field-verified. Deliberately did NOT increase
+  `lookahead_distance_m` (the other classic pure-pursuit damping knob)
+  — Ben wants it kept low for tight corners; a bigger idea floated for
+  later (once path scripting exists) is splitting a path at a sharp
+  corner and doing a deliberate turn-on-the-spot between the two
+  halves, rather than asking one continuous pure-pursuit pass to handle
+  both cruising and tight turns well.
 
 ## Resolved design questions
 

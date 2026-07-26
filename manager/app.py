@@ -20,7 +20,7 @@ from flask_sock import Sock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from shared.config import CONFIG_PATH, load_config  # noqa: E402
 from shared.sysstats import snapshot as sysstats_snapshot  # noqa: E402
-from shared.web import manager_url, use_shared_static, use_shared_templates  # noqa: E402
+from shared.web import manager_url, service_url, use_shared_static, use_shared_templates  # noqa: E402
 
 ALLOWED_ACTIONS = {"start", "stop", "restart"}
 STATUS_POLL_SECONDS = 2
@@ -37,7 +37,14 @@ sock = Sock(app)
 
 @app.context_processor
 def inject_manager_url():
-    return {"manager_url": manager_url(request.host.split(":")[0])}
+    browser_host = request.host.split(":")[0]
+    return {
+        "manager_url": manager_url(browser_host),
+        # For the shared header's GNSS/Aruco status badges — see
+        # shared/web/static/sysstatus.js.
+        "oxtsnav_ws_url": service_url(browser_host, "oxts-nav", scheme="ws") + "/ws/nav",
+        "aruco_ws_url": service_url(browser_host, "aruco", scheme="ws") + "/ws/aruco",
+    }
 
 
 def services() -> dict:
@@ -179,4 +186,8 @@ def ws_system(ws):
 
 if __name__ == "__main__":
     cfg = load_config()["services"]["manager"]
-    app.run(host=cfg["host"], port=cfg["port"])
+    # threaded=True — see oxts-nav/app.py's app.run() comment. Every
+    # service's shared header holds open its own /ws/system connection
+    # to the manager, so more than one browser tab open at once already
+    # needed this even before the GNSS/Aruco badges existed.
+    app.run(host=cfg["host"], port=cfg["port"], threaded=True)

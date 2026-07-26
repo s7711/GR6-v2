@@ -19,7 +19,7 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from shared.config import load_config  # noqa: E402
 from shared.frame_ipc import FrameWriter  # noqa: E402
-from shared.web import manager_url, register_pages, use_shared_static, use_shared_templates  # noqa: E402
+from shared.web import manager_url, register_pages, service_url, use_shared_static, use_shared_templates  # noqa: E402
 
 from bg_camera import RESOLUTION, BgCamera  # noqa: E402
 from calibration import CalibrationSession  # noqa: E402
@@ -50,7 +50,14 @@ def publish_loop():
 
 @app.context_processor
 def inject_manager_url():
-    return {"manager_url": manager_url(request.host.split(":")[0])}
+    browser_host = request.host.split(":")[0]
+    return {
+        "manager_url": manager_url(browser_host),
+        # For the shared header's GNSS/Aruco status badges — see
+        # shared/web/static/sysstatus.js.
+        "oxtsnav_ws_url": service_url(browser_host, "oxts-nav", scheme="ws") + "/ws/nav",
+        "aruco_ws_url": service_url(browser_host, "aruco", scheme="ws") + "/ws/aruco",
+    }
 
 
 def mjpeg_generator():
@@ -149,7 +156,7 @@ def ws_camera(ws):
 if __name__ == "__main__":
     threading.Thread(target=publish_loop, daemon=True).start()
     try:
-        app.run(host=service_cfg["host"], port=service_cfg["port"])
+        app.run(host=service_cfg["host"], port=service_cfg["port"], threaded=True)
     except KeyboardInterrupt:
         pass
     finally:

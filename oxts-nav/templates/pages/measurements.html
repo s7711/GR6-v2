@@ -1,0 +1,75 @@
+{# title: Measurements #}
+{% extends "base.html" %}
+{% block title %}GR6 — Measurements{% endblock %}
+{% block content %}
+
+<div class="card mb-4">
+  <div class="card-body">
+    <div class="text-body-secondary small mb-2">Measurements</div>
+    <table class="table">
+      <thead><tr><th>Measurement</th><th>Value</th><th>Units</th></tr></thead>
+      <tbody>
+        <tr><td>UTC Time</td><td id="m-UtcTime">—</td><td></td></tr>
+        <tr><td>Latitude</td><td id="m-Lat">—</td><td>deg</td></tr>
+        <tr><td>Longitude</td><td id="m-Lon">—</td><td>deg</td></tr>
+        <tr><td>Altitude</td><td id="m-Alt">—</td><td>m</td></tr>
+        <tr><td>Velocity North</td><td id="m-Vn">—</td><td>m/s</td></tr>
+        <tr><td>Velocity East</td><td id="m-Ve">—</td><td>m/s</td></tr>
+        <tr><td>Velocity Down</td><td id="m-Vd">—</td><td>m/s</td></tr>
+        <tr><td>Acceleration X</td><td id="m-Ax">—</td><td>m/s²</td></tr>
+        <tr><td>Acceleration Y</td><td id="m-Ay">—</td><td>m/s²</td></tr>
+        <tr><td>Acceleration Z</td><td id="m-Az">—</td><td>m/s²</td></tr>
+        <tr><td>Heading</td><td id="m-Heading">—</td><td>deg</td></tr>
+        <tr><td>Pitch</td><td id="m-Pitch">—</td><td>deg</td></tr>
+        <tr><td>Roll</td><td id="m-Roll">—</td><td>deg</td></tr>
+        <tr><td>Angular rate X</td><td id="m-Wx">—</td><td>deg/s</td></tr>
+        <tr><td>Angular rate Y</td><td id="m-Wy">—</td><td>deg/s</td></tr>
+        <tr><td>Angular rate Z</td><td id="m-Wz">—</td><td>deg/s</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Deliberately not using fillFields()/toFixed(3) here - this page exists to
+// let a human check raw values (e.g. Lat/Lon to enough decimal places to
+// spot a units bug), not for a quick at-a-glance status glance.
+// Ax/Ay/Az/Wx/Wy/Wz live in nav under both NCOM and UCOM (see ucomrx.py);
+// merging nav+status here anyway so this page keeps working if that
+// ever changes for a particular message/protocol.
+const RAD2DEG = 180 / Math.PI;
+
+function setField(id, value, digits) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  if (typeof value !== "number" || Number.isNaN(value)) return;
+  el.textContent = value.toFixed(digits);
+}
+
+connectWs("/ws/nav", (msg) => {
+  const data = { ...(msg.status || {}), ...(msg.nav || {}) };
+
+  const utcEl = document.getElementById("m-UtcTime");
+  if (utcEl && data.UtcTime) utcEl.textContent = data.UtcTime;
+
+  if (typeof data.Lat === "number") setField("m-Lat", data.Lat * RAD2DEG, 7);
+  if (typeof data.Lon === "number") setField("m-Lon", data.Lon * RAD2DEG, 7);
+  setField("m-Alt", data.Alt, 3);
+  setField("m-Vn", data.Vn, 3);
+  setField("m-Ve", data.Ve, 3);
+  setField("m-Vd", data.Vd, 3);
+  setField("m-Ax", data.Ax, 4);
+  setField("m-Ay", data.Ay, 4);
+  setField("m-Az", data.Az, 4);
+  setField("m-Heading", data.Heading, 3);
+  setField("m-Pitch", data.Pitch, 3);
+  setField("m-Roll", data.Roll, 3);
+  setField("m-Wx", data.Wx, 4);
+  setField("m-Wy", data.Wy, 4);
+  setField("m-Wz", data.Wz, 4);
+});
+</script>
+{% endblock %}

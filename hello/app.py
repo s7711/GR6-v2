@@ -21,4 +21,4 @@ def index():
 
 if __name__ == "__main__":
     cfg = service_config("hello")
-    app.run(host=cfg["host"], port=cfg["port"])
+    app.run(host=cfg["host"], port=cfg["port"], threaded=True)
