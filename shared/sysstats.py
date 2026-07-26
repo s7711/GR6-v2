@@ -58,7 +58,17 @@ def read_wifi_percent() -> float | None:
     if there's no wireless interface up (e.g. wired connection, or the
     wifi is down). Left as a plain percentage rather than pre-quantized
     into bars — see manager-prd.md's header status badges — so the
-    header can pick its own red/amber/green transition points."""
+    header can pick its own red/amber/green transition points.
+
+    TODO: takes the *first* interface listed in /proc/net/wireless, with
+    no name-awareness — fine today (an AP/hotspot-mode device, e.g.
+    wlan0 running AmundsenHotspot, doesn't appear in this file at all,
+    so this always ends up reporting whichever device is actually a
+    wifi client). But if wlan0 and wlan1 are ever both wifi clients at
+    once (confirmed possible — see network/network-prd.md), this badge
+    would arbitrarily show whichever the kernel lists first, with no
+    way to tell which one that is. Revisit if/when comparing two
+    simultaneous wifi clients' signal matters (2026-07-26, Ben)."""
     try:
         lines = _WIRELESS_PROC.read_text().splitlines()[2:]
     except FileNotFoundError:
