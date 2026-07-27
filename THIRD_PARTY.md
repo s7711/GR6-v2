@@ -39,5 +39,5 @@
 - License: ISC
 
 ## wheelspeed icon
-- Source: Lucide (https://lucide.dev/icons/gauge)
-- License: ISC
+- Source: SVG Repo (https://www.svgrepo.com/svg/266839/rim-tyre), via https://www.svgviewer.dev/s/96364/rim-tyre
+- License: CC0
