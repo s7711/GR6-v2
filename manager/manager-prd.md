@@ -141,6 +141,16 @@ requirement to bind a privileged port.
     since `vcgencmd`'s own "happened since boot" bit is sticky forever
     once set and would otherwise show amber indefinitely after a single
     brief dip.
+  - **Temperature badge ("NN°C")**: `vcgencmd measure_temp` for the
+    reading, plus `vcgencmd get_throttled`'s bit 2 ("currently
+    throttled") for colour — added 2026-07-27 after a cooling-fan fault
+    caused repeated service crashes. Red if that bit is set (the SoC is
+    actually being slowed down right now) or at/above 80°C (the Pi 4's
+    own documented soft-throttle point, so red lines up with where the
+    hardware itself would start capping frequency); amber from 70°C as
+    an early warning; green below that. Deliberately a separate bit
+    from the brown-out badge's (bit 0, under-voltage) — related but not
+    the same condition.
   - Per-service CPU/memory (as opposed to this whole-Pi view) is future
     work — see Out of Scope.
 

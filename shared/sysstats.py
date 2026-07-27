@@ -82,6 +82,33 @@ def read_wifi_percent() -> float | None:
     return None
 
 
+def read_temp() -> dict:
+    """{"temp_c": ..., "throttled": ...} — temp_c from `vcgencmd
+    measure_temp`; throttled is vcgencmd's own bit 2 (0x4, "currently
+    throttled") — true only while the SoC is actually running slower
+    than normal right now, distinct from read_brownout's bit 0
+    (under-voltage specifically). Either can cause the other, but a
+    header badge for heat should key off this bit, not brownout's."""
+    try:
+        temp_out = subprocess.run(
+            ["vcgencmd", "measure_temp"], capture_output=True, text=True, timeout=2
+        ).stdout.strip()
+        temp_c = float(temp_out.split("=")[1].split("'")[0])
+    except (FileNotFoundError, IndexError, ValueError, subprocess.SubprocessError):
+        temp_c = None
+
+    try:
+        throttled_out = subprocess.run(
+            ["vcgencmd", "get_throttled"], capture_output=True, text=True, timeout=2
+        ).stdout.strip()
+        value = int(throttled_out.split("=")[1], 16)
+        throttled = bool(value & 0x4)
+    except (FileNotFoundError, IndexError, ValueError, subprocess.SubprocessError):
+        throttled = False
+
+    return {"temp_c": temp_c, "throttled": throttled}
+
+
 def read_cpu_percent() -> float | None:
     """CPU load %, averaged since the previous call. None on the very
     first call (no prior sample yet to diff against) — the manager's
@@ -109,4 +136,5 @@ def snapshot() -> dict:
         "brownout": read_brownout(),
         "wifi_percent": read_wifi_percent(),
         "cpu_percent": read_cpu_percent(),
+        "temp": read_temp(),
     }

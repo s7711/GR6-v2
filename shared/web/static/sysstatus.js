@@ -29,6 +29,29 @@
       brownout.className = "badge text-bg-success";
     }
 
+    // Thresholds for the temperature badge (°C): red whenever vcgencmd's
+    // own "currently throttled" bit is set (the SoC is actually running
+    // slower right now, whatever the exact reading), or at/above 80°C —
+    // the Pi 4's own documented soft throttle point, so red lines up with
+    // "the hardware itself would start throttling about here" rather
+    // than an arbitrary number. Amber at 70°C as an early warning before
+    // that point is reached.
+    const TEMP_RED_C = 80;
+    const TEMP_AMBER_C = 70;
+
+    const temp = document.getElementById("sys-temp");
+    if (msg.temp.temp_c === null) {
+      temp.textContent = "—°C";
+      temp.className = "badge text-bg-secondary";
+    } else {
+      temp.textContent = `${Math.round(msg.temp.temp_c)}°C`;
+      temp.className = "badge " + (
+        msg.temp.throttled || msg.temp.temp_c >= TEMP_RED_C ? "text-bg-danger"
+        : msg.temp.temp_c >= TEMP_AMBER_C ? "text-bg-warning"
+        : "text-bg-success"
+      );
+    }
+
     // Thresholds for wifi quality (%): this Pi's signal is never seen
     // above ~4/5 bars in practice (never 5/5) — so rather than a scale
     // that requires 5/5 for "good", the old bar 3/5's own quality range

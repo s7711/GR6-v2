@@ -103,6 +103,39 @@ class TestWifiPercent(unittest.TestCase):
             self.assertAlmostEqual(sysstats.read_wifi_percent(), 60.0)
 
 
+class TestTemp(unittest.TestCase):
+    def test_reads_temp_and_not_throttled(self):
+        def fake_run(cmd, **kwargs):
+            if cmd[1] == "measure_temp":
+                return _completed("temp=65.7'C\n")
+            return _completed("throttled=0x0\n")
+        with patch.object(subprocess, "run", side_effect=fake_run):
+            self.assertEqual(sysstats.read_temp(), {"temp_c": 65.7, "throttled": False})
+
+    def test_currently_throttled_bit_detected(self):
+        def fake_run(cmd, **kwargs):
+            if cmd[1] == "measure_temp":
+                return _completed("temp=85.0'C\n")
+            return _completed("throttled=0x4\n")
+        with patch.object(subprocess, "run", side_effect=fake_run):
+            self.assertEqual(sysstats.read_temp(), {"temp_c": 85.0, "throttled": True})
+
+    def test_undervoltage_bit_alone_is_not_throttled(self):
+        # bit 0 (under-voltage) is a different condition from bit 2
+        # (currently throttled) - read_temp only cares about the
+        # latter, read_brownout owns the former.
+        def fake_run(cmd, **kwargs):
+            if cmd[1] == "measure_temp":
+                return _completed("temp=50.0'C\n")
+            return _completed("throttled=0x1\n")
+        with patch.object(subprocess, "run", side_effect=fake_run):
+            self.assertEqual(sysstats.read_temp(), {"temp_c": 50.0, "throttled": False})
+
+    def test_vcgencmd_missing(self):
+        with patch.object(subprocess, "run", side_effect=FileNotFoundError):
+            self.assertEqual(sysstats.read_temp(), {"temp_c": None, "throttled": False})
+
+
 class TestCpuPercent(unittest.TestCase):
     def setUp(self):
         sysstats._prev_cpu_total = None
