@@ -69,11 +69,11 @@ Early days. Nine of the planned services exist so far:
   from GR6-v1's `gad_wheelspeed.py`), with both `GadSpeed` and
   `GadVelocity` message types implemented, config-selectable. A page
   shows a live chart/numeric comparison of each wheel's speed against
-  the INS's own forward body-frame velocity. **Built and unit tested,
-  not yet run live against the real xNAV650** — the per-wheel lever arms
-  are still unmeasured placeholders, and the update-rate translation
-  from GR6-v1's design is flagged as an open question in
-  `wheelspeed/wheelspeed-prd.md`.
+  the INS's own forward body-frame velocity. GAD timing uses the real
+  arrival time of `drive`'s telemetry (not poll time) plus the midpoint
+  of the averaging interval — see `wheelspeed/wheelspeed-prd.md`.
+  **Running live with real measured lever arms, confirmed correct while
+  stationary — not yet field-tested with the wheels actually turning.**
 
 Nav decode, then the manager, were deliberately tackled first, then
 camera, then aruco, then drive, then navigate, then network, then

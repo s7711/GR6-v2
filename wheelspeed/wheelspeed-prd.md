@@ -237,12 +237,13 @@ values are changed via the manager's Config page, not here.
 ## Further Notes
 
 Ported from GR6-v1's `gad_wheelspeed.py`/`motors.py` (see
-`/home/pi/share/python/GR6-v1`) the same day Ben asked for it, in a
-single session while he was away from the keyboard — built and unit
-tested, but **not yet started against the real xNAV650 for any length
-of time unattended** (deliberately) — a new aiding stream affecting the
-INS's actual filter state is not something to leave running live
-without Ben watching what it does, the same caution already applied to
-every other GAD-sending change in this project. Go through this PRD's
-open "Update rate" question, and the still-placeholder `[0,0,0]` lever
-arms, before trusting its output.
+`/home/pi/share/python/GR6-v1`) the same day Ben asked for it. Built,
+unit tested, and running live (2026-07-27) with real measured lever
+arms and the timing fix described above — confirmed correct while
+stationary (both wheels reporting 0 m/s, GAD packets sending at the
+real measured rate, ~8Hz per wheel, not the previously-assumed 20Hz).
+
+**Not yet field-tested with the wheels actually turning** — everything
+above is a static/stationary confirmation only. Watch the INS solution
+during real driving before trusting this as genuine aiding rather than
+just "it runs without crashing."
