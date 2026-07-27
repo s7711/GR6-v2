@@ -320,6 +320,7 @@ aruco:
   port: 8004
   web_ui: true
   marker_map_file: aruco/data/marker-map.yaml
+  max_detection_hz: 2      # see "Detection rate limit" below
   camera_extrinsics:
     hpr_cb: [0, 0, 0]        # camera mount HPR relative to body; unmeasured/assumed, see bore-sight note above
     d_xc_b: [0.0775, 0.002, -0.07]   # camera displacement in body frame, metres
@@ -327,6 +328,23 @@ aruco:
 
 (`xnav_ip` for sending GAD is already available from `oxts-nav`'s existing
 config entry — reused, not duplicated.)
+
+### Detection rate limit
+
+`max_detection_hz` caps how often `_detection_loop` runs full detection
+(and any resulting GAD send) per second — added 2026-07-27 at Ben's
+request. Not a CPU/responsiveness measure (that's `Nice=5` in
+`robot-aruco.service.example`) — the actual reason is measurement
+statistics: the xNAV650's Kalman filter assumes roughly independent
+(white) measurement errors between updates, and sampling faster than
+necessary correlates consecutive errors instead, which the filter likes
+less even though it's "more data." Ben's guidance: GAD updates don't
+need to be faster than 2Hz, and 1Hz would be fine too — so this is a
+hard ceiling, not a target. Implemented as a minimum-period sleep in the
+loop itself (not a frame-counter skip), since `frame_ipc.FrameReader` is
+a single-slot "read whatever's latest" attachment, not a queue — skipping
+a tick never causes a backlog to drain later, it just means the next
+read happens later.
 
 ## Real bugs found via testing
 

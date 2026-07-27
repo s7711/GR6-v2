@@ -181,11 +181,30 @@ def _wait_for_calibration():
 def _detection_loop():
     camera_matrix, dist_coeffs = _wait_for_calibration()
     frame_reader = _get_frame_reader(wait=True)
+    # Detection (and the GAD sends it triggers) is deliberately capped
+    # below the camera's own frame rate — not for CPU (see Nice=5 in
+    # robot-aruco.service.example for that), but because the Kalman
+    # filter in the xNAV650 wants roughly-independent measurement
+    # errors; sampling faster than this correlates consecutive errors
+    # instead. See aruco-prd.md's "Detection rate limit" and Ben's note
+    # (2026-07-27): 1-2Hz is already faster than needed. frame_reader
+    # is a single-slot shared-memory latest-frame read, not a queue, so
+    # skipping a tick here just means "read the same/next latest frame
+    # next time" - nothing backs up or gets missed as a batch.
+    min_period_s = 1.0 / service_cfg["max_detection_hz"]
+    last_detection_time = None
     while True:
+        if last_detection_time is not None:
+            remaining = min_period_s - (time.monotonic() - last_detection_time)
+            if remaining > 0:
+                time.sleep(remaining)
+
         read = frame_reader.read()
         if read is None:
             time.sleep(0.05)
             continue
+
+        last_detection_time = time.monotonic()
 
         frame = read["frame"]  # BGR byte order — see shared/frame_ipc.py
         detections = detection.detect_markers(frame, camera_matrix, dist_coeffs, size_for_id=_marker_size_lookup)

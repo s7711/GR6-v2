@@ -45,6 +45,7 @@ services:
     port: 8004
     web_ui: true
     marker_map_file: aruco/data/marker-map.yaml
+    max_detection_hz: 2   # cap on marker detection/GAD-send rate — see aruco-prd.md "Detection rate limit"
     camera_extrinsics:
       hpr_cb: [0, 0, 0]  # camera mount HPR relative to body; unmeasured/assumed — see aruco-prd.md bore-sight note
       d_xc_b: [0.0775, 0.002, -0.07]  # camera displacement in body frame, metres
