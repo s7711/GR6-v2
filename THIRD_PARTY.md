@@ -37,3 +37,7 @@
 ## network icon
 - Source: Lucide (https://lucide.dev/icons/network), via https://www.svgviewer.dev/s/462347/network
 - License: ISC
+
+## wheelspeed icon
+- Source: Lucide (https://lucide.dev/icons/gauge)
+- License: ISC

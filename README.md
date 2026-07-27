@@ -18,7 +18,7 @@ see `top-prd.md` for why and how.
 
 ## Status
 
-Early days. Eight of the planned services exist so far:
+Early days. Nine of the planned services exist so far:
 
 - **`oxts-nav`** — decodes the xNAV650's NCOM stream and serves live
   nav/status/connection data over a websocket, with web pages for a
@@ -64,12 +64,22 @@ Early days. Eight of the planned services exist so far:
   chip's hotspot mode and `eth0`'s static/DHCP switching are built but
   deliberately untested so far, per the safety-first order in
   `network/network-prd.md`.
+- **`wheelspeed`** — sends per-wheel GAD speed/velocity aiding updates to
+  the xNAV650 from `drive`'s filtered wheel-velocity telemetry (ported
+  from GR6-v1's `gad_wheelspeed.py`), with both `GadSpeed` and
+  `GadVelocity` message types implemented, config-selectable. A page
+  shows a live chart/numeric comparison of each wheel's speed against
+  the INS's own forward body-frame velocity. **Built and unit tested,
+  not yet run live against the real xNAV650** — the per-wheel lever arms
+  are still unmeasured placeholders, and the update-rate translation
+  from GR6-v1's design is flagged as an open question in
+  `wheelspeed/wheelspeed-prd.md`.
 
 Nav decode, then the manager, were deliberately tackled first, then
-camera, then aruco, then drive, then navigate, then network — see
-"Suggested migration order" in `top-prd.md` for the reasoning and
-what's still to come (`missions`/`safety` built on top of `navigate`,
-wheelspeed GAD aiding).
+camera, then aruco, then drive, then navigate, then network, then
+wheelspeed — see "Suggested migration order" in `top-prd.md` for the
+reasoning and what's still to come (`missions`/`safety` built on top of
+`navigate`).
 
 ## Architecture
 
@@ -106,6 +116,7 @@ python aruco/app.py
 python drive/app.py
 python navigate/app.py
 python network/app.py
+python wheelspeed/app.py
 ```
 
 Then visit the manager's home page (port 8000 by default) to reach

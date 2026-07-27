@@ -1,0 +1,69 @@
+{# title: Home #}
+{% extends "base.html" %}
+{% block title %}GR6 — Wheelspeed{% endblock %}
+
+{% block content %}
+
+<div class="card mb-4">
+  <div class="card-body">
+    <div class="text-body-secondary small mb-1">Wheel speed vs. INS forward velocity</div>
+    <div id="graph"></div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <table class="table">
+      <thead><tr><th>Measurement</th><th>Value</th><th>Units</th></tr></thead>
+      <tbody>
+        <tr><td>Left wheel speed</td><td id="stat-left_mps">&mdash;</td><td>m/s</td></tr>
+        <tr><td>Right wheel speed</td><td id="stat-right_mps">&mdash;</td><td>m/s</td></tr>
+        <tr><td>INS forward velocity</td><td id="stat-forward_mps">&mdash;</td><td>m/s</td></tr>
+        <tr><td>GAD packets sent</td><td id="stat-packets_sent">&mdash;</td><td></td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<link href="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.min.css" rel="stylesheet">
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/ws-utils.js"></script>
+<script src="/static/uplot-utils.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.iife.min.js"></script>
+<script>
+const HISTORY_SECONDS = 30;
+const GRAPH_HZ = 5; // matches /ws/wheelspeed's own push rate — see app.py's WHEELSPEED_STATUS_HZ
+const MAX_POINTS = HISTORY_SECONDS * GRAPH_HZ;
+
+const SERIES = [
+  { label: "Left wheel", stroke: "red", field: "left_mps" },
+  { label: "Right wheel", stroke: "blue", field: "right_mps" },
+  { label: "INS forward", stroke: "green", field: "forward_mps" },
+];
+
+const el = document.getElementById("graph");
+const data = SERIES.map(() => []);
+data.unshift([]); // time axis
+const plot = new uPlot({
+  width: el.clientWidth,
+  height: 280,
+  scales: { x: { time: true } },
+  axes: [{ values: hhmmssAxisValues }],
+  series: [{}, ...SERIES.map((s) => ({ label: s.label, stroke: s.stroke }))],
+}, data, el);
+window.addEventListener("resize", () => plot.setSize({ width: el.clientWidth, height: 280 }));
+
+connectWs("/ws/wheelspeed", (msg) => {
+  fillFields("stat-", msg);
+  const t = Date.now() / 1000;
+  data[0].push(t);
+  SERIES.forEach((s, i) => data[i + 1].push(msg[s.field]));
+  if (data[0].length > MAX_POINTS) {
+    data.forEach((series) => series.shift());
+  }
+  plot.setData(data);
+});
+</script>
+{% endblock %}

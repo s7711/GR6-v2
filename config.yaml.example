@@ -88,3 +88,16 @@ services:
     port: 8007
     web_ui: true
     revert_timeout_s: 30              # how long an unconfirmed network change has before recovery profiles are re-applied — see network-prd.md
+
+  wheelspeed:
+    unit: robot-wheelspeed.service
+    host: 0.0.0.0
+    port: 8008
+    web_ui: true
+    gad_type: GadVelocity            # or GadSpeed — see wheelspeed-prd.md
+    left_wheel:
+      lever_arm_i: [0.0, 0.0, 0.0]  # IMU -> left wheel, IMU frame, metres — unmeasured placeholder, MEASURE AND SET
+      scale: 1.0                     # fudge factor on top of drive's own m/s velocity; normally 1.0
+    right_wheel:
+      lever_arm_i: [0.0, 0.0, 0.0]  # IMU -> right wheel, IMU frame, metres — unmeasured placeholder, MEASURE AND SET
+      scale: 1.0

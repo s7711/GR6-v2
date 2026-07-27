@@ -154,15 +154,19 @@ general-purpose sysadmin tool.
    rather than a separate service. Internet-sharing itself not yet
    tested as of 2026-07-26 (see `network/network-prd.md`'s
    implementation-status notes for exactly what has/hasn't been).
-6. Wheelspeed GAD aiding — not yet built, identified while surveying
-   ArUco markers with `aruco`: position-only GAD from a stationary/known
+6. Wheelspeed GAD aiding — **built 2026-07-27, see
+   `wheelspeed/wheelspeed-prd.md`**, identified while surveying ArUco
+   markers with `aruco`: position-only GAD from a stationary/known
    marker doesn't help the INS solution *between* good fixes, whereas
    wheelspeed aiding keeps drift much lower while driving through a
    GNSS-poor patch, making the fix at the next marker (or on return to
-   good sky view) far more accurate. Needs wheel encoder data from the
-   Arduino/Pico first — blocked on the `drive` service (see "motor
-   control", item 4) actually publishing encoder ticks; can't be
-   built before that exists. No PRD yet.
+   good sky view) far more accurate. Was blocked on `drive` (item 4)
+   publishing wheel velocity — unblocked once `drive` was done. Ported
+   from GR6-v1's `gad_wheelspeed.py`; both `GadSpeed` and `GadVelocity`
+   message types implemented, config-selectable. Not yet run live — the
+   per-wheel lever arms are still unmeasured placeholders, and the
+   translated update-rate design is flagged as an open question for Ben
+   in the PRD.
 7. Wifi improvements — **in progress, see `network/network-prd.md`**,
    picked up 2026-07-26 once the external USB wifi adapter arrived and
    outdoor signal was still marginal ahead of real watering runs.

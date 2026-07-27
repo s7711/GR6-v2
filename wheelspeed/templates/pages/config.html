@@ -1,0 +1,43 @@
+{# title: Config #}
+{% extends "base.html" %}
+{% block title %}GR6 — Wheelspeed Config{% endblock %}
+
+{% block content %}
+<p class="text-body-secondary small">
+  Read-only — edit these via the manager's Config page (<code>wheelspeed:</code>
+  in the shared config file), not here.
+</p>
+<div class="card">
+  <div class="card-body">
+    <table class="table">
+      <tbody>
+        <tr>
+          <th scope="row">GAD message type</th>
+          <td>{{ gad_type }}</td>
+          <td class="text-body-secondary small">GadVelocity or GadSpeed — see wheelspeed-prd.md.</td>
+        </tr>
+        <tr>
+          <th scope="row">Left wheel lever arm</th>
+          <td>{{ left_lever_arm_i }}</td>
+          <td class="text-body-secondary small">IMU &rarr; left wheel, IMU frame, metres.</td>
+        </tr>
+        <tr>
+          <th scope="row">Left wheel scale</th>
+          <td>{{ left_scale }}</td>
+          <td class="text-body-secondary small">Fudge factor on drive's own m/s velocity — normally 1.0.</td>
+        </tr>
+        <tr>
+          <th scope="row">Right wheel lever arm</th>
+          <td>{{ right_lever_arm_i }}</td>
+          <td class="text-body-secondary small">IMU &rarr; right wheel, IMU frame, metres.</td>
+        </tr>
+        <tr>
+          <th scope="row">Right wheel scale</th>
+          <td>{{ right_scale }}</td>
+          <td class="text-body-secondary small">Fudge factor on drive's own m/s velocity — normally 1.0.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
