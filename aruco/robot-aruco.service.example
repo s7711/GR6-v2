@@ -7,6 +7,12 @@ User=pi
 WorkingDirectory=/home/pi/share/GR6-v2
 ExecStart=/home/pi/share/GR6-v2/venv/bin/python3 aruco/app.py
 Restart=no
+# Marker detection is multi-process and CPU-heavy enough to make the
+# rest of the Pi (control, other services' web pages) sluggish under
+# load - deprioritise it relative to everything else rather than let
+# it compete on equal footing. See aruco-prd.md / top-prd.md if this
+# needs revisiting (e.g. a hard core reservation) alongside this.
+Nice=5
 
 [Install]
 WantedBy=multi-user.target
