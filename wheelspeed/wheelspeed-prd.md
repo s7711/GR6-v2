@@ -109,29 +109,47 @@ practice both wheels are likely close to the same value, since
 an already-correct unit conversion, and there's no reason the two
 wheels' small residual errors would be identical.
 
-### Update rate — open question, flagged for Ben
+### Update rate / timing — resolved with Ben, 2026-07-27
 
 GR6-v1 had **no separate update rate**: `GadWheelspeed.update()` was
 called directly, once, every time a new `EN` (encoder position) line
-arrived from the Arduino over serial — i.e., driven by whatever rate
-the firmware reports encoder telemetry at, with no independent timer of
-its own. GR6-v2's `drive` doesn't expose "a new telemetry line arrived"
-as an event — `FeedClient.latest()` just returns whatever's currently
-cached, updated in the background whenever `drive`'s feed socket sends
-a new snapshot (published at `drive_feed_hz`, currently 20Hz).
+arrived from the Arduino over serial, at whatever rate the firmware
+reports telemetry (~20Hz) — and that rate is known to have worked fine.
+Ben's call: keep that rate, don't try to slow it down further.
 
-**Decision made to keep coding moving, not yet confirmed with Ben**:
-poll `drive_client.latest()` (and send a GAD update) at the same
-nominal period as `drive_feed_hz` — the closest available proxy for
-"whenever new wheel telemetry arrives," unconditionally (no dedup/skip
-logic), same as GR6-v1's every-line behaviour. This is *not* related to
-`aruco`'s `max_detection_hz` rate cap — that exists for a different,
-already-settled reason (measurement-error whiteness for the Kalman
-filter, at a much lower deliberately-chosen rate); wheelspeed's rate
-here is just "as often as new data honestly exists," not a deliberate
-ceiling. **Talk to Ben**: does 20Hz (or whatever `drive_feed_hz`
-actually is at the time) make sense for wheelspeed specifically, same
-question he raised about GR6-v1's own rate before this was written?
+The real issue turned out to be **timing accuracy, not rate**: the
+first cut of this service polled `drive_client.latest()` (whatever
+FeedClient happens to have cached) and stamped the outgoing GAD packet
+with "now" — with no idea how stale that reading actually was, and no
+correction for the fact that a filtered wheel velocity is an *average
+over the preceding interval*, not an instantaneous reading at the
+moment it's read. Reporting an interval-average at the interval's *end*
+systematically biases the aiding time by half the update period — small
+at 20Hz, but real, and Ben specifically wants this accurate (GAD timing
+errors turn into apparent extra velocity/position error the Kalman
+filter has to explain away).
+
+Fixed by making `drive` itself timestamp reality, not by polling faster:
+
+- `drive/serial_link.py`'s read loop now stamps `FV_timestamp =
+  time.monotonic()` at the exact moment each `FV` (filtered velocity)
+  telemetry line is actually read from the Arduino — a real event
+  timestamp, not "whenever some consumer happened to check."
+- `wheelspeed`'s update loop polls frequently (`poll_period = 0.02s`,
+  well under the ~20Hz real interval) purely to *notice* a new
+  `FV_timestamp` promptly — the poll rate itself has no bearing on
+  accuracy any more, since the GAD packet's time comes from `drive`'s
+  own recorded timestamps, not from when `wheelspeed` happened to look.
+- The GAD packet's machine-time is the **midpoint** of
+  `[previous_FV_timestamp, current_FV_timestamp]` (`timing.py`'s
+  `midpoint_time`) — correctly representing "when, on average, this
+  velocity reading was true" — converted to GPS/xNAV time via
+  `oxts-nav/ncomrx.py`'s `machine_time_to_gps` (the same helper `aruco`
+  already uses; Ben specifically flagged this is the right function —
+  GPS time, not UTC).
+- The very first reading after startup is skipped (no previous
+  timestamp yet to form an interval from) — one measurement's worth of
+  startup latency, not worth complicating the logic to avoid.
 
 ## Page
 

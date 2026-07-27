@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "oxts-nav"))
 from ncomrx import machine_time_to_gps  # noqa: E402
 
 from gad_wheelspeed import GadWheelspeed  # noqa: E402
+from timing import midpoint_time  # noqa: E402
 from velocity import forward_velocity  # noqa: E402
 
 PAGES_DIR = Path(__file__).resolve().parent / "templates" / "pages"
@@ -61,25 +62,38 @@ def _forward_mps(nav):
 
 
 def _update_loop():
-    # See wheelspeed-prd.md's "Update rate" — polling at drive's own feed
-    # rate is the closest available proxy for GR6-v1's "send on every new
-    # encoder telemetry line", not yet confirmed with Ben as the right
-    # rate for this specifically.
-    period = 1.0 / drive_cfg["drive_feed_hz"]
+    # Event-driven off drive's own FV_timestamp (real arrival time of
+    # each filtered-velocity telemetry line — see serial_link.py), not a
+    # fixed poll rate: this loop just needs to notice a new timestamp
+    # promptly, it's never the source of the GAD packet's own time. See
+    # wheelspeed-prd.md's "Update rate / timing" — an update fires
+    # exactly once per real new FV reading, at whatever rate that
+    # actually arrives (GR6-v1 did this at ~20Hz and it worked fine).
+    poll_period = 0.02
+    last_fv_timestamp = None
     while True:
         drive_state = drive_client.latest()
         nav_payload = nav_client.latest()
         nav = nav_payload.get("nav", {})
         connection = nav_payload.get("connection", {})
 
+        fv_timestamp = drive_state.get("FV_timestamp")
         left_mps = drive_state.get("LM_vel_filt_mps")
         right_mps = drive_state.get("RM_vel_filt_mps")
         forward_mps = _forward_mps(nav)
 
-        if left_mps is not None and right_mps is not None:
-            gps_time = machine_time_to_gps(time.monotonic(), connection.get("timeOffset"))
+        is_new_reading = fv_timestamp is not None and fv_timestamp != last_fv_timestamp
+        if is_new_reading and last_fv_timestamp is not None and left_mps is not None and right_mps is not None:
+            # The velocity just read is an average over
+            # [last_fv_timestamp, fv_timestamp] — report it at the
+            # midpoint of that interval, not "now", so the GAD time
+            # actually matches what the velocity represents.
+            machine_time = midpoint_time(last_fv_timestamp, fv_timestamp)
+            gps_time = machine_time_to_gps(machine_time, connection.get("timeOffset"))
             if gps_time is not None:
                 gad_wheelspeed.update(gps_time[0], gps_time[1], left_mps, right_mps)
+        if is_new_reading:
+            last_fv_timestamp = fv_timestamp
 
         with _state_lock:
             _state.update({
@@ -88,7 +102,7 @@ def _update_loop():
                 "forward_mps": forward_mps,
                 "packets_sent": gad_wheelspeed.packets_sent,
             })
-        time.sleep(period)
+        time.sleep(poll_period)
 
 
 def _snapshot():

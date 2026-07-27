@@ -61,6 +61,24 @@ class TestSerialLink(unittest.TestCase):
         self.assertTrue(wait_until(lambda: link.snapshot().get("pump") is True))
         self.assertEqual(link.snapshot(), {"LM_position": 1, "RM_position": 2, "pump": True})
 
+    def test_fv_line_gets_a_real_timestamp(self):
+        link, holder = self._make_link()
+        link.start()
+        before = time.monotonic()
+        holder["fake"].queue.put(b"FV 150 150\n")
+        self.assertTrue(wait_until(lambda: "FV_timestamp" in link.snapshot()))
+        after = time.monotonic()
+        snapshot = link.snapshot()
+        self.assertLessEqual(before, snapshot["FV_timestamp"])
+        self.assertLessEqual(snapshot["FV_timestamp"], after)
+
+    def test_non_fv_lines_do_not_get_an_fv_timestamp(self):
+        link, holder = self._make_link()
+        link.start()
+        holder["fake"].queue.put(b"EN 1 2\n")
+        self.assertTrue(wait_until(lambda: link.snapshot().get("LM_position") == 1))
+        self.assertNotIn("FV_timestamp", link.snapshot())
+
     def test_malformed_line_ignored_without_crashing(self):
         link, holder = self._make_link()
         link.start()

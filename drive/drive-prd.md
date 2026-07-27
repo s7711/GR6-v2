@@ -88,7 +88,7 @@ round-robin roughly every 10ms:**
 |---|---|
 | `EN <left> <right>` | Raw encoder position (counts), monotonically increasing/decreasing. |
 | `SV <left> <right>` | Current (ramped) set velocity, ×100 int-encoded. |
-| `FV <left> <right>` | Filtered measured velocity, ×100 int-encoded. |
+| `FV <left> <right>` | Filtered measured velocity, ×100 int-encoded. Published telemetry also gets an `FV_timestamp` (`time.monotonic()` when this specific line was read, not a firmware field) — added for `wheelspeed`'s GAD timing, see `wheelspeed/wheelspeed-prd.md`'s "Update rate / timing". |
 | `ER <left> <right>` | Velocity error (set − filtered). |
 | `EI <left> <right>` | PID integral term. |
 | `ED <left> <right>` | PID derivative term. |

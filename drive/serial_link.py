@@ -10,6 +10,7 @@ keep hardware access behind a swappable seam).
 
 import logging
 import threading
+import time
 
 import serial as pyserial
 
@@ -40,6 +41,14 @@ class SerialLink:
                 continue
             updates = protocol.parse_line(line)
             if updates:
+                if "LM_vel_filt" in updates:
+                    # Real arrival time of this specific telemetry line —
+                    # not "whenever a consumer happens to poll" — so a GAD
+                    # aiding consumer (wheelspeed) can compute the true
+                    # midpoint of the averaging interval its velocity
+                    # covers, rather than timestamping it "now". See
+                    # wheelspeed-prd.md's "Update rate / timing".
+                    updates = {**updates, "FV_timestamp": time.monotonic()}
                 with self._lock:
                     self._state.update(updates)
 
