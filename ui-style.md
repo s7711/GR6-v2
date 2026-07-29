@@ -7,8 +7,11 @@ framework decisions locally.
 
 ## Framework
 
-- **Bootstrap** (5.3+, via CDN link or vendored copy — no build step
-  needed). Chosen over a classless framework (Pico/Water) because the UI
+- **Bootstrap** (5.3+, vendored locally under `shared/web/static/vendor/` —
+  no build step needed, and no internet dependency at runtime; amundsen
+  is often demoed/operated off-grid via its own hotspot with no upstream
+  internet, see THIRD_PARTY.md). Chosen over a classless framework
+  (Pico/Water) because the UI
   in scope is a genuine multi-widget dashboard (header bar, menu, cards,
   status badges, tables, forms) rather than a couple of simple content
   pages — Bootstrap's premade components (navbar, badges, cards,

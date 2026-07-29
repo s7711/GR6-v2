@@ -25,13 +25,13 @@
   </div>
 </div>
 
-<link href="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.min.css" rel="stylesheet">
+<link href="/static/vendor/uplot-1.6.31/uPlot.min.css" rel="stylesheet">
 {% endblock %}
 
 {% block scripts %}
 <script src="/static/ws-utils.js"></script>
 <script src="/static/uplot-utils.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.iife.min.js"></script>
+<script src="/static/vendor/uplot-1.6.31/uPlot.iife.min.js"></script>
 <script>
 const HISTORY_SECONDS = 30;
 const GRAPH_HZ = 5; // matches /ws/wheelspeed's own push rate — see app.py's WHEELSPEED_STATUS_HZ

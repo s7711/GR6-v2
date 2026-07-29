@@ -53,12 +53,12 @@
 
 {% include "_command_box.html" %}
 
-<link href="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.min.css" rel="stylesheet">
+<link href="/static/vendor/uplot-1.6.31/uPlot.min.css" rel="stylesheet">
 {% endblock %}
 
 {% block scripts %}
 <script src="/static/uplot-utils.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.iife.min.js"></script>
+<script src="/static/vendor/uplot-1.6.31/uPlot.iife.min.js"></script>
 <script>
 const HISTORY_SECONDS = 60;
 const updateHz = {{ nav_update_hz }};

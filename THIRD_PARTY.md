@@ -3,12 +3,16 @@
 ## Bootstrap
 - Version: 5.3.3
 - Source: https://github.com/twbs/bootstrap
-- License: MIT (loaded via CDN, see ui-style.md)
+- License: MIT (vendored locally at `shared/web/static/vendor/bootstrap-5.3.3/`,
+  served at `/static/vendor/...` on every service — no internet needed at
+  runtime; see ui-style.md)
 
 ## uPlot
 - Version: 1.6.31
 - Source: https://github.com/leeoniya/uPlot
-- License: MIT (loaded via CDN, see ui-style.md)
+- License: MIT (vendored locally at `shared/web/static/vendor/uplot-1.6.31/`,
+  served at `/static/vendor/...` on every service — no internet needed at
+  runtime; see ui-style.md)
 
 ## oxts-nav icon
 - Source: https://www.svgrepo.com/svg/42367/navigation
