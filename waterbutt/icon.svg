@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Hand-drawn bucket-with-water-drop glyph (this project's own artwork,
+     no external source), white-on-black-circle to match the GR6-v2 icon
+     style (see oxts-nav/icon.svg) — inspired by the general shape at
+     https://www.svgviewer.dev/s/373645/waterbucket -->
+<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+  <circle cx="50" cy="50" r="50" fill="#000000"/>
+  <g fill="none" stroke="#ffffff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M28 40 L72 40 L66 78 A6 6 0 0 1 60 84 L40 84 A6 6 0 0 1 34 78 Z"/>
+    <path d="M28 40 A22 10 0 0 0 72 40"/>
+    <path d="M36 40 L34 30 A2 2 0 0 1 36 28 L64 28 A2 2 0 0 1 66 30 L64 40"/>
+  </g>
+  <path fill="#ffffff" d="M50 46 C50 46 42 56 42 62 A8 8 0 0 0 58 62 C58 56 50 46 50 46 Z"/>
+</svg>

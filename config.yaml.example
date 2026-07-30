@@ -99,4 +99,11 @@ services:
       scale: 1.0                     # fudge factor on top of drive's own m/s velocity; normally 1.0
     right_wheel:
       lever_arm_i: [0.0, 0.0, 0.0]  # IMU -> right wheel, IMU frame, metres — unmeasured placeholder, MEASURE AND SET
+
+  waterbutt:
+    unit: robot-waterbutt.service
+    host: 0.0.0.0
+    port: 8009
+    web_ui: true
+    hostname: waterbutt.local  # mDNS name the ESP8266 valve controller advertises — see waterbutt/waterbutt-prd.md
       scale: 1.0

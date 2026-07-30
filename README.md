@@ -76,12 +76,19 @@ Early days. Nine of the planned services exist so far:
   of the averaging interval — see `wheelspeed/wheelspeed-prd.md`.
   **Running live with real measured lever arms, confirmed correct while
   stationary — not yet field-tested with the wheels actually turning.**
+- **`waterbutt`** — a standalone duration-based "Go"/"Stop" page for the
+  water butt's own ESP8266 pinch-valve controller (a separate
+  microcontroller on the same wifi network, not part of the Pi). The
+  firmware only exposes plain `/open`/`/close` with a 5-second
+  fail-safe auto-close; this service holds the valve open for an
+  operator-chosen duration by re-issuing `/open` before that fail-safe
+  fires, then `/close`s at the end — see `waterbutt/waterbutt-prd.md`.
 
 Nav decode, then the manager, were deliberately tackled first, then
 camera, then aruco, then drive, then navigate, then network, then
-wheelspeed — see "Suggested migration order" in `top-prd.md` for the
-reasoning and what's still to come (`missions`/`safety` built on top of
-`navigate`).
+wheelspeed, then waterbutt — see "Suggested migration order" in
+`top-prd.md` for the reasoning and what's still to come
+(`missions`/`safety` built on top of `navigate`).
 
 ## Architecture
 
@@ -119,6 +126,7 @@ python drive/app.py
 python navigate/app.py
 python network/app.py
 python wheelspeed/app.py
+python waterbutt/app.py
 ```
 
 Then visit the manager's home page (port 8000 by default) to reach

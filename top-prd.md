@@ -190,6 +190,14 @@ general-purpose sysadmin tool.
    originated commands, reject anything too stale) was considered
    separately and stays parked — revisit only if the hardware/hotspot
    change doesn't fully fix the underlying pain.
+8. Waterbutt valve control — **built 2026-07-30, see
+   `waterbutt/waterbutt-prd.md`**: a standalone service for the water
+   butt's own ESP8266 pinch-valve controller (not part of the Pi's
+   architecture, a separate microcontroller on the same wifi network),
+   giving an operator a duration-based "Go"/"Stop" page. Independent of
+   `navigate`/`missions` for now — the future `missions` service (item
+   4) would call this one's `/go`/`/stop` rather than reimplement the
+   valve timing.
 
 ## Out of Scope (at this level)
 

@@ -1,0 +1,66 @@
+{# title: Run #}
+{% extends "base.html" %}
+{% block title %}GR6 — Waterbutt{% endblock %}
+
+{% block content %}
+<div class="row g-3 mb-3 justify-content-center">
+  <div class="col-12 col-md-6">
+    <div class="card">
+      <div class="card-body">
+        <div class="mb-3">
+          <label class="form-label">Duration: <strong id="duration-label">—</strong></label>
+          <input type="range" class="form-range" id="duration-slider" min="0" max="{{ durations_s|length - 1 }}" step="1" value="2">
+        </div>
+        <button id="go-btn" class="btn btn-success btn-lg me-2">Go</button>
+        <button id="stop-btn" class="btn btn-danger btn-lg" disabled>Stop</button>
+        <div class="mt-3">
+          <span class="text-body-secondary">State:</span> <span id="stat-state">idle</span>
+          <span id="remaining-wrap" class="d-none">(<span id="stat-remaining_s">—</span>s left)</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const DURATIONS_S = {{ durations_s|tojson }};
+
+function formatDuration(s) {
+  return s >= 60 ? `${s / 60} min` : `${s}s`;
+}
+
+const slider = document.getElementById("duration-slider");
+const durationLabel = document.getElementById("duration-label");
+const goBtn = document.getElementById("go-btn");
+const stopBtn = document.getElementById("stop-btn");
+
+function updateDurationLabel() {
+  durationLabel.textContent = formatDuration(DURATIONS_S[slider.value]);
+}
+slider.addEventListener("input", updateDurationLabel);
+updateDurationLabel();
+
+goBtn.addEventListener("click", () => {
+  fetch("/go", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ duration_s: DURATIONS_S[slider.value] }),
+  });
+});
+
+stopBtn.addEventListener("click", () => {
+  fetch("/stop", { method: "POST" });
+});
+
+connectWs("/ws/waterbutt", (msg) => {
+  fillFields("stat-", msg);
+  const watering = msg.state === "watering";
+  goBtn.disabled = watering;
+  slider.disabled = watering;
+  stopBtn.disabled = !watering;
+  document.getElementById("remaining-wrap").classList.toggle("d-none", !watering);
+});
+</script>
+{% endblock %}
