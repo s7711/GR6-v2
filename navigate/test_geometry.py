@@ -155,6 +155,48 @@ class TestFindEntrySegment(unittest.TestCase):
         self.assertEqual(index, 1)
 
 
+class TestNearestSegmentOffset(unittest.TestCase):
+    def test_off_path_to_the_east_has_positive_cross_track_error(self):
+        path = _straight_north_path()
+        result = geometry.nearest_segment_offset(path, robot_north=5, robot_east=2, robot_heading_deg=0)
+        self.assertAlmostEqual(result["cross_track_error_m"], 2.0)
+
+    def test_off_path_to_the_west_has_negative_cross_track_error(self):
+        path = _straight_north_path()
+        result = geometry.nearest_segment_offset(path, robot_north=5, robot_east=-2, robot_heading_deg=0)
+        self.assertAlmostEqual(result["cross_track_error_m"], -2.0)
+
+    def test_aligned_heading_has_zero_heading_error(self):
+        path = _straight_north_path()
+        result = geometry.nearest_segment_offset(path, robot_north=5, robot_east=0, robot_heading_deg=0)
+        self.assertAlmostEqual(result["heading_error_deg"], 0.0)
+
+    def test_heading_error_matches_entry_checks_own_convention(self):
+        # Same sign convention as find_entry_segment's own fallback in
+        # control.py (segment_heading - robot_heading), not the
+        # opposite — this is a "how misaligned with the path am I"
+        # question, distinct from step()'s "bearing to a lookahead
+        # point ahead" heading error.
+        path = _straight_north_path()
+        result = geometry.nearest_segment_offset(path, robot_north=5, robot_east=0, robot_heading_deg=90)
+        self.assertAlmostEqual(result["heading_error_deg"], -90.0)
+
+    def test_finds_the_closest_segment_not_just_the_first(self):
+        path = _straight_north_path()  # segments [0,10] and [10,20]
+        result = geometry.nearest_segment_offset(path, robot_north=15, robot_east=0, robot_heading_deg=0)
+        self.assertEqual(result["index"], 1)
+
+    def test_does_not_require_being_near_the_start(self):
+        # Unlike find_lookahead_point (forward-only from a tracked
+        # index), this must find the right segment regardless of where
+        # along the path the robot currently is — no run in progress
+        # to have already advanced a tracked index.
+        path = _straight_north_path()
+        result = geometry.nearest_segment_offset(path, robot_north=18, robot_east=1, robot_heading_deg=0)
+        self.assertEqual(result["index"], 1)
+        self.assertAlmostEqual(result["cross_track_error_m"], 1.0)
+
+
 class TestFindLookaheadPoint(unittest.TestCase):
     def test_on_path_lookahead_is_ahead_by_lookahead_distance(self):
         path = _straight_north_path(length=20, step=10)

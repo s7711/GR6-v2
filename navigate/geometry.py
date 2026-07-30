@@ -206,6 +206,34 @@ def find_lookahead_point(path, start_index, robot_north, robot_east, lookahead_d
     )
 
 
+def nearest_segment_offset(path, robot_north, robot_east, robot_heading_deg) -> dict:
+    """Signed cross-track error + heading error against whichever
+    segment of `path` the robot is currently closest to — searches
+    every segment (unlike find_lookahead_point, which only tracks
+    forward from a given index), so this stays meaningful with no run
+    in progress: before starting, or once one has finished/aborted. For
+    the Run page's live "how far off/misaligned am I" display —
+    heading error here is against the *segment's own bearing*, not a
+    lookahead point ahead on the path (what step()'s heading_error_deg
+    uses while actually running) — a different, simpler question ("am
+    I roughly aligned with the path here"), not a steering target."""
+    best = None
+    for i in range(len(path) - 1):
+        a, b = path[i], path[i + 1]
+        proj_north, proj_east, _t, dist = project_onto_segment(robot_north, robot_east, a.north, a.east, b.north, b.east)
+        if best is None or dist < best[0]:
+            seg_north, seg_east = b.north - a.north, b.east - a.east
+            to_robot_north, to_robot_east = robot_north - proj_north, robot_east - proj_east
+            cross = seg_north * to_robot_east - seg_east * to_robot_north
+            seg_len = math.hypot(seg_north, seg_east)
+            cte = cross / seg_len if seg_len > 0 else 0.0
+            segment_heading = bearing(a.north, a.east, b.north, b.east)
+            heading_err = angle_diff(segment_heading, robot_heading_deg)
+            best = (dist, i, cte, heading_err)
+    _dist, index, cte, heading_err = best
+    return {"index": index, "cross_track_error_m": cte, "heading_error_deg": heading_err}
+
+
 def differential_drive(forward_mps, turn, wheel_base_m, max_mps=None):
     """Convert a forward speed + turn command into (left_mps, right_mps).
     `turn` is positive when the robot needs to turn right/clockwise

@@ -107,6 +107,50 @@ class PathRunner:
             self.abort_reason = None
         self.send_velocity(0.0, 0.0)
 
+    def preview(self, robot_lat, robot_lon, robot_heading_deg):
+        """Live cross-track/heading error against the loaded path, for
+        the Run page's display to stay meaningful even with no run in
+        progress (before starting, or once one's finished/aborted) —
+        call this whenever step() is a no-op. No-op itself if running
+        (step()'s own values are authoritative then) or no path loaded.
+
+        Deliberately mirrors start()+step()'s own entry-segment lookup
+        (find_entry_segment, then find_lookahead_point from that index)
+        rather than an independent "nearest segment overall" search —
+        found live 2026-07-30 that those can disagree on a path that
+        loops back near itself (e.g. Waterstablebed): the preview showed
+        a small, misleadingly-low error from whichever segment was
+        geometrically closest, while the real run — which only ever
+        tracks forward from the actual entry segment — aborted almost
+        immediately against a much larger one. This now shows exactly
+        what step()'s first tick would compute, not an approximation of
+        it. Only falls back to the nearest-segment-overall search (same
+        one entry_check's own rejection message already uses) when no
+        valid entry segment exists at all, so there's still something
+        meaningful to show."""
+        with self.lock:
+            if self.state == "running" or len(self.path) < 2:
+                return
+            robot_north, robot_east = geometry.to_local(robot_lat, robot_lon, *self.path_ref)
+            index = geometry.find_entry_segment(
+                self.path, robot_north, robot_east, robot_heading_deg,
+                self.config["entry_max_distance_m"], self.config["entry_max_heading_deg"],
+            )
+            if index is None:
+                offset = geometry.nearest_segment_offset(self.path, robot_north, robot_east, robot_heading_deg)
+                self.last_status["cross_track_error_m"] = offset["cross_track_error_m"]
+                self.last_status["heading_error_deg"] = offset["heading_error_deg"]
+                return
+            result = geometry.find_lookahead_point(
+                self.path, index, robot_north, robot_east, self.config["lookahead_distance_m"]
+            )
+            if result is None:
+                return
+            self.last_status["cross_track_error_m"] = result.cross_track_error_m
+            self.last_status["heading_error_deg"] = geometry.heading_error_deg(
+                robot_heading_deg, robot_north, robot_east, result.north, result.east
+            )
+
     def step(self, robot_lat, robot_lon, robot_heading_deg, horizontal_accuracy_m):
         """Call at control_hz while running. No-op if not running."""
         with self.lock:

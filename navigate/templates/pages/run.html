@@ -32,6 +32,7 @@
             <tr><th scope="row">State</th><td><span id="stat-state">—</span> <span id="stat-abort_reason" class="text-danger small"></span></td></tr>
             <tr><th scope="row">Speed</th><td><span id="stat-speed">—</span> m/s</td></tr>
             <tr><th scope="row">Lateral error</th><td><span id="stat-cross_track_error_m">—</span> m (clearance headroom <span id="stat-clearance_headroom_m">—</span> m)</td></tr>
+            <tr><th scope="row">Heading error</th><td><span id="stat-heading_error_deg">—</span> deg</td></tr>
             <tr><th scope="row">Distance travelled</th><td><span id="stat-distance_travelled_m">—</span> m</td></tr>
             <tr><th scope="row">GPS position mode</th><td><span id="status-GnssPosMode">—</span></td></tr>
             <tr><th scope="row">Horizontal accuracy</th><td><span id="stat-accuracy">—</span> m</td></tr>
@@ -103,7 +104,7 @@ function loadPathForMap(name) {
   fetch(`/api/paths/${encodeURIComponent(name)}`)
     .then((r) => r.json())
     .then((points) => {
-      map.setLayer("path", points, { color: "#6c757d" });
+      map.setLayer("path", points, { color: "#6c757d", dots: true, dotRadius: 4, labels: true });
       map.draw();
     });
 }

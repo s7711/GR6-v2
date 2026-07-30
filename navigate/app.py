@@ -135,6 +135,7 @@ def _control_loop():
             runner.step(
                 position["lat"], position["lon"], position["heading_deg"], position["horizontal_accuracy_m"]
             )
+            runner.preview(position["lat"], position["lon"], position["heading_deg"])
             state = runner.status()["state"]
             now = time.monotonic()
             # Quiet ~1Hz snapshot while running, for debugging aborts

@@ -182,5 +182,56 @@ class TestStep(unittest.TestCase):
         self.assertEqual(len(recorder.velocity_calls), calls_after_abort)
 
 
+class TestPreview(unittest.TestCase):
+    def test_updates_cross_track_and_heading_error_while_idle(self):
+        # No run started at all — the Run page's live display should
+        # still show a real number, not stay blank until Start is
+        # pressed (found live 2026-07-30 asking for this).
+        runner, _ = make_runner()
+        runner.preview(robot_lat=52.200000, robot_lon=-1.500000, robot_heading_deg=90)
+        status = runner.status()
+        self.assertIn("cross_track_error_m", status)
+        self.assertIn("heading_error_deg", status)
+
+    def test_noop_without_a_loaded_path(self):
+        recorder = Recorder()
+        runner = PathRunner(CONFIG, recorder.send_velocity, recorder.send_pump)
+        runner.preview(robot_lat=52.200000, robot_lon=-1.500000, robot_heading_deg=0)
+        self.assertNotIn("cross_track_error_m", runner.status())
+
+    def test_does_not_override_steps_own_values_while_running(self):
+        # step()'s values are authoritative during an actual run — see
+        # navigate-prd.md's "Ownership of tolerance/accuracy
+        # enforcement" — preview() must not fight them.
+        runner, _ = make_runner()
+        runner.start(robot_lat=52.200000, robot_lon=-1.500000, robot_heading_deg=0)
+        runner.step(robot_lat=52.200000, robot_lon=-1.500000, robot_heading_deg=0, horizontal_accuracy_m=0.1)
+        from_step = runner.status()["cross_track_error_m"]
+        # A wildly different position/heading than the real one above -
+        # if preview() ran, this would visibly change the reported value.
+        runner.preview(robot_lat=52.205000, robot_lon=-1.505000, robot_heading_deg=180)
+        self.assertEqual(runner.status()["cross_track_error_m"], from_step)
+
+    def test_matches_exactly_what_starting_would_immediately_show(self):
+        # The actual bug found live 2026-07-30: preview() used to search
+        # for whichever segment was geometrically closest overall, which
+        # can differ from the entry segment start()+step() actually
+        # track on a path that loops back near itself - showing a
+        # falsely-reassuring low error right before an immediate real
+        # abort. Same position/heading fed to both must now produce
+        # identical numbers.
+        lat, lon, heading = 52.200030, -1.500000, 2  # near the first point, slightly off both axes
+        runner, _ = make_runner()
+        runner.preview(robot_lat=lat, robot_lon=lon, robot_heading_deg=heading)
+        from_preview = dict(runner.status())
+
+        runner.start(robot_lat=lat, robot_lon=lon, robot_heading_deg=heading)
+        runner.step(robot_lat=lat, robot_lon=lon, robot_heading_deg=heading, horizontal_accuracy_m=0.1)
+        from_step = runner.status()
+
+        self.assertAlmostEqual(from_preview["cross_track_error_m"], from_step["cross_track_error_m"])
+        self.assertAlmostEqual(from_preview["heading_error_deg"], from_step["heading_error_deg"])
+
+
 if __name__ == "__main__":
     unittest.main()
