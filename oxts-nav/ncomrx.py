@@ -1554,9 +1554,23 @@ class NcomRx:
     def decodeStatus95(self,statusBytes):
         # GAD updates: Only the last one is saved here
         # But it might be better to have an array, one for each GAD stream ID
+        #
+        # Byte 1 is officially "Number of consecutive updates rejected for
+        # this stream Id" (NCOM manual Table 83, Channel 95) - was
+        # previously named/treated here as a generic "status" byte, which
+        # obscured what it actually means (found 2026-07-30 investigating
+        # why aruco's GAD position aiding never went active). Also: Ben
+        # has confirmed directly with OXTS that this whole channel is
+        # currently broken firmware-side on our xNAV650 (a stray pointer
+        # reading unrelated memory instead of the real value) - reported
+        # 2026-07-30, being looked into. Don't trust these numbers as real
+        # rejection counts until that's fixed; the rename/validity-check
+        # here is just so this is correctly labelled and ready for when
+        # it is.
         if statusBytes[0] != 0:
             self.status['GADLatestStreamID'] = statusBytes[0]
-            self.status['GADLatestStatus'] = statusBytes[1]
+            self.status['GADRejectedCount'] = statusBytes[1]
+            if statusBytes[1] == 0xFF: del self.status['GADRejectedCount']
             self._updateInnovation( 'GadInn1', statusBytes[2:3] )
             self._updateInnovation( 'GadInn2', statusBytes[3:4] )
             self._updateInnovation( 'GadInn3', statusBytes[4:5] )
