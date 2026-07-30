@@ -108,16 +108,19 @@ class TestStep(unittest.TestCase):
         self.assertAlmostEqual(left, 0.5, delta=0.05)
         self.assertAlmostEqual(right, 0.5, delta=0.05)
 
-    def test_pump_command_sent_once_on_change_not_every_step(self):
+    def test_pump_command_resent_every_step_not_just_on_change(self):
+        # The firmware's WP watchdog turns the pump off if no WP command
+        # arrives within 2000ms (drive-prd.md) — found live 2026-07-30
+        # that only resending on a state *change* let the pump silently
+        # switch itself off mid-run. Every step must resend the current
+        # state, same as send_velocity already does.
         runner, recorder = make_runner()
-        # Start near the first point (pump False) and step forward past
-        # the second point (pump True) to cross a pump-state boundary.
         runner.start(robot_lat=52.200000, robot_lon=-1.500000, robot_heading_deg=0)
         runner.step(robot_lat=52.200000, robot_lon=-1.500000, robot_heading_deg=0, horizontal_accuracy_m=0.1)
-        self.assertEqual(recorder.pump_calls, [False])  # explicit sync on the first step
+        self.assertEqual(recorder.pump_calls, [False])
         runner.step(robot_lat=52.200090, robot_lon=-1.500000, robot_heading_deg=0, horizontal_accuracy_m=0.1)
         runner.step(robot_lat=52.200090, robot_lon=-1.500000, robot_heading_deg=0, horizontal_accuracy_m=0.1)
-        self.assertEqual(recorder.pump_calls, [False, True])  # then once more, only when it actually changed
+        self.assertEqual(recorder.pump_calls, [False, True, True])
 
     def test_distance_travelled_accumulates(self):
         runner, _ = make_runner()

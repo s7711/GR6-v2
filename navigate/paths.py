@@ -12,7 +12,12 @@ import yaml
 
 import geometry
 
-_SAFE_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
+# Only real path-traversal characters are excluded (no slashes, no
+# leading dot) — anything else, including spaces, is a normal filename
+# character and shouldn't be rejected. Found live 2026-07-30: the
+# original [A-Za-z0-9_-]-only version rejected a perfectly reasonable
+# name ("Water stable bed") for no security reason at all.
+_SAFE_NAME = re.compile(r"^[^./\\][^/\\]*$")
 
 
 class InvalidPathName(ValueError):
@@ -21,8 +26,13 @@ class InvalidPathName(ValueError):
 
 def _validate_name(name: str) -> str:
     """Reject anything that isn't a plain filename component — no
-    slashes, no "..", no leading dot — since `name` ultimately comes from
-    an HTTP request and must never be used to escape paths_dir."""
+    slashes, no leading dot (blocks "." and ".." too) — since `name`
+    ultimately comes from an HTTP request and must never be used to
+    escape paths_dir. Everything else (spaces, punctuation, ...) is
+    fine; leading/trailing whitespace is trimmed first so a stray space
+    from a text box doesn't itself cause a rejection or a confusing
+    filename."""
+    name = name.strip()
     if not _SAFE_NAME.match(name):
         raise InvalidPathName(f"Invalid path name: {name!r}")
     return name

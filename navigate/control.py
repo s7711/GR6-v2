@@ -35,7 +35,6 @@ class PathRunner:
         self.abort_reason = None
         self.distance_travelled_m = 0.0
         self._last_robot_local = None
-        self._last_pump = None
         self.last_status = {}
 
     def load_path(self, points: list):
@@ -98,7 +97,6 @@ class PathRunner:
             self.abort_reason = None
             self.distance_travelled_m = 0.0
             self._last_robot_local = None
-            self._last_pump = None
             return {"ok": True}
 
     def stop(self):
@@ -159,9 +157,13 @@ class PathRunner:
             )
             left, right = geometry.differential_drive(result.speed_mps, turn, self.config["wheel_base_m"])
             self.send_velocity(left, right)
-            if result.pump != self._last_pump:
-                self.send_pump(result.pump)
-                self._last_pump = result.pump
+            # Every step, not just on change — the firmware's WP watchdog
+            # turns the pump off if no WP command arrives within 2000ms
+            # (see drive-prd.md), same reasoning as send_velocity above.
+            # Found live 2026-07-30: navigation completed fine but the
+            # pump had silently switched itself off partway through,
+            # because this used to only resend on a state change.
+            self.send_pump(result.pump)
 
             self.last_status = {
                 "tracked_index": self.tracked_index,

@@ -52,13 +52,26 @@ class TestPathStorage(unittest.TestCase):
         self.assertGreater(rows[1]["length_m"], 0.0)
 
     def test_invalid_names_rejected(self):
-        for bad_name in ["../escape", "a/b", ".hidden", "with space", ""]:
+        for bad_name in ["../escape", "a/b", ".hidden", "", "   "]:
             with self.assertRaises(paths.InvalidPathName):
                 paths.save_path(self.paths_dir, bad_name, SAMPLE_POINTS)
             with self.assertRaises(paths.InvalidPathName):
                 paths.load_path(self.paths_dir, bad_name)
             with self.assertRaises(paths.InvalidPathName):
                 paths.delete_path(self.paths_dir, bad_name)
+
+    def test_spaces_and_punctuation_are_fine(self):
+        # Found live 2026-07-30: "Water stable bed" was rejected by the
+        # old digits/letters/underscore/hyphen-only rule for no security
+        # reason at all — spaces aren't a path-traversal risk.
+        for name in ["Water stable bed", "Bed #2 (north)", "Ben's patch"]:
+            paths.save_path(self.paths_dir, name, SAMPLE_POINTS)
+            self.assertEqual(paths.load_path(self.paths_dir, name), SAMPLE_POINTS)
+            paths.delete_path(self.paths_dir, name)
+
+    def test_leading_and_trailing_whitespace_is_trimmed(self):
+        paths.save_path(self.paths_dir, "  Waterstablebed  ", SAMPLE_POINTS)
+        self.assertEqual(paths.load_path(self.paths_dir, "Waterstablebed"), SAMPLE_POINTS)
 
 
 if __name__ == "__main__":
