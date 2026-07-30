@@ -246,8 +246,10 @@ network:
   host: 0.0.0.0
   port: 8007
   web_ui: true
-  revert_timeout_s: 30   # how long an unconfirmed change has before recovery profiles are re-applied
 ```
+
+(`revert_timeout_s` removed under v3 — see "v2 → v3" below; recovery/
+confirm goes away entirely.)
 
 ## Testing Decisions
 
@@ -316,6 +318,217 @@ above: no more inline create-or-edit, only select-existing-or-refuse,
 plus explicit per-role profiles (`CoffeebeanWifi` / `CoffeebeanWifiSpare`)
 so the conflict can't arise for the one case (both wifi devices on
 Coffeebean) where it would actually come up day-to-day.
+
+## v2 → v3: removing recovery/confirm, priority-based wifi fallback, live link-quality display (2026-07-30, built — not yet live-tested)
+
+### Why (the incident that prompted this)
+
+`wlan1` (the external dongle) dropped its `CoffeebeanWifiSpare`
+connection overnight with `reason 'ssid-not-found'` at 08:46, retried
+three more times (~25-35s each, ~2 minutes total), then fell back to
+auto-activating `AmundsenHotspot` — unprompted, and on the interface we
+specifically wanted to be the *more* reliable one, not `wlan0`. The
+robot hadn't moved; there was no reason for the AP it had been talking
+to, to vanish. It was only survivable because Ben's own desktop
+happened to be reaching amundsen via `wlan0` at the time — pure luck,
+not something the design guaranteed.
+
+This exposed the actual flaw in v2's recovery/confirm design, not just
+a bug: the confirm-within-`revert_timeout_s` flow assumes the operator
+can still reach the confirm button after the change — but the thing
+changing is often the very link the operator is using to reach
+amundsen at all. Ben's insight: NetworkManager already has its own
+retry/blacklist/fallback logic (that's exactly what produced the
+"3 retries then fall back to hotspot" sequence above) — the 30s
+confirm-or-revert scheme doesn't add safety so much as fight NM's own,
+already-reasonable, recovery behaviour, while adding a real risk of its
+own (a change that breaks the very path needed to confirm it).
+
+### New design
+
+- **One combined Apply button for all three interface cards**
+  (`eth0`, `wlan0`, `wlan1`) instead of a per-card Apply. Recovery
+  dropdowns and the auto-revert timer are removed entirely from the
+  wifi and ethernet cards — this supersedes the "Recovers to" part of
+  "Page shape (v2)" and the whole "Recovery / safe-apply" section
+  above, for these two interface types.
+- `eth0` stays the deliberate out-of-band recovery path — if a wifi
+  change goes wrong, physical/wired access via `eth0` is the fallback,
+  same as it's always effectively been, just now the *only* one, not
+  one of several recovery mechanisms. Ben's own words: "I'll have to be
+  careful, or I will have to connect on eth0 to recover things" —
+  treated as the accepted risk, not something the UI tries to soften
+  further.
+- **Wifi profile choice becomes priority-based, not exclusive-activate.**
+  "Set to X" sets X's `connection.autoconnect-priority` higher (e.g.
+  `10`) than every other client profile eligible for that device
+  (reset to `0`), and any hotspot profile for that device sits at a
+  distinctly *lower* priority (e.g. `-10`) so it's only ever reached
+  once every client profile has been tried and NM has blacklisted them
+  after repeated failures — never a peer choice the way it was this
+  morning. NM's own retry/fallback cascade is then deliberately left to
+  do its job if the chosen profile stops working, instead of a
+  bespoke timer intervening — this is the mechanism now, not a failure
+  case to guard against.
+- **"None" is replaced by a real "Turn off this interface" action**:
+  `nmcli device set <dev> managed no` (reversible with `managed yes`),
+  not `nmcli device disconnect`. Disconnect-only is what today's page
+  actually does for "None", and it doesn't stick — the device stays
+  eligible for NM's autoconnect, which immediately reactivates
+  something (exactly Ben's "'None' doesn't work, because network
+  manager knows better" report). `managed no` genuinely stops NM from
+  touching that device at all. Flagged clearly in the UI as dangerous
+  — same accepted-risk treatment as above.
+
+### Live link-quality display (new)
+
+Two more figures on each interface card, next to the existing
+connected/disconnected text:
+
+- **Signal strength (wifi only), in dBm** — from `iw dev <device>
+  link`'s `signal:` line, not `nmcli`'s 0-100% figure.
+- **Lost packets (all interfaces)** — wifi: `iw dev <device> station
+  dump`'s `tx failed` / `tx retries` (this is exactly what surfaced the
+  AP-not-hearing-the-Pi asymmetry investigated 2026-07-30); ethernet:
+  `ip -s link show <device>`'s RX/TX `errors`/`dropped`.
+
+Updated live, ideally at 1Hz, over a new `/ws/status` websocket —
+reusing `shared/web/static/ws-utils.js`'s existing `connectWs`/
+`fillFields` helpers (same pattern every other service's live page
+already uses), backed by a small periodic snapshot loop in
+`network/app.py`, structurally the same shape as `shared/sysstats.py`'s
+snapshot. If that's more effort than it's worth, a plain page
+auto-refresh (`setInterval(location.reload, 1000)` or a meta-refresh)
+is an explicitly acceptable fallback — Ben's own preference stated up
+front, not a compromise forced on him.
+
+### Force `eth0` link speed to 100M (new config option)
+
+Ben's suspicion, from direct observation: with a switch in the path,
+`eth0` auto-negotiates to 1G; plugged straight into the xNAV650, it's
+100M — and 100M seems to behave better. Plausible even before testing
+further: Gigabit (1000BASE-T) uses all 4 cable pairs with more complex
+encoding/echo-cancellation and a higher clock rate than Fast Ethernet
+(100BASE-TX, 2 pairs, simpler encoding) — both a pickier cable/
+connector requirement and a more likely RF noise source, which matters
+here given the xNAV650's GNSS antenna is already a known-sensitive
+neighbour (same class of concern as the earlier USB3-interference
+finding, just a different culprit).
+
+Add an optional **"Force link speed"** field to the "New ethernet
+configuration" page (Auto / 100 Mbps / 1000 Mbps), via NetworkManager's
+`802-3-ethernet.speed`/`.duplex`/`.auto-negotiate` properties — NM
+requires `auto-negotiate` off and an explicit `duplex` whenever a fixed
+`speed` is set (can't force speed alone); exact property interaction
+to confirm against real `nmcli` behaviour at implementation time, same
+"don't assume, verify live" approach as the rest of this service.
+
+### Open questions — resolved during build (2026-07-30)
+
+- Autoconnect-priority values: built as `10` (selected) / `0` (normal,
+  other client profiles) / `-10` (hotspot profiles) — as suggested
+  above, not otherwise tuned against real roaming behaviour yet.
+- "Turn off this interface" got its own plain client-side `confirm()`
+  on the combined Apply button, only triggered if a wifi card's select
+  is set to "Off" — no network dependency, so it doesn't reintroduce
+  the original confirm-timer problem.
+- `eth0`-alone-as-fallback: left as an accepted risk per the discussion
+  above, not mitigated further — genuinely not addressed by this build,
+  worth keeping in mind.
+
+### "Atomic wifi change" — the whole batch is one intent, not one device at a time (2026-07-30)
+
+Ben's second live test tried to swap `AmundsenHotspot` and `CoffeebeanWifi`
+between `wlan0`/`wlan1` in one combined Apply — and it reported both as
+"already in use", refusing the swap entirely. Root cause: `apply()`
+checked each device's chosen profile against NetworkManager's *current*
+live state, one device at a time — so of course the target looked "in
+use", by the very device it was about to be freed from a moment later
+in the same submission. The whole point of a combined Apply is that
+it's one coordinated intent, not three independent ones.
+
+Fixed: `_validate_batch()` now checks the *whole submitted batch*
+together — a profile already in use elsewhere is only a real conflict
+if that other device *isn't also* moving away from it in this same
+Apply (checked by comparing what that other device itself chose in the
+same form submission, not by re-querying live NM state per device).
+Validation runs fully before anything is applied — either the whole
+batch is valid and all of it happens (`_apply_batch()`), or none of it
+does, one clear error, no partial swaps left half-done.
+
+This also fixed a related priority bug the old per-device design had:
+priorities were previously set separately as each device was processed
+in turn, so a swap's *second* device silently overwrote the *first*
+device's priority assignment (both wifi profiles are unbound/shared,
+so `autoconnect-priority` is a property of the *profile*, not the
+device). `_apply_batch()` now computes priorities once, across every
+wifi profile touched by *any* device in the batch, before activating
+anything — whatever's chosen by any device this Apply gets
+`PRIORITY_SELECTED`, regardless of whether it's normally a hotspot;
+only a profile nobody chose this time keeps the
+hotspot-is-lowest-priority default.
+
+Known remaining limitation, not fixed (inherent to shared/unbound
+profiles + a single scalar priority per profile, not per device — see
+"Connection profiles are shared, not per-device" above): if `wlan0`
+and `wlan1` each want a *different* profile as their own long-term top
+choice, both profiles end up at the same high priority system-wide.
+If one later drops and NetworkManager has to autonomously decide a
+fallback, it can't tell "wlan0's preferred profile" from "wlan1's
+preferred profile" — only "everything explicitly chosen recently vs.
+not". A real fix would need per-device pinning, which this project has
+deliberately avoided (see "Connection profiles are shared, not
+per-device"). Worth knowing about, not urgent enough to solve now.
+
+45 unit tests now (8 new, in a new `test_app.py` covering the batch
+validate/apply logic directly — pure enough to test without a Flask
+request context). One of the new tests caught a real bug in the first
+draft of this fix before it ever reached Ben (an inverted
+"is-it-being-relinquished" check when the other device wasn't part of
+the submitted batch at all).
+
+### First live test (2026-07-30) — two real bugs found and fixed
+
+Ben's first real "test in anger" surfaced two genuine bugs, not just
+rough edges:
+
+1. **`nmcli` calls had no timeout.** Applying `wlan1` → `CoffeebeanWifiSpare`
+   took NetworkManager **58 seconds** to declare `ssid-not-found` and
+   fall back — which it did correctly, per the priority design — but
+   `nm._run()`'s `subprocess.run()` had no timeout, so the Flask
+   request (and the page) just froze for that whole time with zero
+   feedback. Fixed: `_run()` now has a 90s timeout (comfortably above
+   the observed 58s worst case), raising a clean `NmError` instead of
+   hanging forever; `iw`/`ip` calls (used for the link-quality display)
+   got a short 5s safety-net timeout too, since they're local/normally-
+   instant and shouldn't ever need long. The Apply button now also
+   carries a plain-text warning that a wifi change can take up to a
+   minute to return.
+2. **The conflict check had a real race window.** Right after the
+   `wlan1` fallback above, a second Apply set `wlan0` → `AmundsenHotspot`
+   — but `AmundsenHotspot` was, at that exact moment, still
+   *activating* (not yet fully active) on `wlan1` from the fallback.
+   The conflict check (`active_connections()`, built from `nmcli
+   connection show --active`) only sees fully-active connections, so
+   it missed this and let `wlan0`'s activation through — which evicted
+   `AmundsenHotspot` straight back off `wlan1`, the exact
+   same-profile-two-devices conflict v1→v2 was built to prevent, just
+   re-opened by a timing gap the check didn't cover. This combination
+   (a frozen page + a profile yanked mid-activation) most likely left
+   NetworkManager's `wlan1` state confused enough that only a physical
+   unplug/replug cleared it. Fixed: added `connections_in_use()`,
+   built from `nmcli device status`'s CONNECTION column instead —
+   that field is populated the instant a device *starts* using a
+   profile, not just once fully active, closing the race. (A much
+   smaller theoretical TOCTOU window remains between checking and
+   actually activating — not addressed, judged disproportionate for a
+   single-operator admin tool.)
+
+37 unit tests now (4 new: `connections_in_use()`, the timeout
+behaviour). Re-verified read-only after the fix (page renders,
+`/ws/status` streams live figures) — the actual apply/off/priority
+paths still need Ben's own live re-test, now wired directly via
+`eth0` so a stuck wifi change can't cost access to the page itself.
 
 ## Implementation Status (v2, as of 2026-07-26)
 

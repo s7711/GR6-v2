@@ -181,6 +181,113 @@ class TestActiveConnections(unittest.TestCase):
             )
 
 
+class TestConnectionsInUse(unittest.TestCase):
+    def test_maps_name_to_device_including_still_activating(self):
+        # device status's CONNECTION column — includes a device still
+        # mid-activation, unlike `connection show --active` (see
+        # nm.connections_in_use()'s docstring for the live incident
+        # this fixes).
+        out = "wlan0:CoffeebeanWifi\nwlan1:AmundsenHotspot\neth0:OXTS xnav\n"
+        with patch("subprocess.run", return_value=_completed(out)):
+            self.assertEqual(
+                nm.connections_in_use(),
+                {"CoffeebeanWifi": "wlan0", "AmundsenHotspot": "wlan1", "OXTS xnav": "eth0"},
+            )
+
+    def test_no_connection_is_excluded(self):
+        out = "wlan0:CoffeebeanWifi\nwlan1:\n"
+        with patch("subprocess.run", return_value=_completed(out)):
+            self.assertEqual(nm.connections_in_use(), {"CoffeebeanWifi": "wlan0"})
+
+
+class TestSetAutoconnectPriority(unittest.TestCase):
+    def test_calls_connection_modify(self):
+        with patch("subprocess.run", return_value=_completed()) as mock_run:
+            nm.set_autoconnect_priority("CoffeebeanWifi", 10)
+        args = mock_run.call_args[0][0]
+        self.assertIn("connection.autoconnect-priority", args)
+        self.assertIn("10", args)
+        self.assertIn("CoffeebeanWifi", args)
+        self.assertEqual(args[0], "sudo")
+
+
+class TestSetManaged(unittest.TestCase):
+    def test_managed_no(self):
+        with patch("subprocess.run", return_value=_completed()) as mock_run:
+            nm.set_managed("wlan1", False)
+        args = mock_run.call_args[0][0]
+        self.assertIn("wlan1", args)
+        self.assertIn("no", args)
+
+    def test_managed_yes(self):
+        with patch("subprocess.run", return_value=_completed()) as mock_run:
+            nm.set_managed("wlan1", True)
+        args = mock_run.call_args[0][0]
+        self.assertIn("yes", args)
+
+
+class TestIsHotspot(unittest.TestCase):
+    def test_hotspot_profile(self):
+        out = "connection.type:802-11-wireless\n802-11-wireless.mode:ap\n802-11-wireless.ssid:amundsen\nipv4.method:shared\n"
+        with patch("subprocess.run", return_value=_completed(out)):
+            self.assertTrue(nm.is_hotspot("AmundsenHotspot"))
+
+    def test_client_profile(self):
+        out = "connection.type:802-11-wireless\n802-11-wireless.mode:infrastructure\n802-11-wireless.ssid:Coffeebean\nipv4.method:auto\n"
+        with patch("subprocess.run", return_value=_completed(out)):
+            self.assertFalse(nm.is_hotspot("CoffeebeanWifi"))
+
+
+class TestLinkStats(unittest.TestCase):
+    def test_wifi_connected(self):
+        link_out = "Connected to aa:bb:cc:dd:ee:ff (on wlan0)\n\tSSID: Coffeebean\n\tsignal: -58 dBm\n\ttx bitrate: 300.0 MBit/s\n"
+        station_out = "Station aa:bb:cc:dd:ee:ff (on wlan0)\n\ttx failed:\t3\n\ttx retries:\t23345\n"
+        with patch("subprocess.run", side_effect=[
+            _completed(link_out), _completed(station_out),
+        ]):
+            stats = nm.link_stats("wlan0", "wifi")
+        self.assertEqual(stats, {"signal_dbm": -58, "lost_packets": 3})
+
+    def test_wifi_not_connected(self):
+        with patch("subprocess.run", side_effect=[_completed("Not connected.\n"), _completed("")]):
+            stats = nm.link_stats("wlan1", "wifi")
+        self.assertEqual(stats, {"signal_dbm": None, "lost_packets": None})
+
+    def test_ethernet(self):
+        out = (
+            "2: eth0: <BROADCAST> mtu 1500\n"
+            "    link/ether dc:a6:32:db:96:31 brd ff:ff:ff:ff:ff:ff\n"
+            "    RX:  bytes  packets errors dropped  missed   mcast\n"
+            "     196347775 2200250      1       2       0       0\n"
+            "    TX:  bytes  packets errors dropped carrier collsns\n"
+            "       5312555   25002      3       4       0       0\n"
+        )
+        with patch("subprocess.run", return_value=_completed(out)):
+            stats = nm.link_stats("eth0", "ethernet")
+        self.assertEqual(stats, {"signal_dbm": None, "lost_packets": 1 + 2 + 3 + 4})
+
+
+class TestCreateEthernetSpeed(unittest.TestCase):
+    def test_forces_speed_and_duplex_when_given(self):
+        with patch("nm._connection_exists", return_value=False), \
+             patch("subprocess.run", return_value=_completed()) as mock_run:
+            nm.create_ethernet("OXTS xnav", speed_mbps=100)
+        args = mock_run.call_args[0][0]
+        self.assertIn("802-3-ethernet.speed", args)
+        self.assertIn("100", args)
+        self.assertIn("802-3-ethernet.auto-negotiate", args)
+        self.assertIn("no", args)
+        self.assertIn("802-3-ethernet.duplex", args)
+        self.assertIn("full", args)
+
+    def test_no_speed_args_when_not_given(self):
+        with patch("nm._connection_exists", return_value=False), \
+             patch("subprocess.run", return_value=_completed()) as mock_run:
+            nm.create_ethernet("OXTS xnav")
+        args = mock_run.call_args[0][0]
+        self.assertNotIn("802-3-ethernet.speed", args)
+
+
 class TestRun(unittest.TestCase):
     def test_raises_nm_error_on_failure(self):
         with patch("subprocess.run", return_value=_completed(returncode=1, stderr="boom")):
@@ -196,6 +303,21 @@ class TestRun(unittest.TestCase):
         with patch("subprocess.run", return_value=_completed()) as mock_run:
             nm._run(["connection", "show"])
         self.assertEqual(mock_run.call_args[0][0][0], "nmcli")
+
+    def test_raises_nm_error_on_timeout(self):
+        # A genuinely stuck nmcli call must fail cleanly, not hang the
+        # request forever — see network-prd.md's live incident (needed
+        # a physical unplug/replug, 2026-07-30).
+        import subprocess as _subprocess
+        with patch("subprocess.run", side_effect=_subprocess.TimeoutExpired(cmd="nmcli", timeout=90)):
+            with self.assertRaises(nm.NmError):
+                nm._run(["connection", "up", "wlan1"])
+
+    def test_passes_a_timeout_to_subprocess_run(self):
+        with patch("subprocess.run", return_value=_completed()) as mock_run:
+            nm._run(["connection", "show"])
+        self.assertIn("timeout", mock_run.call_args.kwargs)
+        self.assertGreater(mock_run.call_args.kwargs["timeout"], 0)
 
 
 if __name__ == "__main__":

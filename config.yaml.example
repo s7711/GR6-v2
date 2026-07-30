@@ -87,7 +87,6 @@ services:
     host: 0.0.0.0
     port: 8007
     web_ui: true
-    revert_timeout_s: 30              # how long an unconfirmed network change has before recovery profiles are re-applied — see network-prd.md
 
   wheelspeed:
     unit: robot-wheelspeed.service

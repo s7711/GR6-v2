@@ -39,6 +39,14 @@
         <label class="form-label small mb-0">Gateway</label>
         <input name="gateway" class="form-control form-control-sm">
       </div>
+      <div class="col-auto">
+        <label class="form-label small mb-0">Force link speed</label>
+        <select name="speed" class="form-select form-select-sm">
+          <option value="">Auto</option>
+          <option value="100">100 Mbps</option>
+          <option value="1000">1000 Mbps</option>
+        </select>
+      </div>
       <div class="col-12">
         <button type="submit" class="btn btn-primary btn-sm">Create</button>
         <a href="{{ url_for('index') }}" class="btn btn-outline-secondary btn-sm">Cancel</a>

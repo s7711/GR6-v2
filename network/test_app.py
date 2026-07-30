@@ -1,0 +1,102 @@
+import unittest
+from unittest.mock import patch
+
+import app
+
+
+def _iface(device, iface_type, connection, state="connected", matching=None):
+    return {
+        "device": device, "type": iface_type, "connection": connection, "state": state,
+        "matching_connections": matching or [],
+    }
+
+
+class TestValidateBatch(unittest.TestCase):
+    def test_allows_a_genuine_swap(self):
+        # wlan0 wants what wlan1 currently has, and vice versa — see
+        # network-prd.md's "atomic wifi change": this must be allowed,
+        # it's the whole point of a combined batch Apply.
+        desired = {"wlan0": "AmundsenHotspot", "wlan1": "CoffeebeanWifi"}
+        with patch("nm.connections_in_use", return_value={"CoffeebeanWifi": "wlan0", "AmundsenHotspot": "wlan1"}):
+            errors = app._validate_batch(desired)
+        self.assertEqual(errors, [])
+
+    def test_blocks_a_profile_still_wanted_by_its_current_holder(self):
+        # wlan0 wants CoffeebeanWifi, but wlan1 (who has it) isn't
+        # relinquishing it in this same batch — a genuine conflict.
+        desired = {"wlan0": "CoffeebeanWifi", "wlan1": "CoffeebeanWifi"}
+        with patch("nm.connections_in_use", return_value={"CoffeebeanWifi": "wlan1"}):
+            errors = app._validate_batch(desired)
+        self.assertTrue(errors)
+
+    def test_blocks_a_profile_not_in_this_batch_at_all(self):
+        desired = {"wlan0": "CoffeebeanWifiSpare"}
+        with patch("nm.connections_in_use", return_value={"CoffeebeanWifiSpare": "wlan1"}):
+            errors = app._validate_batch(desired)
+        self.assertTrue(errors)
+
+    def test_two_devices_choosing_the_same_profile_is_an_error(self):
+        desired = {"wlan0": "CoffeebeanWifi", "wlan1": "CoffeebeanWifi"}
+        with patch("nm.connections_in_use", return_value={}):
+            errors = app._validate_batch(desired)
+        self.assertTrue(any("both wlan0 and wlan1" in e or "both" in e for e in errors))
+
+    def test_off_and_none_values_are_never_conflicts(self):
+        desired = {"wlan0": app.OFF_VALUE, "eth0": app.NONE_VALUE}
+        with patch("nm.connections_in_use", return_value={}):
+            errors = app._validate_batch(desired)
+        self.assertEqual(errors, [])
+
+
+class TestApplyBatch(unittest.TestCase):
+    def test_swap_sets_both_chosen_profiles_to_selected_priority(self):
+        iface_by_device = {
+            "wlan0": _iface("wlan0", "wifi", "CoffeebeanWifi", matching=["CoffeebeanWifi", "AmundsenHotspot"]),
+            "wlan1": _iface("wlan1", "wifi", "AmundsenHotspot", matching=["CoffeebeanWifi", "AmundsenHotspot"]),
+        }
+        desired = {"wlan0": "AmundsenHotspot", "wlan1": "CoffeebeanWifi"}
+        with patch("nm.is_hotspot", side_effect=lambda n: n == "AmundsenHotspot"), \
+             patch("nm.set_autoconnect_priority") as mock_priority, \
+             patch("nm.activate_connection") as mock_activate:
+            app._apply_batch(iface_by_device, desired)
+
+        priorities = dict(call.args for call in mock_priority.call_args_list)
+        # Both are "selected" this batch (each by a different device) —
+        # neither should end up at the hotspot-is-lowest default.
+        self.assertEqual(priorities["AmundsenHotspot"], app.PRIORITY_SELECTED)
+        self.assertEqual(priorities["CoffeebeanWifi"], app.PRIORITY_SELECTED)
+
+        activated = {call.kwargs.get("device", call.args[1] if len(call.args) > 1 else None): call.args[0]
+                     for call in mock_activate.call_args_list}
+        self.assertEqual(activated.get("wlan0"), "AmundsenHotspot")
+        self.assertEqual(activated.get("wlan1"), "CoffeebeanWifi")
+
+    def test_untouched_hotspot_still_gets_low_priority(self):
+        iface_by_device = {
+            "wlan0": _iface("wlan0", "wifi", "CoffeebeanWifi", matching=["CoffeebeanWifi", "AmundsenHotspot"]),
+        }
+        desired = {"wlan0": "CoffeebeanWifi"}  # unchanged — no-op activation
+        with patch("nm.is_hotspot", side_effect=lambda n: n == "AmundsenHotspot"), \
+             patch("nm.set_autoconnect_priority") as mock_priority, \
+             patch("nm.activate_connection") as mock_activate:
+            app._apply_batch(iface_by_device, desired)
+
+        priorities = dict(call.args for call in mock_priority.call_args_list)
+        self.assertEqual(priorities["AmundsenHotspot"], app.PRIORITY_HOTSPOT)
+        self.assertEqual(priorities["CoffeebeanWifi"], app.PRIORITY_SELECTED)
+        mock_activate.assert_not_called()  # already set to this — nothing to do
+
+    def test_off_value_turns_off_managed(self):
+        iface_by_device = {"wlan1": _iface("wlan1", "wifi", "AmundsenHotspot", matching=["AmundsenHotspot"])}
+        desired = {"wlan1": app.OFF_VALUE}
+        with patch("nm.is_hotspot", return_value=True), \
+             patch("nm.set_autoconnect_priority"), \
+             patch("nm.set_managed") as mock_managed, \
+             patch("nm.activate_connection") as mock_activate:
+            app._apply_batch(iface_by_device, desired)
+        mock_managed.assert_called_once_with("wlan1", False)
+        mock_activate.assert_not_called()
+
+
+if __name__ == "__main__":
+    unittest.main()

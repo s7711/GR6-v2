@@ -8,15 +8,7 @@
 <div class="alert alert-{{ category }}">{{ message }}</div>
 {% endfor %}
 
-{% if revert_pending %}
-<div class="alert alert-warning d-flex justify-content-between align-items-center">
-  <div>A change is pending confirmation — every interface with a recovery setting will revert automatically in
-    up to {{ revert_timeout_s }}s if not confirmed.</div>
-  <form method="post" action="{{ url_for('confirm') }}">
-    <button type="submit" class="btn btn-warning">Confirm change is good</button>
-  </form>
-</div>
-{% endif %}
+<form method="post" action="{{ url_for('apply') }}" id="network-form">
 
 {% for iface in interfaces %}
 <div class="card mb-4">
@@ -29,13 +21,19 @@
       {% if iface.mode %} | Mode: {{ iface.mode }}{% endif %}
       {% if iface.ssid %} | SSID: {{ iface.ssid }}{% endif %}
       | IPv4: {{ iface.ipv4_method or '—' }}{% if iface.ipv4_address %} ({{ iface.ipv4_address }}){% endif %}
+      {% if iface.type == 'wifi' %} | Signal: <span id="{{ iface.device }}-signal_dbm">{{ iface.link_stats.signal_dbm if iface.link_stats.signal_dbm is not none else '—' }}</span> dBm{% endif %}
+      | Lost packets: <span id="{{ iface.device }}-lost_packets">{{ iface.link_stats.lost_packets if iface.link_stats.lost_packets is not none else '—' }}</span>
     </div>
 
     <div class="text-body-secondary small mb-2">Set to</div>
-    <form method="post" action="{{ url_for('apply_interface', device=iface.device) }}" class="row g-2 align-items-center mb-4">
+    <div class="row g-2 align-items-center">
       <div class="col-auto">
-        <select name="connection_name" class="form-select form-select-sm">
+        <select name="set_{{ iface.device }}" class="form-select form-select-sm{% if iface.type == 'wifi' %} off-select{% endif %}">
+          {% if iface.type == 'wifi' %}
+          <option value="{{ off_value }}" {{ "selected" if iface.state == "unmanaged" }}>Off (stop managing this interface)</option>
+          {% else %}
           <option value="{{ none_value }}" {{ "selected" if not iface.connection }}>None (disconnected)</option>
+          {% endif %}
           {% for name in iface.matching_connections %}
           <option value="{{ name }}" {{ "selected" if name == iface.connection }}>
             {{ name }} — {{ connection_descriptions[name] }}
@@ -44,29 +42,17 @@
           {% endfor %}
         </select>
       </div>
-      <div class="col-auto"><button type="submit" class="btn btn-primary btn-sm">Apply</button></div>
-    </form>
-
-    <div class="text-body-secondary small mb-2">Recovers to — what this interface falls back to if a change isn't confirmed</div>
-    <form method="post" action="{{ url_for('set_recovery', device=iface.device) }}" class="row g-2 align-items-center">
-      <div class="col-auto">
-        <select name="recovery_connection" class="form-select form-select-sm recovery-select">
-          <option value="" data-description="Nothing happens to this interface if a change elsewhere isn't confirmed."
-                  {{ "selected" if not iface.recovery_connection }}>Don't care — leave alone</option>
-          <option value="{{ recovery_none_value }}" data-description="This interface is actively disconnected if a change elsewhere isn't confirmed."
-                  {{ "selected" if iface.recovery_connection == recovery_none_value }}>None (disconnect)</option>
-          {% for name in iface.matching_connections %}
-          <option value="{{ name }}" data-description="{{ connection_descriptions[name] }}"
-                  {{ "selected" if name == iface.recovery_connection }}>{{ name }}</option>
-          {% endfor %}
-        </select>
-      </div>
-      <div class="col-auto"><button type="submit" class="btn btn-outline-secondary btn-sm">Set recovery</button></div>
-      <div class="col-auto recovery-description text-body-secondary small"></div>
-    </form>
+    </div>
   </div>
 </div>
 {% endfor %}
+
+<div class="mb-4">
+  <button type="submit" class="btn btn-primary">Apply</button>
+  <span class="text-body-secondary small ms-2">A wifi change can take up to a minute — the page won't respond until it's done.</span>
+</div>
+
+</form>
 
 <div class="mb-4">
   <a href="{{ url_for('new_wifi') }}" class="btn btn-outline-primary btn-sm">New wifi configuration</a>
@@ -76,21 +62,24 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="/static/ws-utils.js"></script>
 <script>
-// Recovery options are just bare NetworkManager connection names
-// (e.g. "CoffeebeanWifi"), meaningless on their own — show what the
-// currently-selected one actually means as plain text below the
-// dropdown (not a tooltip — this page is as likely to be used from a
-// phone/tablet, which has no hover state to reveal one).
-function updateRecoveryDescription(select) {
-  const form = select.closest("form");
-  const description = form.querySelector(".recovery-description");
-  description.textContent = select.selectedOptions[0].dataset.description || "";
-}
+connectWs("/ws/status", (data) => {
+  for (const [device, stats] of Object.entries(data)) {
+    fillFields(device + "-", stats);
+  }
+});
 
-document.querySelectorAll(".recovery-select").forEach((select) => {
-  updateRecoveryDescription(select);
-  select.addEventListener("change", () => updateRecoveryDescription(select));
+// "Off" genuinely stops NetworkManager managing the device — dangerous
+// enough (network-prd.md's "Turn off this interface") to deserve its
+// own plain confirm, separate from the removed auto-revert timer this
+// page used to have.
+document.getElementById("network-form").addEventListener("submit", (event) => {
+  const turningOff = Array.from(document.querySelectorAll(".off-select"))
+    .some((select) => select.value === "{{ off_value }}");
+  if (turningOff && !confirm("This will stop NetworkManager managing at least one wifi interface. Continue?")) {
+    event.preventDefault();
+  }
 });
 </script>
 {% endblock %}
