@@ -136,11 +136,14 @@ general-purpose sysadmin tool.
 4. Motor control, split into `drive` (low-level: motor velocity, water
    pump, ultrasonics, encoder/PID telemetry, over USB serial to the
    motor-controller microcontroller) — done, see `drive/drive-prd.md` —
-   then `navigate` (waypoint/path-following), `missions` (sequencing
-   multiple stops + pump actions), and `safety` (obstacle-avoidance
-   decisions, once the ultrasonics are trusted) built on top of it, in
-   that order. These later three are the safety-critical pieces — most
-   confidence wanted before touching them, hence saved for last.
+   then `navigate` (waypoint/path-following) — done, **field-proven
+   2026-07-30**: a real autonomous run (`Waterstablebed`, 29 points,
+   30.2m) completed end-to-end with no abort, watering a real bed —
+   then `missions` (sequencing multiple stops + pump actions), and
+   `safety` (obstacle-avoidance decisions, once the ultrasonics are
+   trusted) built on top of it, in that order. These later two are the
+   safety-critical pieces — most confidence wanted before touching
+   them, hence saved for last.
 5. Network sharing (wifi -> ethernet internet sharing) — **in progress,
    see `network/network-prd.md`**. Originally identified while testing
    `aruco`/`oxts-nav` together: the xNAV650 sits on `eth0` (already

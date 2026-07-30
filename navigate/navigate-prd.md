@@ -508,6 +508,13 @@ without data.
   halves, rather than asking one continuous pure-pursuit pass to handle
   both cruising and tight turns well.
 
+  **Field-verified (2026-07-30)**: `cte_gain: 0.3` holds up — a full
+  autonomous run on a new path (`Waterstablebed`, 29 points, 30.2m)
+  completed end-to-end with no abort and no visible oscillation,
+  cross-track error down to 1.3cm by the end (`last_run_debug.jsonl`).
+  First real "point of the whole project" run — it watered an actual
+  bed, not just a test path.
+
 ## Resolved design questions
 
 - **Differential age**: already available with no upstream change

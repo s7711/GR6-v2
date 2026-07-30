@@ -47,7 +47,9 @@ Early days. Nine of the planned services exist so far:
   `/command/auto`, aborting cleanly on a per-segment clearance breach or
   poor GPS accuracy rather than one fixed global tolerance. Pages for
   running a saved path (with a live map), recording a new one, and
-  managing saved paths. See `navigate/navigate-prd.md`.
+  managing saved paths. See `navigate/navigate-prd.md`. **Field-proven
+  (2026-07-30)**: a real autonomous run (`Waterstablebed`, 29 points,
+  30.2m) completed end-to-end with no abort, watering a real bed.
 - **`manager`** — a home-screen-style launcher: icon-grid to jump to
   each service's own web UI, a services table (status/start/stop/
   restart/journal), and a plain-text editor for the shared config file.
