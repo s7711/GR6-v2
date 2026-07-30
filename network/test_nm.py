@@ -266,6 +266,24 @@ class TestLinkStats(unittest.TestCase):
             stats = nm.link_stats("eth0", "ethernet")
         self.assertEqual(stats, {"signal_dbm": None, "lost_packets": 1 + 2 + 3 + 4})
 
+    def test_wifi_survives_a_wedged_iw_call(self):
+        # Live incident 2026-07-30: the wlan1 USB dongle's firmware
+        # crash/reload wedged the kernel's netlink handling, timing out
+        # even `ip -s link show eth0` (an unrelated interface) — before
+        # the fix, the resulting TimeoutExpired went uncaught and
+        # crashed the whole /ws/status snapshot and the main page for
+        # every interface, not just the one actually broken.
+        import subprocess as _subprocess
+        with patch("subprocess.run", side_effect=_subprocess.TimeoutExpired(cmd="iw", timeout=5)):
+            stats = nm.link_stats("wlan1", "wifi")
+        self.assertEqual(stats, {"signal_dbm": None, "lost_packets": None})
+
+    def test_ethernet_survives_a_wedged_ip_call(self):
+        import subprocess as _subprocess
+        with patch("subprocess.run", side_effect=_subprocess.TimeoutExpired(cmd="ip", timeout=5)):
+            stats = nm.link_stats("eth0", "ethernet")
+        self.assertEqual(stats, {"signal_dbm": None, "lost_packets": None})
+
 
 class TestCreateEthernetSpeed(unittest.TestCase):
     def test_forces_speed_and_duplex_when_given(self):

@@ -19,6 +19,27 @@
 </div>
 {% endmacro %}
 
+{# Same as section(), but each row is a Kalman filter state estimate
+   with its own accuracy — shown as "value ± accuracy" in one cell,
+   rather than as separate rows, since the two only mean anything
+   together. NCOM only for now (see status-GAP* rows below) — these
+   fields aren't decoded from UCOM yet. #}
+{% macro section_acc(title, rows) %}
+<div class="card mb-4">
+  <div class="card-body">
+    <div class="text-body-secondary small mb-2">{{ title }}</div>
+    <table class="table">
+      <thead><tr><th>Measurement</th><th>Value</th><th>Units</th></tr></thead>
+      <tbody>
+        {% for label, id, acc_id, unit in rows %}
+        <tr><td>{{ label }}</td><td><span id="{{ id }}">—</span> ± <span id="{{ acc_id }}">—</span></td><td>{{ unit }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endmacro %}
+
 {{ section("Navigation Status", [
   ("Navigation status", "nav-InsNavMode", ""),
   ("GPS time", "nav-GpsTime", ""),
@@ -80,16 +101,19 @@
   ("Wheel speed", "status-InnWSpeedFilt", ""),
 ]) }}
 
-{{ section("IMU", [
-  ("Gyro X bias", "status-WxBias", "deg/s"),
-  ("Gyro Y bias", "status-WyBias", "deg/s"),
-  ("Gyro Z bias", "status-WzBias", "deg/s"),
-  ("Gyro X scale factor", "status-WxSf", ""),
-  ("Gyro Y scale factor", "status-WySf", ""),
-  ("Gyro Z scale factor", "status-WzSf", ""),
-  ("Accelerometer X bias", "status-AxBias", "m/s²"),
-  ("Accelerometer Y bias", "status-AyBias", "m/s²"),
-  ("Accelerometer Z bias", "status-AzBias", "m/s²"),
+{{ section_acc("Kalman filter states", [
+  ("Gyro X bias", "status-WxBias", "status-WxBiasAcc", "deg/s"),
+  ("Gyro Y bias", "status-WyBias", "status-WyBiasAcc", "deg/s"),
+  ("Gyro Z bias", "status-WzBias", "status-WzBiasAcc", "deg/s"),
+  ("Gyro X scale factor", "status-WxSf", "status-WxSfAcc", "ppm"),
+  ("Gyro Y scale factor", "status-WySf", "status-WySfAcc", "ppm"),
+  ("Gyro Z scale factor", "status-WzSf", "status-WzSfAcc", "ppm"),
+  ("Accelerometer X bias", "status-AxBias", "status-AxBiasAcc", "m/s²"),
+  ("Accelerometer Y bias", "status-AyBias", "status-AyBiasAcc", "m/s²"),
+  ("Accelerometer Z bias", "status-AzBias", "status-AzBiasAcc", "m/s²"),
+  ("IMU-to-antenna lever arm X", "status-GAPx", "status-GAPxAcc", "m"),
+  ("IMU-to-antenna lever arm Y", "status-GAPy", "status-GAPyAcc", "m"),
+  ("IMU-to-antenna lever arm Z", "status-GAPz", "status-GAPzAcc", "m"),
 ]) }}
 
 {{ section("Internal timing", [

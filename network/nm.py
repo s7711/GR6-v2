@@ -277,22 +277,34 @@ def link_stats(device: str, device_type: str) -> dict:
 _LOCAL_CMD_TIMEOUT_S = 5
 
 
+def _run_local(args: list[str]) -> str | None:
+    """Runs a local iw/ip query, returning None (rather than raising) if
+    it hits _LOCAL_CMD_TIMEOUT_S — found live 2026-07-30: the wlan1 USB
+    dongle's firmware crash/reload wedges the kernel's netlink handling
+    for a few seconds, which stalled `iw`/`ip` for *every* interface
+    (including unrelated ones like eth0), not just wlan1. The timeout
+    itself already existed as a safety net (see _LOCAL_CMD_TIMEOUT_S's
+    comment), but nothing caught the resulting TimeoutExpired — so it
+    crashed /ws/status's whole snapshot (every interface, 500) and the
+    main page, rather than just leaving one interface's stats blank."""
+    try:
+        return subprocess.run(args, capture_output=True, text=True, timeout=_LOCAL_CMD_TIMEOUT_S).stdout
+    except subprocess.TimeoutExpired:
+        return None
+
+
 def _wifi_link_stats(device: str) -> dict:
     signal_dbm = None
-    link_out = subprocess.run(
-        ["iw", "dev", device, "link"], capture_output=True, text=True, timeout=_LOCAL_CMD_TIMEOUT_S
-    ).stdout
-    for line in link_out.splitlines():
+    link_out = _run_local(["iw", "dev", device, "link"])
+    for line in (link_out or "").splitlines():
         line = line.strip()
         if line.startswith("signal:"):
             # e.g. "signal: -58 dBm"
             signal_dbm = int(line.split(":", 1)[1].strip().split()[0])
 
     tx_failed = None
-    station_out = subprocess.run(
-        ["iw", "dev", device, "station", "dump"], capture_output=True, text=True, timeout=_LOCAL_CMD_TIMEOUT_S
-    ).stdout
-    for line in station_out.splitlines():
+    station_out = _run_local(["iw", "dev", device, "station", "dump"])
+    for line in (station_out or "").splitlines():
         line = line.strip()
         if line.startswith("tx failed:"):
             tx_failed = int(line.split(":", 1)[1].strip())
@@ -301,9 +313,9 @@ def _wifi_link_stats(device: str) -> dict:
 
 
 def _ethernet_lost_packets(device: str) -> int | None:
-    out = subprocess.run(
-        ["ip", "-s", "link", "show", device], capture_output=True, text=True, timeout=_LOCAL_CMD_TIMEOUT_S
-    ).stdout
+    out = _run_local(["ip", "-s", "link", "show", device])
+    if out is None:
+        return None
     lines = out.splitlines()
     total = 0
     found = False
