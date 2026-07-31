@@ -214,6 +214,39 @@ def api_delete_path(name):
     return "", 204
 
 
+@app.route("/api/paths/<name>", methods=["POST"])
+def api_save_path(name):
+    """Save (or overwrite) a path from the Edit map page's in-browser
+    point array — the write-side counterpart to the GET/DELETE above.
+    Unlike /record/save (which saves the server-side recording buffer),
+    the edited points come entirely from the request body: the editor
+    never uses the recording buffer at all."""
+    payload = request.get_json(force=True)
+    points = payload["points"]
+    if len(points) < 2:
+        abort(400)
+    try:
+        paths.save_path(PATHS_DIR, name, points)
+    except paths.InvalidPathName:
+        abort(400)
+    return "", 204
+
+
+@app.route("/api/project", methods=["POST"])
+def api_project():
+    """{lat, lon} -> {lat, lon}, projected bearing_deg/distance_m
+    forward — thin wrapper over geometry.project_forward so the Edit
+    map page's N/S/E/W buttons use exactly the same maths as every
+    other manual path edit, rather than a second, JS-side
+    approximation of it (see navigate-prd.md's "Path editing")."""
+    payload = request.get_json(force=True)
+    new_lat, new_lon = geometry.project_forward(
+        float(payload["lat"]), float(payload["lon"]),
+        float(payload["bearing_deg"]), float(payload["distance_m"]),
+    )
+    return jsonify({"lat": new_lat, "lon": new_lon})
+
+
 # --- Recording (create-path page) ---
 
 

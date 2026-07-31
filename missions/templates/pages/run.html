@@ -1,0 +1,89 @@
+{# title: Run #}
+{% extends "base.html" %}
+{% block title %}GR6 — Missions{% endblock %}
+
+{% block content %}
+<div class="row g-3 mb-3">
+  <div class="col-12 col-md-6">
+    <div class="card">
+      <div class="card-body">
+        <div class="mb-2">
+          <label class="form-label">Mission</label>
+          <select id="mission-select" class="form-select">
+            <option value="">-- choose a mission --</option>
+            {% for m in missions %}
+            <option value="{{ m.name }}" data-step-count="{{ m.step_count }}">{{ m.name }} ({{ m.step_count }} steps)</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="mb-2">
+          <label class="form-label">Start from step</label>
+          <select id="start-step" class="form-select"></select>
+        </div>
+        <button id="start-btn" class="btn btn-success me-2">Start</button>
+        <button id="stop-btn" class="btn btn-danger">Stop</button>
+        <div id="start-message" class="text-body-secondary small mt-2"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-md-6">
+    <div class="card">
+      <div class="card-body">
+        <table class="table table-sm mb-0">
+          <tbody>
+            <tr><th scope="row">Mission</th><td><span id="stat-mission_name">—</span></td></tr>
+            <tr><th scope="row">State</th><td><span id="stat-state">—</span> <span id="stat-abort_reason" class="text-danger small"></span></td></tr>
+            <tr><th scope="row">Step</th><td><span id="stat-current_step_index">—</span> / <span id="stat-step_count">—</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const missionSelect = document.getElementById("mission-select");
+const startStepSelect = document.getElementById("start-step");
+
+function fillStartSteps() {
+  const opt = missionSelect.selectedOptions[0];
+  const stepCount = opt ? parseInt(opt.dataset.stepCount || "0", 10) : 0;
+  startStepSelect.innerHTML = "";
+  for (let i = 0; i < stepCount; i++) {
+    const o = document.createElement("option");
+    o.value = i;
+    o.textContent = `${i}`;
+    startStepSelect.appendChild(o);
+  }
+}
+missionSelect.addEventListener("change", fillStartSteps);
+
+const preselect = new URLSearchParams(window.location.search).get("mission");
+if (preselect) missionSelect.value = preselect;
+fillStartSteps();
+
+document.getElementById("start-btn").addEventListener("click", () => {
+  const name = missionSelect.value;
+  if (!name) { alert("Choose a mission first."); return; }
+  const start_index = parseInt(startStepSelect.value || "0", 10);
+  fetch("/control/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, start_index }),
+  }).then((r) => r.json()).then((result) => {
+    document.getElementById("start-message").textContent = result.ok === false ? (result.reason || "Couldn't start.") : "";
+  });
+});
+
+document.getElementById("stop-btn").addEventListener("click", () => {
+  fetch("/control/stop", { method: "POST" });
+});
+
+connectWs("/ws/missions", (msg) => {
+  fillFields("stat-", msg);
+});
+</script>
+{% endblock %}

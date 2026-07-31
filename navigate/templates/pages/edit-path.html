@@ -1,0 +1,400 @@
+{# title: Edit Path #}
+{% extends "base.html" %}
+{% block title %}GR6 — Edit Path{% endblock %}
+
+{% block content %}
+<div id="no-path-message" class="alert alert-warning d-none">
+  No path selected — go to <a href="/pages/paths">Paths</a> and press Edit on one.
+</div>
+
+<div id="editor" class="row g-3 mb-3">
+  <div class="col-12 col-md-4 order-md-2">
+    <div class="card mb-3">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+          <label class="form-label mb-0">Point</label>
+          <div>
+            <button id="prev-point" class="btn btn-sm btn-outline-secondary">&larr; Prev</button>
+            <button id="next-point" class="btn btn-sm btn-outline-secondary">Next &rarr;</button>
+          </div>
+        </div>
+        <select id="point-select" class="form-select mb-3"></select>
+
+        <div class="row g-2 mb-2">
+          <div class="col-6">
+            <label class="form-label mb-0">Lat</label>
+            <input id="point-lat" type="number" step="any" class="form-control form-control-sm">
+          </div>
+          <div class="col-6">
+            <label class="form-label mb-0">Lon</label>
+            <input id="point-lon" type="number" step="any" class="form-control form-control-sm">
+          </div>
+        </div>
+
+        <div class="row g-2 mb-3">
+          <div class="col-4">
+            <label class="form-label mb-0">Speed (m/s)</label>
+            <select id="point-speed" class="form-select form-select-sm">
+              <option value="0.2">0.2</option>
+              <option value="0.3">0.3</option>
+              <option value="0.4">0.4</option>
+              <option value="0.5">0.5</option>
+              <option value="0.6">0.6</option>
+              <option value="0.7">0.7</option>
+              <option value="0.8">0.8</option>
+            </select>
+          </div>
+          <div class="col-4">
+            <label class="form-label mb-0">Clearance (m)</label>
+            <select id="point-clearance" class="form-select form-select-sm">
+              <option value="0.1">0.1</option>
+              <option value="0.2">0.2</option>
+              <option value="0.5">0.5</option>
+              <option value="1.0">1.0</option>
+              <option value="2.0">2.0</option>
+            </select>
+          </div>
+          <div class="col-4">
+            <label class="form-label mb-0">Pump</label>
+            <div class="form-check mt-1">
+              <input id="point-pump" class="form-check-input" type="checkbox">
+              <label class="form-check-label" for="point-pump">On</label>
+            </div>
+          </div>
+        </div>
+
+        <label class="form-label mb-1">Move point</label>
+        <div class="d-flex gap-2 mb-2">
+          <select id="move-distance" class="form-select form-select-sm">
+            <option value="0.01">1 cm</option>
+            <option value="0.02">2 cm</option>
+            <option value="0.05">5 cm</option>
+            <option value="0.10" selected>10 cm</option>
+            <option value="0.20">20 cm</option>
+            <option value="0.50">50 cm</option>
+            <option value="1">1 m</option>
+            <option value="2">2 m</option>
+            <option value="5">5 m</option>
+          </select>
+        </div>
+        <div class="d-grid gap-1 mb-3" style="grid-template-columns: repeat(3, 1fr); display: grid;">
+          <div></div><button id="move-n" class="btn btn-outline-secondary btn-sm">North</button><div></div>
+          <button id="move-w" class="btn btn-outline-secondary btn-sm">West</button><div></div>
+          <button id="move-e" class="btn btn-outline-secondary btn-sm">East</button>
+          <div></div><button id="move-s" class="btn btn-outline-secondary btn-sm">South</button><div></div>
+        </div>
+
+        <div class="d-flex gap-2 mb-2">
+          <button id="insert-ahead" class="btn btn-outline-primary btn-sm">Insert ahead</button>
+          <button id="insert-behind" class="btn btn-outline-primary btn-sm">Insert behind</button>
+        </div>
+        <div class="d-flex gap-2 mb-2">
+          <button id="delete-point" class="btn btn-outline-danger btn-sm">Delete point</button>
+          <button id="undo" class="btn btn-outline-secondary btn-sm">Undo</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-body">
+        <button id="save-btn" class="btn btn-success w-100">Save&hellip;</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-md-8 order-md-1">
+    <div id="map-wrapper" style="position: relative; width: 100%;">
+      <canvas id="map-canvas" style="display: block; width: 100%; height: 100%;"></canvas>
+      <div class="btn-group-vertical position-absolute top-0 end-0 m-2" role="group">
+        <button type="button" class="btn btn-sm zoom-btn" data-zoom="auto">Auto</button>
+        <button type="button" class="btn btn-sm zoom-btn" data-zoom="5">5 m</button>
+        <button type="button" class="btn btn-sm zoom-btn" data-zoom="20">20 m</button>
+        <button type="button" class="btn btn-sm zoom-btn" data-zoom="50">50 m</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="save-modal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Save path</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <label class="form-label">Filename</label>
+        <input id="save-filename" type="text" class="form-control">
+        <div id="save-overwrite-note" class="text-warning small mt-2 d-none">
+          A path with this name already exists — saving will overwrite it.
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="save-continue" type="button" class="btn btn-outline-success">Save and continue</button>
+        <button id="save-exit" type="button" class="btn btn-success">Save and exit mapping</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/geomap.js"></script>
+<script>
+const MIN_GAP_AFTER_INSERT_M = 0.20;
+const SELECTED_COLOR = "#fd7e14";
+
+const params = new URLSearchParams(window.location.search);
+let pathName = params.get("name");
+
+if (!pathName) {
+  document.getElementById("no-path-message").classList.remove("d-none");
+  document.getElementById("editor").classList.add("d-none");
+}
+
+let points = []; // [{lat, lon, speed_mps, pump, clearance_m}, ...]
+let selectedIndex = 0;
+let dirty = false;
+let undoStack = [];
+let existingNames = [];
+
+const map = createGeoMap(document.getElementById("map-canvas"), document.getElementById("map-wrapper"), ".zoom-btn");
+map.setZoom("auto");
+
+// Equirectangular approximation, fine at this scale — same approach
+// used client-side elsewhere (e.g. create-path.html's duplicate-point
+// check), not a precise geodesy calculation.
+function distanceMetres(lat1, lon1, lat2, lon2) {
+  const metresPerDegLat = 111320;
+  const metresPerDegLon = 111320 * Math.cos((lat1 * Math.PI) / 180);
+  const dNorth = (lat2 - lat1) * metresPerDegLat;
+  const dEast = (lon2 - lon1) * metresPerDegLon;
+  return Math.hypot(dNorth, dEast);
+}
+
+function pushUndo() {
+  undoStack.push(JSON.parse(JSON.stringify(points)));
+}
+
+function redraw() {
+  map.setLayer("points", points, { color: "#6c757d", dots: true, dotRadius: 4, labels: true });
+  const sel = points[selectedIndex];
+  map.setLayer("selected", sel ? [sel] : [], { color: SELECTED_COLOR, dots: true, dotRadius: 6, line: false });
+  if (sel) map.setCenter(sel.lat, sel.lon);
+  map.draw();
+}
+
+function fillSidebar() {
+  const select = document.getElementById("point-select");
+  select.innerHTML = "";
+  points.forEach((_p, i) => {
+    const opt = document.createElement("option");
+    opt.value = i;
+    opt.textContent = `${i}`;
+    select.appendChild(opt);
+  });
+  select.value = selectedIndex;
+
+  const p = points[selectedIndex];
+  if (!p) return;
+  document.getElementById("point-lat").value = p.lat;
+  document.getElementById("point-lon").value = p.lon;
+  document.getElementById("point-speed").value = p.speed_mps;
+  document.getElementById("point-clearance").value = p.clearance_m;
+  document.getElementById("point-pump").checked = p.pump;
+}
+
+function selectPoint(i) {
+  if (i < 0 || i >= points.length) return;
+  selectedIndex = i;
+  fillSidebar();
+  redraw();
+}
+
+function refresh() {
+  fillSidebar();
+  redraw();
+}
+
+document.getElementById("point-select").addEventListener("change", (e) => selectPoint(parseInt(e.target.value, 10)));
+document.getElementById("prev-point").addEventListener("click", () => selectPoint(selectedIndex - 1));
+document.getElementById("next-point").addEventListener("click", () => selectPoint(selectedIndex + 1));
+
+function markDirty() { dirty = true; }
+
+document.getElementById("point-lat").addEventListener("change", (e) => {
+  pushUndo();
+  points[selectedIndex].lat = parseFloat(e.target.value);
+  markDirty();
+  redraw();
+});
+document.getElementById("point-lon").addEventListener("change", (e) => {
+  pushUndo();
+  points[selectedIndex].lon = parseFloat(e.target.value);
+  markDirty();
+  redraw();
+});
+document.getElementById("point-speed").addEventListener("change", (e) => {
+  pushUndo();
+  points[selectedIndex].speed_mps = parseFloat(e.target.value);
+  markDirty();
+});
+document.getElementById("point-clearance").addEventListener("change", (e) => {
+  pushUndo();
+  points[selectedIndex].clearance_m = parseFloat(e.target.value);
+  markDirty();
+});
+document.getElementById("point-pump").addEventListener("change", (e) => {
+  pushUndo();
+  points[selectedIndex].pump = e.target.checked;
+  markDirty();
+});
+
+function moveSelected(bearingDeg) {
+  const distance_m = parseFloat(document.getElementById("move-distance").value);
+  const p = points[selectedIndex];
+  fetch("/api/project", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ lat: p.lat, lon: p.lon, bearing_deg: bearingDeg, distance_m }),
+  }).then((r) => r.json()).then((result) => {
+    pushUndo();
+    p.lat = result.lat;
+    p.lon = result.lon;
+    markDirty();
+    fillSidebar();
+    redraw();
+  });
+}
+document.getElementById("move-n").addEventListener("click", () => moveSelected(0));
+document.getElementById("move-e").addEventListener("click", () => moveSelected(90));
+document.getElementById("move-s").addEventListener("click", () => moveSelected(180));
+document.getElementById("move-w").addEventListener("click", () => moveSelected(270));
+
+function midpoint(a, b) {
+  return {
+    lat: (a.lat + b.lat) / 2,
+    lon: (a.lon + b.lon) / 2,
+    speed_mps: a.speed_mps,
+    pump: a.pump,
+    clearance_m: a.clearance_m,
+  };
+}
+
+function insertAt(neighbourIndex, afterInsertIndex) {
+  if (neighbourIndex < 0 || neighbourIndex >= points.length) return;
+  const a = points[Math.min(selectedIndex, neighbourIndex)];
+  const b = points[Math.max(selectedIndex, neighbourIndex)];
+  const gap = distanceMetres(a.lat, a.lon, b.lat, b.lon);
+  if (gap < MIN_GAP_AFTER_INSERT_M * 2) {
+    if (!confirm(`These points are only ${gap.toFixed(2)}m apart — the new gaps either side ` +
+                 `will be under ${MIN_GAP_AFTER_INSERT_M * 100}cm. Insert anyway?`)) {
+      return;
+    }
+  }
+  pushUndo();
+  points.splice(afterInsertIndex, 0, midpoint(a, b));
+  markDirty();
+  selectedIndex = afterInsertIndex;
+  refresh();
+}
+
+document.getElementById("insert-ahead").addEventListener("click", () => {
+  insertAt(selectedIndex + 1, selectedIndex + 1);
+});
+document.getElementById("insert-behind").addEventListener("click", () => {
+  insertAt(selectedIndex - 1, selectedIndex);
+});
+
+document.getElementById("delete-point").addEventListener("click", () => {
+  if (points.length <= 2) { alert("A path needs at least 2 points."); return; }
+  pushUndo();
+  points.splice(selectedIndex, 1);
+  markDirty();
+  selectedIndex = Math.min(selectedIndex, points.length - 1);
+  refresh();
+});
+
+document.getElementById("undo").addEventListener("click", () => {
+  if (undoStack.length === 0) return;
+  points = undoStack.pop();
+  selectedIndex = Math.min(selectedIndex, points.length - 1);
+  markDirty();
+  refresh();
+});
+
+// --- Save dialog ---
+
+const saveModalEl = document.getElementById("save-modal");
+const saveModal = new bootstrap.Modal(saveModalEl);
+
+function updateOverwriteNote() {
+  const name = document.getElementById("save-filename").value.trim();
+  const exists = existingNames.includes(name) && name !== pathName;
+  const overwritingLoaded = name === pathName;
+  document.getElementById("save-overwrite-note").classList.toggle("d-none", !(exists || overwritingLoaded));
+  const label = (exists || overwritingLoaded) ? "Overwrite and " : "Save and ";
+  document.getElementById("save-continue").textContent = label + "continue";
+  document.getElementById("save-exit").textContent = label + "exit mapping";
+}
+
+document.getElementById("save-filename").addEventListener("input", updateOverwriteNote);
+
+document.getElementById("save-btn").addEventListener("click", () => {
+  fetch("/api/paths").then((r) => r.json()).then((list) => {
+    existingNames = list.map((p) => p.name);
+    document.getElementById("save-filename").value = pathName;
+    updateOverwriteNote();
+    saveModal.show();
+  });
+});
+
+function doSave(thenExit) {
+  const name = document.getElementById("save-filename").value.trim();
+  if (!name) { alert("Enter a filename."); return; }
+  fetch(`/api/paths/${encodeURIComponent(name)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ points }),
+  }).then((r) => {
+    if (!r.ok) { alert("Couldn't save (need at least 2 points, or an invalid name)."); return; }
+    dirty = false;
+    saveModal.hide();
+    if (thenExit) {
+      window.location.href = "/pages/paths";
+    } else {
+      pathName = name;
+      window.history.replaceState(null, "", `?name=${encodeURIComponent(name)}`);
+    }
+  });
+}
+document.getElementById("save-continue").addEventListener("click", () => doSave(false));
+document.getElementById("save-exit").addEventListener("click", () => doSave(true));
+
+window.addEventListener("beforeunload", (e) => {
+  if (!dirty) return;
+  e.preventDefault();
+  e.returnValue = "";
+});
+
+// --- Load ---
+
+if (pathName) {
+  fetch(`/api/paths/${encodeURIComponent(pathName)}`).then((r) => {
+    if (!r.ok) {
+      document.getElementById("no-path-message").classList.remove("d-none");
+      document.getElementById("editor").classList.add("d-none");
+      return null;
+    }
+    return r.json();
+  }).then((loaded) => {
+    if (!loaded) return;
+    points = loaded;
+    selectedIndex = 0;
+    refresh();
+  });
+}
+
+map.resize();
+</script>
+{% endblock %}

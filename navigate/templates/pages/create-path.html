@@ -86,73 +86,12 @@
 
 {% block scripts %}
 <script src="/static/geomap.js"></script>
+<script src="/static/jog.js"></script>
 <script>
-const MAX_SPEED_MPS = 0.8; // matches the top of the speed selector above — not drive's own max, just this widget's jog scale
-const JOG_REPEAT_MS = 300;
-
-const joystick = document.getElementById("joystick");
-const thumb = document.getElementById("joystick-thumb");
-const RADIUS = 75;
-
-let dragging = false;
-let vector = { x: 0, y: 0 };
-let repeatTimer = null;
-
-function sendManual(x, y) {
-  const forward = -y * MAX_SPEED_MPS;
-  // Turning right means the right (inside) wheel slows down and the
-  // left (outside) wheel speeds up — see drive/templates/pages/home.html,
-  // where the inverted version of this was a real bug confirmed on
-  // hardware.
-  const turn = x * MAX_SPEED_MPS;
-  fetch("/jog/manual", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ left_mps: forward + turn, right_mps: forward - turn }),
-  });
-}
-
-function setThumb(x, y) {
-  thumb.style.left = `${75 + x * RADIUS}px`;
-  thumb.style.top = `${75 + y * RADIUS}px`;
-}
-
-function updateFromEvent(evt) {
-  const rect = joystick.getBoundingClientRect();
-  const cx = rect.left + rect.width / 2;
-  const cy = rect.top + rect.height / 2;
-  let x = (evt.clientX - cx) / RADIUS;
-  let y = (evt.clientY - cy) / RADIUS;
-  const mag = Math.hypot(x, y);
-  if (mag > 1) { x /= mag; y /= mag; }
-  vector = { x, y };
-  setThumb(x, y);
-}
-
-joystick.addEventListener("pointerdown", (evt) => {
-  dragging = true;
-  joystick.setPointerCapture(evt.pointerId);
-  joystick.style.cursor = "grabbing";
-  updateFromEvent(evt);
-  sendManual(vector.x, vector.y);
-  repeatTimer = setInterval(() => sendManual(vector.x, vector.y), JOG_REPEAT_MS);
+createJoystick(document.getElementById("joystick"), document.getElementById("joystick-thumb"), {
+  postUrl: "/jog/manual",
+  maxSpeedMps: 0.8, // matches the top of the speed selector above — not drive's own max, just this widget's jog scale
 });
-
-joystick.addEventListener("pointermove", (evt) => {
-  if (dragging) updateFromEvent(evt);
-});
-
-function stopJogging() {
-  if (!dragging) return;
-  dragging = false;
-  joystick.style.cursor = "grab";
-  clearInterval(repeatTimer);
-  vector = { x: 0, y: 0 };
-  setThumb(0, 0);
-  sendManual(0, 0);
-}
-joystick.addEventListener("pointerup", stopJogging);
-joystick.addEventListener("pointercancel", stopJogging);
 
 document.getElementById("forward-btn").addEventListener("click", () => {
   const btn = document.getElementById("forward-btn");

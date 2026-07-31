@@ -1,6 +1,6 @@
-{# title: Paths #}
+{# title: Missions #}
 {% extends "base.html" %}
-{% block title %}GR6 — Paths{% endblock %}
+{% block title %}GR6 — Missions{% endblock %}
 
 {% block content %}
 <div class="card">
@@ -9,17 +9,15 @@
       <thead>
         <tr>
           <th>Name</th>
-          <th>Points</th>
-          <th>Length</th>
+          <th>Steps</th>
           <th>Actions</th>
         </tr>
       </thead>
       <tbody>
-        {% for p in paths %}
-        <tr data-name="{{ p.name }}">
-          <td>{{ p.name }}</td>
-          <td>{{ p.point_count }}</td>
-          <td>{{ "%.1f"|format(p.length_m) }} m</td>
+        {% for m in missions %}
+        <tr data-name="{{ m.name }}">
+          <td>{{ m.name }}</td>
+          <td>{{ m.step_count }}</td>
           <td>
             <button class="btn btn-sm btn-outline-primary" data-action="run">Run</button>
             <button class="btn btn-sm btn-outline-secondary" data-action="edit">Edit</button>
@@ -27,7 +25,7 @@
           </td>
         </tr>
         {% else %}
-        <tr><td colspan="4" class="text-body-secondary">No saved paths yet — record one on the Create Path page.</td></tr>
+        <tr><td colspan="3" class="text-body-secondary">No saved missions yet.</td></tr>
         {% endfor %}
       </tbody>
     </table>
@@ -41,14 +39,12 @@ document.querySelectorAll("button[data-action]").forEach((btn) => {
   btn.addEventListener("click", () => {
     const name = btn.closest("tr").dataset.name;
     if (btn.dataset.action === "run") {
-      fetch(`/control/load/${encodeURIComponent(name)}`, { method: "POST" }).then(() => {
-        window.location.href = "/"; // run page auto-selects nothing, but the path is already loaded server-side
-      });
+      window.location.href = `/pages/run?mission=${encodeURIComponent(name)}`;
     } else if (btn.dataset.action === "edit") {
-      window.location.href = `/pages/edit-path?name=${encodeURIComponent(name)}`;
+      window.location.href = `/pages/create-mission?name=${encodeURIComponent(name)}`;
     } else if (btn.dataset.action === "delete") {
-      if (!confirm(`Delete path "${name}"? This can't be undone.`)) return;
-      fetch(`/api/paths/${encodeURIComponent(name)}`, { method: "DELETE" }).then(() => location.reload());
+      if (!confirm(`Delete mission "${name}"? This can't be undone.`)) return;
+      fetch(`/api/missions/${encodeURIComponent(name)}`, { method: "DELETE" }).then(() => location.reload());
     }
   });
 });

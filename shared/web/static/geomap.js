@@ -16,6 +16,7 @@ function createGeoMap(canvasEl, wrapperEl, zoomButtonsSelector) {
   const ctx = canvasEl.getContext("2d");
   let zoomMode = "auto";
   let current = null; // {lat, lon}
+  let center = null; // {lat, lon} - explicit override for referencePoint(), draws no marker of its own (see setCurrent for that) - used by the path editor to recentre on the selected point
   const layers = {}; // name -> {points: [{lat, lon, ...}], style: {...}}
 
   // Local tangent-plane offset (metres), recomputed fresh every draw
@@ -30,6 +31,7 @@ function createGeoMap(canvasEl, wrapperEl, zoomButtonsSelector) {
   }
 
   function referencePoint() {
+    if (center) return center;
     if (current) return current;
     for (const name in layers) {
       if (layers[name].points.length) return layers[name].points[0];
@@ -50,6 +52,10 @@ function createGeoMap(canvasEl, wrapperEl, zoomButtonsSelector) {
 
   function setCurrent(lat, lon) {
     current = lat !== undefined && lon !== undefined ? { lat, lon } : null;
+  }
+
+  function setCenter(lat, lon) {
+    center = lat !== undefined && lon !== undefined ? { lat, lon } : null;
   }
 
   function setZoom(mode) {
@@ -187,5 +193,5 @@ function createGeoMap(canvasEl, wrapperEl, zoomButtonsSelector) {
 
   window.addEventListener("resize", resize);
 
-  return { setLayer, setCurrent, setZoom, resize, draw };
+  return { setLayer, setCurrent, setCenter, setZoom, resize, draw };
 }

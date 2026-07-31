@@ -106,4 +106,13 @@ services:
     port: 8009
     web_ui: true
     hostname: waterbutt.local  # mDNS name the ESP8266 valve controller advertises — see waterbutt/waterbutt-prd.md
+
+  missions:
+    unit: robot-missions.service
+    host: 0.0.0.0
+    port: 8010
+    web_ui: true
+    missions_dir: missions/data
+    mission_status_hz: 2
+    log_retention_days: 2
       scale: 1.0

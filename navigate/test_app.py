@@ -97,6 +97,33 @@ class NavigateAppTestCase(unittest.TestCase):
     def test_get_missing_path_404(self):
         self.assertEqual(self.client.get("/api/paths/does-not-exist").status_code, 404)
 
+    def test_save_path_creates_new_file(self):
+        resp = self.client.post("/api/paths/new-loop", json={"points": SAMPLE_POINTS})
+        self.assertEqual(resp.status_code, 204)
+        self.assertEqual(self.client.get("/api/paths/new-loop").get_json(), SAMPLE_POINTS)
+
+    def test_save_path_overwrites_existing_file(self):
+        paths_module.save_path(app.PATHS_DIR, "loop", SAMPLE_POINTS)
+        edited = [dict(p) for p in SAMPLE_POINTS]
+        edited[0]["speed_mps"] = 0.2
+        resp = self.client.post("/api/paths/loop", json={"points": edited})
+        self.assertEqual(resp.status_code, 204)
+        self.assertEqual(self.client.get("/api/paths/loop").get_json()[0]["speed_mps"], 0.2)
+
+    def test_save_path_rejects_fewer_than_two_points(self):
+        resp = self.client.post("/api/paths/too-short", json={"points": SAMPLE_POINTS[:1]})
+        self.assertEqual(resp.status_code, 400)
+
+    def test_project_endpoint_matches_geometry_module(self):
+        import geometry
+        resp = self.client.post(
+            "/api/project", json={"lat": 52.2, "lon": -1.5, "bearing_deg": 0, "distance_m": 0.1}
+        )
+        expected_lat, expected_lon = geometry.project_forward(52.2, -1.5, 0, 0.1)
+        result = resp.get_json()
+        self.assertAlmostEqual(result["lat"], expected_lat)
+        self.assertAlmostEqual(result["lon"], expected_lon)
+
     def test_drop_point_without_position_fix_is_conflict(self):
         resp = self.client.post("/record/drop", json={"speed_mps": 0.5, "pump": False, "clearance_m": 0.5})
         self.assertEqual(resp.status_code, 409)
@@ -248,7 +275,7 @@ class NavigateAppTestCase(unittest.TestCase):
         self.assertEqual(resp.status_code, 502)
 
     def test_pages_render(self):
-        for path in ["/", "/pages/create-path", "/pages/paths", "/pages/config"]:
+        for path in ["/", "/pages/create-path", "/pages/paths", "/pages/config", "/pages/edit-path"]:
             resp = self.client.get(path)
             self.assertEqual(resp.status_code, 200, path)
 

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Hand-drawn checklist/route glyph (this project's own artwork),
+     white-on-black-circle to match the GR6-v2 icon style (see
+     oxts-nav/icon.svg) — a sequence of steps, each one either done
+     (tick) or pending (empty box). -->
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24">
+  <circle cx="12" cy="12" r="12" fill="#000"/>
+  <g fill="none" stroke="#fff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="5" y="5.5" width="3" height="3"/>
+    <path d="M5.5 7 l1 1 l1.5 -2"/>
+    <line x1="10" y1="7" x2="19" y2="7"/>
+
+    <rect x="5" y="10.5" width="3" height="3"/>
+    <path d="M5.5 12 l1 1 l1.5 -2"/>
+    <line x1="10" y1="12" x2="19" y2="12"/>
+
+    <rect x="5" y="15.5" width="3" height="3"/>
+    <line x1="10" y1="17" x2="19" y2="17"/>
+  </g>
+</svg>

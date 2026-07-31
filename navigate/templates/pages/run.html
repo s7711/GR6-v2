@@ -52,11 +52,25 @@
     <button type="button" class="btn btn-sm zoom-btn" data-zoom="20">20 m</button>
     <button type="button" class="btn btn-sm zoom-btn" data-zoom="50">50 m</button>
   </div>
+
+  <div class="position-absolute bottom-0 start-0 m-3 text-center" style="opacity: 0.9;">
+    <div id="joystick" style="touch-action: none; width: 200px; height: 200px; background: var(--bs-tertiary-bg); border: 1px solid var(--bs-border-color); border-radius: 0.5rem; position: relative; cursor: grab;">
+      <div id="joystick-thumb" style="width: 50px; height: 50px; border-radius: 50%; background: var(--bs-primary); position: absolute; left: 75px; top: 75px; pointer-events: none;"></div>
+    </div>
+    <div class="text-body-secondary small mt-1">Drag to jog into position, release to stop</div>
+  </div>
 </div>
 {% endblock %}
 
 {% block scripts %}
 <script src="/static/geomap.js"></script>
+<script src="/static/jog.js"></script>
+<script>
+createJoystick(document.getElementById("joystick"), document.getElementById("joystick-thumb"), {
+  postUrl: "/jog/manual",
+  maxSpeedMps: 0.8,
+});
+</script>
 <script>
 // --- Path load/start/stop ---
 
@@ -88,8 +102,17 @@ document.getElementById("stop-btn").addEventListener("click", () => {
 
 // --- Live status (navigate's own feed) ---
 
+const joystickEl = document.getElementById("joystick");
+
 connectWs("/ws/navigate", (msg) => {
   fillFields("stat-", msg);
+  // Jogging while a run is in progress would fight navigate's own
+  // auto commands via drive's control arbiter (manual briefly
+  // overriding auto on every drag) — the joystick here is only for
+  // lining up before Start, not for use mid-run.
+  const running = msg.state === "running";
+  joystickEl.style.pointerEvents = running ? "none" : "auto";
+  joystickEl.style.opacity = running ? "0.4" : "1";
 });
 
 // --- Map: loaded path + driven trail + live position ---

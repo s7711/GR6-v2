@@ -242,9 +242,82 @@ fix it.
   to the Run page (Start still needs pressing there; loading isn't the
   same as starting). Automatically swapping back to this list once a
   run finishes was considered but not built — see Out of Scope.
-- Text/YAML editing by hand is out of scope for a UI — YAML is fine to
-  hand-edit with a normal text editor if ever truly needed, no in-app
-  editor is worth building for this.
+- Edit — opens the Edit map page (below) on this path.
+
+## Path editing ("Edit map" page)
+
+Reversed the earlier "no in-app editor is worth building" call in this
+doc — in practice almost every real field session so far has ended
+with manual point-by-point lat/lon nudges (move this point 8cm west,
+slow those three points down, ...) done by hand-editing the YAML via an
+AI assistant. That's not sustainable as a long-term workflow, and it's
+also a real prerequisite for `missions` (top-prd.md item 4/the
+mission-composition idea): composing a mission out of several paths in
+the same area needs a way to see and adjust those paths together, not
+just record a fresh one from scratch each time.
+
+Reached from the Paths page's new "Edit" button
+(`/pages/edit-path?name=<name>`) — the path to edit is picked there,
+not on the edit page itself.
+
+- **Map**: same `geomap.js` component as Create Path/Run (grid,
+  scale bar, Auto/5m/20m/50m zoom presets — reused, not a fourth zoom
+  scheme). The full point set draws as one layer; the currently
+  selected point draws as a second, single-point layer in a highlight
+  colour on top, and the map re-centres on the selected point whenever
+  selection changes (`geomap.js`'s new `setCenter()` — separate from
+  `setCurrent()`, which is the live GPS "blue dot" and isn't relevant
+  here; `setCenter` only affects what the map treats as its reference
+  point for drawing, it draws no marker of its own).
+- **No click-to-select on the map** in this version — deliberately cut
+  from scope (hit-testing didn't exist in `geomap.js` at all, and
+  wasn't worth building for a first pass). Selection is a dropdown of
+  point indices, plus Previous/Next buttons.
+- **Per-point editing**, all via the sidebar (bottom of the page on a
+  phone — editing 28 points on a phone screen was flagged as
+  inherently awkward, not solved here):
+  - Four buttons (N/S/E/W) move the selected point by a distance
+    chosen from a dropdown: 1cm/2cm/5cm/10cm/20cm/50cm/1m/2m/5m — the
+    same `geometry.project_forward` bearing+distance projection used
+    for every manual path edit so far (server-side, via a new
+    `POST /api/project` endpoint — reused, not reimplemented in JS,
+    per this project's usual preference for one source of truth over a
+    client-side approximation of the same maths).
+  - Speed/pump/clearance as dropdowns (matching Create Path's existing
+    widgets); lat/lon as free-text numeric fields for direct entry.
+  - **Insert ahead** / **insert behind** — adds a new point midway
+    between the selected point and its next/previous neighbour (simple
+    lat/lon average — fine at this scale, same "equirectangular
+    approximation" already used client-side elsewhere, e.g. Create
+    Path's duplicate-point check). Warns (confirm dialog) if either
+    resulting gap would be under 20cm.
+  - **Delete point** — no confirmation dialog, since Undo (below)
+    makes one unnecessary.
+- **Undo**: an in-browser stack of previous point-array snapshots, not
+  persisted — covers every mutating action (move/insert/delete). No
+  redo in this version.
+- **Save**: a dialog with a Filename field (pre-filled with the
+  loaded path's name) and "Save and continue" / "Save and exit
+  mapping" buttons. The filename field is checked against the already-
+  fetched paths list on every keystroke — matching an existing
+  different path relabels the button "Overwrite and ..." instead, no
+  separate confirmation step. (A future "Old/" archive folder for
+  overwritten files, so there's a recoverable history — raised as a
+  nice-to-have, deliberately deferred, not built now.)
+- **Leave-without-saving warning** — a `beforeunload` handler, armed
+  the moment the in-memory point array first diverges from what was
+  last loaded/saved.
+
+### New backend surface
+
+- `POST /api/paths/<name>` — saves (or overwrites) `points` (JSON
+  body) under `name`, the write-side counterpart to the existing
+  `GET`/`DELETE` on the same route.
+- `POST /api/project` — body `{lat, lon, bearing_deg, distance_m}` →
+  `{lat, lon}`, a thin wrapper over `geometry.project_forward` so the
+  N/S/E/W buttons get exactly the same maths as every other manual path
+  edit, rather than a second, JS-side implementation that could drift
+  from it.
 
 ## Variable tolerance ("clearance")
 

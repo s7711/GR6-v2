@@ -20,6 +20,9 @@ aruco/data/
 # Recorded paths — this robot's real-world data, see navigate-prd.md
 navigate/data/
 
+# Saved missions + run logs — this robot's real-world data, see missions-prd.md
+missions/data/
+
 # Per-interface recovery choices — this robot's own runtime state, see
 # network/network-prd.md
 network/recovery.json

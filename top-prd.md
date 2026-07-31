@@ -139,11 +139,14 @@ general-purpose sysadmin tool.
    then `navigate` (waypoint/path-following) — done, **field-proven
    2026-07-30**: a real autonomous run (`Waterstablebed`, 29 points,
    30.2m) completed end-to-end with no abort, watering a real bed —
-   then `missions` (sequencing multiple stops + pump actions), and
-   `safety` (obstacle-avoidance decisions, once the ultrasonics are
-   trusted) built on top of it, in that order. These later two are the
-   safety-critical pieces — most confidence wanted before touching
-   them, hence saved for last.
+   then `missions` (sequencing multiple stops + pump actions) — **built
+   2026-07-31, see `missions/missions-prd.md`**: the first genuinely
+   new capability this project has needed (no GR6-v1 equivalent to port
+   from), sequencing saved `navigate` paths with a save-time continuity
+   check between consecutive paths — then `safety` (obstacle-avoidance
+   decisions, once the ultrasonics are trusted) built on top of it. This
+   last one is the safety-critical piece — most confidence wanted before
+   touching it, hence saved for last.
 5. Network sharing (wifi -> ethernet internet sharing) — **in progress,
    see `network/network-prd.md`**. Originally identified while testing
    `aruco`/`oxts-nav` together: the xNAV650 sits on `eth0` (already
