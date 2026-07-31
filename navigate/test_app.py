@@ -210,7 +210,7 @@ class NavigateAppTestCase(unittest.TestCase):
 
     def test_control_load_start_stop(self):
         paths_module.save_path(app.PATHS_DIR, "loop", SAMPLE_POINTS)
-        self.assertEqual(self.client.post("/control/load/loop").status_code, 204)
+        self.assertEqual(self.client.post("/control/load/loop").get_json(), {"ok": True})
 
         self._set_position(52.2, -1.5, 0)  # at the first point, facing along the path
         resp = self.client.post("/control/start")
@@ -218,6 +218,35 @@ class NavigateAppTestCase(unittest.TestCase):
 
         self.assertEqual(self.client.post("/control/stop").status_code, 204)
         self.assertEqual(self.recorder.velocity_calls[-1], (0.0, 0.0))
+
+    def test_control_load_refused_while_a_path_is_already_running(self):
+        # Found live 2026-07-31: a second caller (missions, another
+        # browser tab) loading a different path mid-run used to reset
+        # straight to idle with no explicit stop, abandoning the run.
+        other_points = [
+            {"lat": 53.0, "lon": -2.0, "speed_mps": 0.5, "pump": False, "clearance_m": 0.5},
+            {"lat": 53.0005, "lon": -2.0, "speed_mps": 0.5, "pump": False, "clearance_m": 0.5},
+        ]
+        paths_module.save_path(app.PATHS_DIR, "loop", SAMPLE_POINTS)
+        paths_module.save_path(app.PATHS_DIR, "other", other_points)
+        self.client.post("/control/load/loop")
+        self._set_position(52.2, -1.5, 0)
+        self.client.post("/control/start")
+
+        resp = self.client.post("/control/load/other")
+        self.assertEqual(resp.get_json(), {"ok": False, "reason": "another path is already running - stop it first"})
+        self.assertEqual(app.runner.status()["state"], "running")  # untouched
+
+    def test_control_load_allowed_again_once_stopped(self):
+        paths_module.save_path(app.PATHS_DIR, "loop", SAMPLE_POINTS)
+        paths_module.save_path(app.PATHS_DIR, "other", SAMPLE_POINTS)
+        self.client.post("/control/load/loop")
+        self._set_position(52.2, -1.5, 0)
+        self.client.post("/control/start")
+        self.client.post("/control/stop")
+
+        resp = self.client.post("/control/load/other")
+        self.assertEqual(resp.get_json(), {"ok": True})
 
     def test_successful_start_resets_the_debug_log(self):
         app.DEBUG_LOG_PATH.write_text('{"stale": "entry from a previous run"}\n')

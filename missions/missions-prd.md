@@ -132,8 +132,12 @@ Per `run_path` step: `/control/load/<path>` → `/control/start` → watch
 mechanism `wheelspeed` and `navigate` itself already use to read
 `oxts-nav`'s/`drive`'s feeds — not a second outgoing websocket
 connection from a Flask backend) until state leaves `running` →
-`stopped_ok` advances to the next step, `aborted` (or a failed start)
-stops the mission and records the reason against that step.
+`stopped_ok` advances to the next step, `aborted` stops the mission and
+records the reason against that step. A rejected load or start (e.g.
+`navigate` already running something else — see its own "refuse while
+running" guard, added 2026-07-31) fails the step the same way, logged
+as `failed_to_load`/`failed_to_start` rather than `aborted`, since
+nothing ever actually started running for that step.
 
 **Stop** (operator-requested): calls `/control/stop` immediately and
 marks the mission `idle`, same distinction `PathRunner.stop()` already

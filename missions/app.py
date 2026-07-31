@@ -53,9 +53,10 @@ navigate_feed = FeedClient(navigate_cfg["navigate_feed_socket"], default={"state
 
 def load_path(name):
     try:
-        requests.post(f"{NAVIGATE_BASE_URL}/control/load/{name}", timeout=NAVIGATE_TIMEOUT_S)
+        resp = requests.post(f"{NAVIGATE_BASE_URL}/control/load/{name}", timeout=NAVIGATE_TIMEOUT_S)
+        return resp.json()
     except requests.exceptions.RequestException:
-        logging.warning("[missions] Couldn't reach navigate to load path %r", name)
+        return {"ok": False, "reason": "couldn't reach navigate"}
 
 
 def start_path():

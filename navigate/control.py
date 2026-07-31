@@ -37,17 +37,29 @@ class PathRunner:
         self._last_robot_local = None
         self.last_status = {}
 
-    def load_path(self, points: list):
+    def load_path(self, points: list) -> dict:
         """points: stored path dicts (lat/lon/speed_mps/pump/clearance_m),
-        as loaded from paths.py. Resets to idle — any run in progress is
-        abandoned (matches "loading a path" being a deliberate operator
-        action, not something that happens mid-run)."""
+        as loaded from paths.py. Refuses ({"ok": False, "reason": ...})
+        while a run is already in progress, rather than silently
+        abandoning it — found live 2026-07-31: start() already refused
+        to run while "running", but load_path() reset straight to idle
+        unconditionally, so a second caller (missions, another browser
+        tab) loading a different path mid-run wiped out that state
+        before start()'s own check ever saw it, abandoning the run with
+        no explicit stop (the robot kept coasting at its last commanded
+        speed until drive's own firmware watchdog zeroed it out).
+        "Loading a path is a deliberate operator action" still holds —
+        it just isn't one that gets to preempt a run already under way;
+        stop first, then load."""
         with self.lock:
+            if self.state == "running":
+                return {"ok": False, "reason": "another path is already running - stop it first"}
             self._reset()
             if points:
                 ref_lat, ref_lon = geometry.path_reference(points)
                 self.path_ref = (ref_lat, ref_lon)
                 self.path = geometry.path_to_local(points, ref_lat, ref_lon)
+            return {"ok": True}
 
     def entry_check(self, robot_lat, robot_lon, robot_heading_deg) -> dict:
         """{"ok": True, "index": i} if a valid entry segment exists, else

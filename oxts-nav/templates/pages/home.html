@@ -27,6 +27,7 @@
         <div class="fs-4">
           <span id="stat-heading">—</span>&deg;
           <span class="text-body-secondary small">(&plusmn;<span id="stat-heading-acc">—</span>&deg;)</span>
+          <span id="stat-gnss-att" class="badge text-bg-secondary" title="GNSS attitude mode">&mdash;</span>
         </div>
       </div>
     </div>
@@ -92,6 +93,30 @@ connectWs("/ws/nav", (msg) => {
     nav.Heading !== undefined ? nav.Heading.toFixed(1) : "—";
   document.getElementById("stat-heading-acc").textContent =
     status.HeadingAcc !== undefined ? status.HeadingAcc.toFixed(1) : "—";
+
+  // GNSS attitude mode badge: green "I" for any Integer variant (RTK
+  // integer, gxInteger, ixInteger, ...), orange "F" for any Float
+  // variant, grey "N" for None, red "x" for anything else (unrecognised
+  // code, or a mode name that's neither) — per Table 9 of the NCOM
+  // manual, position/velocity/attitude mode all share the one code
+  // table (confirmed 2026-07-31), same table ncom-strings.js already
+  // uses for GnssPosMode.
+  const gnssAtt = document.getElementById("stat-gnss-att");
+  const attCode = status.GnssAttMode;
+  const attName = (attCode !== undefined && attCode !== null) ? NCOM_GPS_MODE_STRINGS[attCode] : undefined;
+  if (attName !== undefined && /integer/i.test(attName)) {
+    gnssAtt.textContent = "I";
+    gnssAtt.className = "badge text-bg-success";
+  } else if (attName !== undefined && /float/i.test(attName)) {
+    gnssAtt.textContent = "F";
+    gnssAtt.className = "badge text-bg-warning";
+  } else if (attName === "None") {
+    gnssAtt.textContent = "N";
+    gnssAtt.className = "badge text-bg-secondary";
+  } else if (attName !== undefined) {
+    gnssAtt.textContent = "x";
+    gnssAtt.className = "badge text-bg-danger";
+  }
 
   let speed = "—";
   if (nav.Vn !== undefined && nav.Ve !== undefined) {

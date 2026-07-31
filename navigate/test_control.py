@@ -63,6 +63,34 @@ class TestEntryCheck(unittest.TestCase):
         self.assertEqual(result, {"ok": False, "reason": "no path loaded"})
 
 
+class TestLoadPath(unittest.TestCase):
+    def test_refused_while_running(self):
+        runner, _ = make_runner()
+        runner.start(robot_lat=52.200000, robot_lon=-1.500000, robot_heading_deg=0)
+        result = runner.load_path(STRAIGHT_NORTH_PATH)
+        self.assertEqual(result, {"ok": False, "reason": "another path is already running - stop it first"})
+        self.assertEqual(runner.status()["state"], "running")  # untouched, not reset to idle
+
+    def test_allowed_while_idle(self):
+        runner, _ = make_runner()
+        result = runner.load_path(STRAIGHT_NORTH_PATH)
+        self.assertEqual(result, {"ok": True})
+
+    def test_allowed_again_once_stopped(self):
+        runner, _ = make_runner()
+        runner.start(robot_lat=52.200000, robot_lon=-1.500000, robot_heading_deg=0)
+        runner.stop()
+        result = runner.load_path(STRAIGHT_NORTH_PATH)
+        self.assertEqual(result, {"ok": True})
+
+    def test_allowed_once_finished_or_aborted(self):
+        runner, _ = make_runner()
+        runner.start(robot_lat=52.200000, robot_lon=-1.500000, robot_heading_deg=0)
+        runner._abort("test abort")
+        result = runner.load_path(STRAIGHT_NORTH_PATH)
+        self.assertEqual(result, {"ok": True})
+
+
 class TestStartStop(unittest.TestCase):
     def test_start_succeeds_when_close_and_aligned(self):
         runner, _ = make_runner()

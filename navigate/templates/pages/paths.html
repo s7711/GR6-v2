@@ -41,9 +41,15 @@ document.querySelectorAll("button[data-action]").forEach((btn) => {
   btn.addEventListener("click", () => {
     const name = btn.closest("tr").dataset.name;
     if (btn.dataset.action === "run") {
-      fetch(`/control/load/${encodeURIComponent(name)}`, { method: "POST" }).then(() => {
-        window.location.href = "/"; // run page auto-selects nothing, but the path is already loaded server-side
-      });
+      fetch(`/control/load/${encodeURIComponent(name)}`, { method: "POST" })
+        .then((r) => r.json())
+        .then((result) => {
+          if (result.ok) {
+            window.location.href = "/"; // run page auto-selects nothing, but the path is already loaded server-side
+          } else {
+            alert(result.reason || "Couldn't load path.");
+          }
+        });
     } else if (btn.dataset.action === "edit") {
       window.location.href = `/pages/edit-path?name=${encodeURIComponent(name)}`;
     } else if (btn.dataset.action === "delete") {

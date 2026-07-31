@@ -35,11 +35,13 @@ class NavigateStub:
         self.loaded = []
         self.start_calls = 0
         self.stop_calls = 0
+        self.load_result = {"ok": True}
         self.start_result = {"ok": True}
         self._status = {"state": "idle", "abort_reason": None}
 
     def load_path(self, name):
         self.loaded.append(name)
+        return self.load_result
 
     def start_path(self):
         self.start_calls += 1

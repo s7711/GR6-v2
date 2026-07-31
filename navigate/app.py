@@ -364,8 +364,7 @@ def control_load(name):
         points = paths.load_path(PATHS_DIR, name)
     except (FileNotFoundError, paths.InvalidPathName):
         abort(404)
-    runner.load_path(points)
-    return "", 204
+    return jsonify(runner.load_path(points))
 
 
 @app.route("/control/entry-check")

@@ -77,7 +77,17 @@ createJoystick(document.getElementById("joystick"), document.getElementById("joy
 document.getElementById("load-btn").addEventListener("click", () => {
   const name = document.getElementById("path-select").value;
   if (!name) return;
-  fetch(`/control/load/${encodeURIComponent(name)}`, { method: "POST" }).then(() => loadPathForMap(name));
+  fetch(`/control/load/${encodeURIComponent(name)}`, { method: "POST" })
+    .then((r) => r.json())
+    .then((result) => {
+      const msg = document.getElementById("entry-message");
+      if (result.ok) {
+        loadPathForMap(name);
+        msg.textContent = "";
+      } else {
+        msg.textContent = result.reason || "Couldn't load path.";
+      }
+    });
 });
 
 document.getElementById("start-btn").addEventListener("click", () => {

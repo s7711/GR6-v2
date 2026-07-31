@@ -12,7 +12,7 @@ import threading
 
 class MissionRunner:
     def __init__(self, load_path, start_path, stop_path, navigate_status):
-        self.load_path = load_path              # (path_name) -> None
+        self.load_path = load_path              # (path_name) -> {"ok": bool, "reason": ...}
         self.start_path = start_path            # () -> {"ok": bool, "reason": ...}
         self.stop_path = stop_path              # () -> None
         self.navigate_status = navigate_status  # () -> {"state": ..., "abort_reason": ...}
@@ -49,19 +49,26 @@ class MissionRunner:
 
     def _start_current_step(self, step_index: int):
         path_name = self.steps[step_index]["path"]
-        self.load_path(path_name)
-        result = self.start_path()
-        if result.get("ok"):
+
+        load_result = self.load_path(path_name)
+        if not load_result.get("ok"):
+            self._fail_step(step_index, path_name, "failed_to_load", load_result.get("reason", "couldn't load path"))
             return
+
+        result = self.start_path()
+        if not result.get("ok"):
+            self._fail_step(step_index, path_name, "failed_to_start", result.get("reason", "couldn't start path"))
+
+    def _fail_step(self, step_index: int, path_name: str, outcome: str, reason: str):
         with self.lock:
             # A concurrent stop() may already have moved the mission on
-            # while start_path() was in flight - don't clobber that.
+            # while load_path()/start_path() was in flight - don't
+            # clobber that.
             if self.state != "running" or self.current_step_index != step_index:
                 return
-            reason = result.get("reason", "couldn't start path")
             self.state = "aborted"
             self.abort_reason = reason
-            self.step_log.append({"index": step_index, "path": path_name, "outcome": "failed_to_start", "reason": reason})
+            self.step_log.append({"index": step_index, "path": path_name, "outcome": outcome, "reason": reason})
 
     def tick(self):
         """Call periodically (see app.py) while a mission might be

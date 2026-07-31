@@ -10,11 +10,13 @@ class NavigateStub:
         self.loaded = []
         self.start_calls = 0
         self.stop_calls = 0
+        self.load_result = {"ok": True}
         self.start_result = {"ok": True}
         self._status = {"state": "idle", "abort_reason": None}
 
     def load_path(self, name):
         self.loaded.append(name)
+        return self.load_result
 
     def start_path(self):
         self.start_calls += 1
@@ -60,6 +62,17 @@ class TestGo(unittest.TestCase):
         status = runner.status()
         self.assertEqual(status["state"], "aborted")
         self.assertIn("entry tolerance", status["abort_reason"])
+
+    def test_failed_load_aborts_immediately_without_calling_start(self):
+        # e.g. navigate refusing because a path is already running -
+        # see navigate/control.py's load_path() guard.
+        runner, stub = make_runner()
+        stub.load_result = {"ok": False, "reason": "another path is already running - stop it first"}
+        runner.go("test-mission", STEPS)
+        status = runner.status()
+        self.assertEqual(status["state"], "aborted")
+        self.assertIn("already running", status["abort_reason"])
+        self.assertEqual(stub.start_calls, 0)
 
 
 class TestTick(unittest.TestCase):
@@ -145,6 +158,14 @@ class TestStepLog(unittest.TestCase):
         log = runner.status()["step_log"]
         self.assertEqual(len(log), 1)
         self.assertEqual(log[0]["outcome"], "failed_to_start")
+
+    def test_step_log_records_a_failed_load(self):
+        runner, stub = make_runner()
+        stub.load_result = {"ok": False, "reason": "another path is already running - stop it first"}
+        runner.go("m", STEPS)
+        log = runner.status()["step_log"]
+        self.assertEqual(len(log), 1)
+        self.assertEqual(log[0]["outcome"], "failed_to_load")
 
 
 if __name__ == "__main__":

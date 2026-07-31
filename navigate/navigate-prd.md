@@ -496,6 +496,22 @@ without data.
 
 ## Real bugs found via testing
 
+- **`load_path()` could silently abandon a run already in progress.**
+  `start()` already refused to run while `state == "running"`, but
+  `load_path()` reset straight to `idle` unconditionally regardless of
+  current state — so a second caller loading a different path mid-run
+  (found live 2026-07-31, thinking through what `missions` starting a
+  step while a manual run was active would actually do) wiped out the
+  "running" state before `start()`'s own guard ever got to see it. The
+  robot itself wasn't stopped either — no velocity command was sent,
+  it just kept coasting at its last commanded speed until `drive`'s own
+  firmware watchdog (2000ms `CMD_TIMEOUT`) zeroed it out on its own.
+  Fixed by giving `load_path()` the same "refuse while running" guard
+  `start()` already had, returning `{"ok": false, "reason": "another
+  path is already running - stop it first"}` — surfaced through the
+  same `result.reason` message display the Run/Paths pages already use
+  for entry-check failures, and propagated through `missions`'
+  `MissionRunner` as a `failed_to_load` step outcome.
 - **Jog steering was inverted, on both `drive`'s Home page and
   `create-path`'s jog widget** — confirmed on real hardware: pushing the
   stick right turned the robot left. Root cause was the joystick-to-
