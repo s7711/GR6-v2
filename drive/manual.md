@@ -24,7 +24,7 @@ Manual "jog" control, plus live telemetry.
   every 300ms — that's deliberate (see "If jogging feels unresponsive"
   below), not a bug.
 - **Controller** — shows whether `drive` is currently obeying manual
-  (jog) or automatic (a future `navigate`/`missions`) commands. Manual
+  (jog) or automatic (a future `navigate`/`jobs`) commands. Manual
   input always wins immediately and holds control for half a second
   afterwards, so an automatic caller can't sneak in between two jog
   updates.

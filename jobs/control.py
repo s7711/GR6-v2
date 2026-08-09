@@ -1,11 +1,11 @@
-"""Mission sequencing state machine — drives navigate's existing HTTP
+"""Job sequencing state machine — drives navigate's existing HTTP
 API (load/start/stop/status), never drive or the control loop directly.
 Mirrors navigate/control.py's PathRunner shape: no networking of its
 own (load_path/start_path/stop_path/navigate_status/pump_on/
 waterbutt_go/waterbutt_stop are injected, so this is testable without a
 real navigate/waterbutt running — see test_control.py), driven by
 repeated tick() calls from app.py's background loop. See
-missions-prd.md's "Mission execution".
+jobs-prd.md's "Job execution".
 
 Four step types: `run_path` (unchanged - watches navigate's own status
 until stopped_ok/aborted), and three timed steps added 2026-08-08 for
@@ -22,8 +22,10 @@ import time
 
 TIMED_STEP_TYPES = ("pause", "water", "fill")
 
+RUN_PATH_FEED_GRACE_S = 1.0  # see _tick_run_path's comment
 
-class MissionRunner:
+
+class JobRunner:
     def __init__(self, load_path, start_path, stop_path, navigate_status,
                  pump_on, waterbutt_go, waterbutt_stop, now=time.monotonic):
         self.load_path = load_path              # (path_name) -> {"ok": bool, "reason": ...}
@@ -38,18 +40,20 @@ class MissionRunner:
         self._reset()
 
     def _reset(self):
-        self.mission_name = None
+        self.job_name = None
         self.steps = []
         self.state = "idle"  # idle | running | stopped_ok | aborted
         self.current_step_index = None
         self.abort_reason = None
         self.step_log = []  # [{"index", "type", "path"/"duration_s", "outcome", "reason"}, ...] - this run only
         self.step_deadline = None  # self.now() value a pause/water/fill step completes at
+        self._run_path_seen_running = False  # see _tick_run_path's comment
+        self._run_path_started_at = None
 
-    def go(self, mission_name: str, steps: list, start_index: int = 0):
-        """Starts (or resumes, from start_index) a mission."""
+    def go(self, job_name: str, steps: list, start_index: int = 0):
+        """Starts (or resumes, from start_index) a job."""
         with self.lock:
-            self.mission_name = mission_name
+            self.job_name = job_name
             self.steps = steps
             self.current_step_index = start_index
             self.state = "running"
@@ -113,6 +117,21 @@ class MissionRunner:
                 self.step_deadline = self.now() + step["duration_s"]
 
     def _start_run_path_step(self, step_index: int, step: dict):
+        # Stamped up front, before the (blocking, real network I/O)
+        # load_path/start_path calls below - not after they return.
+        # self.state is already "running" by the time we're called (set
+        # by go()/_tick_run_path before dispatching here), so the
+        # background tick loop can call _tick_run_path concurrently
+        # while load_path/start_path are still in flight. Stamping late
+        # left a real window where _run_path_started_at was still None
+        # while state was already "running", crashing tick() outright
+        # (seen live 2026-08-09, right after this race fix was added -
+        # killed the tick thread entirely, so the job never progressed
+        # again until the service was restarted).
+        with self.lock:
+            self._run_path_seen_running = False
+            self._run_path_started_at = self.now()
+
         path_name = step["path"]
 
         load_result = self.load_path(path_name)
@@ -123,10 +142,11 @@ class MissionRunner:
         result = self.start_path()
         if not result.get("ok"):
             self._fail_step(step_index, "failed_to_start", result.get("reason", "couldn't start path"))
+            return
 
     def _fail_step(self, step_index: int, outcome: str, reason: str):
         with self.lock:
-            # A concurrent stop() may already have moved the mission on
+            # A concurrent stop() may already have moved the job on
             # while the step's own start call was in flight - don't
             # clobber that.
             if self.state != "running" or self.current_step_index != step_index:
@@ -136,7 +156,7 @@ class MissionRunner:
             self.step_log.append({"index": step_index, **self._step_summary(step_index), "outcome": outcome, "reason": reason})
 
     def tick(self):
-        """Call periodically (see app.py) while a mission might be
+        """Call periodically (see app.py) while a job might be
         running. No-op if idle/finished."""
         with self.lock:
             if self.state != "running":
@@ -152,13 +172,30 @@ class MissionRunner:
     def _tick_run_path(self, step_index: int):
         nav = self.navigate_status()
         nav_state = nav.get("state")
-        if nav_state == "running":
-            return  # still going - nothing to do yet
 
         next_step_index = None
         with self.lock:
             if self.state != "running" or self.current_step_index != step_index:
                 return  # stop() (or another tick) already handled this
+
+            if nav_state == "running":
+                self._run_path_seen_running = True
+                return  # still going - nothing to do yet
+
+            if not self._run_path_seen_running and self.now() - self._run_path_started_at < RUN_PATH_FEED_GRACE_S:
+                # navigate's feed pushes on its own fixed timer (see
+                # navigate/feed.py), independent of when its internal
+                # state actually changes - right after start_path()
+                # returns, the feed can still be reporting the
+                # *previous* run's terminal state for up to one push
+                # period. Without this grace window, a step could be
+                # marked complete before navigate had even started
+                # driving it (seen live 2026-08-09: the job moved on to
+                # the next step's load, which navigate correctly
+                # refused since the first path was still actually
+                # running).
+                return
+
             if nav_state == "stopped_ok":
                 self.step_log.append({"index": step_index, **self._step_summary(step_index), "outcome": "ok"})
                 next_step_index = self._advance(step_index)
@@ -182,7 +219,7 @@ class MissionRunner:
                 # Resend every tick, not just once at step start - drive's
                 # own firmware watchdog turns the pump off after 2000ms of
                 # silence (see navigate-prd.md's own pump-resend fix,
-                # navigate/control.py's step()), and mission_status_hz's
+                # navigate/control.py's step()), and job_status_hz's
                 # tick period is comfortably under that.
                 self.pump_on(True)
             return
@@ -207,9 +244,9 @@ class MissionRunner:
 
     def _advance(self, step_index: int):
         """Call while holding self.lock. Moves current_step_index to the
-        next step, or marks the mission stopped_ok if that was the last
+        next step, or marks the job stopped_ok if that was the last
         one. Returns the new step index to actually start, or None if
-        the mission just finished (so the caller knows not to call
+        the job just finished (so the caller knows not to call
         _start_current_step)."""
         if step_index + 1 >= len(self.steps):
             self.state = "stopped_ok"
@@ -221,7 +258,7 @@ class MissionRunner:
     def status(self) -> dict:
         with self.lock:
             return {
-                "mission_name": self.mission_name,
+                "job_name": self.job_name,
                 "state": self.state,
                 "current_step_index": self.current_step_index,
                 "step_count": len(self.steps),

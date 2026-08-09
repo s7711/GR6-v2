@@ -1,8 +1,8 @@
-# PRD: Mission Sequencing Service (missions)
+# PRD: Job Sequencing Service (jobs)
 
-See `top-prd.md` for where this fits: `drive` → `navigate` → **missions**
+See `top-prd.md` for where this fits: `drive` → `navigate` → **jobs**
 (this document) → `safety` (obstacle-avoidance, future, blocked on
-relocating the ultrasonics). Unlike the earlier services, `missions` has
+relocating the ultrasonics). Unlike the earlier services, `jobs` has
 no equivalent at all in GR6-v1 — it's the first genuinely new capability
 this project has needed, not a port of prior art.
 
@@ -25,14 +25,14 @@ by hand):
    "Path entry"). Nothing today checks this across a *sequence* of
    paths ahead of time.
 2. **Observability over an unattended run.** A single path run is short
-   enough to watch directly; a mission (several paths back to back) is
+   enough to watch directly; a job (several paths back to back) is
    not. Debugging so far (see navigate-prd.md's "Real bugs found via
    testing") has relied on live telemetry captured while someone was
    watching — that doesn't work once nobody's watching.
 
 ## Solution
 
-A new service, `missions`, following this project's usual shape (Flask
+A new service, `jobs`, following this project's usual shape (Flask
 + shared header/template, `config.yaml`-driven, systemd unit, port
 8010). It owns *sequencing and monitoring* only — it has no path-
 following logic of its own and never talks to `drive` directly; it
@@ -53,7 +53,7 @@ interpreted by a plain Python state machine:
   arbitrary imperative code without building a state machine around it
   anyway — so you end up here regardless, with a much harder-to-debug
   and harder-to-visualise path to get there. Not worth it for one
-  operator authoring missions occasionally.
+  operator authoring jobs occasionally.
 - **A Scratch-style visual language**: real UI effort to build from
   scratch with no existing tool to reuse — not worth it for this
   project's scale.
@@ -62,7 +62,7 @@ interpreted by a plain Python state machine:
   debugging a bespoke language is its own maintenance burden for no
   current benefit.
 
-A mission file is a YAML list of typed step dicts — structurally the
+A job file is a YAML list of typed step dicts — structurally the
 same idea as a path (a YAML list of typed point dicts interpreted by
 `PathRunner`), reusing an established pattern rather than inventing a
 new one. Adding a new capability later (waiting, pump-only steps,
@@ -70,7 +70,7 @@ replanning) means adding a new step *type* to the interpreter — a
 deliberate, reviewable Python change — not something an open-ended
 script could already attempt unpredictably.
 
-### Mission file format
+### Job file format
 
 ```yaml
 name: Front beds
@@ -87,9 +87,9 @@ steps:
     path: HouseFrontSquiggle
 ```
 
-Stored as `missions/data/<name>.yaml`, same `paths.py`-style storage
+Stored as `jobs/data/<name>.yaml`, same `paths.py`-style storage
 (list/load/save/delete, same `_SAFE_NAME` filename validation) — a
-`missions/missions.py` module mirroring `navigate/paths.py` rather than
+`jobs/jobs.py` module mirroring `navigate/paths.py` rather than
 a new storage convention.
 
 v1 shipped with exactly one step type (`run_path`), matching the stated
@@ -117,7 +117,7 @@ does exactly this check):
   leaves the robot (computed the same way `navigate`'s own entry logic
   does, from the two paths' point data alone — no live robot needed).
   A failing pair is flagged to the operator as a warning when saving the
-  mission (not blocked outright — a route the robot doesn't naturally
+  job (not blocked outright — a route the robot doesn't naturally
   end facing correctly might still be intentionally fixed by the
   operator jogging it between paths, see below).
 - **At run time**: `/control/load/<path>` then `/control/start` —
@@ -125,7 +125,7 @@ does exactly this check):
   robot's live position and returns `{"ok": false, "reason": ...}` on
   failure, so there's no need for a separate check-then-start
   round-trip (and no race between the two). A rejected start fails the
-  step immediately with that same reason surfaced on the mission page
+  step immediately with that same reason surfaced on the job page
   — **no automatic "bridge" path is generated to cover the gap**.
   That's deliberately left to a future path planner
   (`top-prd.md` item 4), not invented here as a stand-in; for now the
@@ -134,7 +134,7 @@ does exactly this check):
   and retrying the step (see "Resume" below) — the jog widget just
   added to `navigate`'s Run/Edit map pages exists for exactly this.
 
-### Mission execution (`MissionRunner`, mirrors `navigate`'s `PathRunner`)
+### Job execution (`JobRunner`, mirrors `navigate`'s `PathRunner`)
 
 States: `idle` → `running` → `stopped_ok` (all steps completed) /
 `aborted` (a step failed). One `current_step_index`, advanced only on a
@@ -146,7 +146,7 @@ Per `run_path` step: `/control/load/<path>` → `/control/start` → watch
 mechanism `wheelspeed` and `navigate` itself already use to read
 `oxts-nav`'s/`drive`'s feeds — not a second outgoing websocket
 connection from a Flask backend) until state leaves `running` →
-`stopped_ok` advances to the next step, `aborted` stops the mission and
+`stopped_ok` advances to the next step, `aborted` stops the job and
 records the reason against that step. A rejected load or start (e.g.
 `navigate` already running something else — see its own "refuse while
 running" guard, added 2026-07-31) fails the step the same way, logged
@@ -154,13 +154,13 @@ as `failed_to_load`/`failed_to_start` rather than `aborted`, since
 nothing ever actually started running for that step.
 
 **Stop** (operator-requested): calls `/control/stop` immediately and
-marks the mission `idle`, same distinction `PathRunner.stop()` already
+marks the job `idle`, same distinction `PathRunner.stop()` already
 draws between an operator stop and a real abort.
 
 **Resume**: Start can be given a step index to begin from (not just
 0) — after fixing whatever caused a step to fail (repositioning the
 robot, editing a path), the operator can retry just that step rather
-than rerunning the whole mission from scratch. No automatic retry
+than rerunning the whole job from scratch. No automatic retry
 policy in v1 (`on_fail` is effectively always "stop") — the operator
 decides what "fixed" means before pressing Start again.
 
@@ -198,7 +198,7 @@ final stretch where GNSS is least reliable anyway (multipath near the
 waterbutt/marker structure). That's real conditional logic — wait for a
 live condition, then behave differently depending on the outcome — which
 none of the four step types above have: each just runs and either
-succeeds or fails the mission, matching "no branching, no `on_fail:
+succeeds or fails the job, matching "no branching, no `on_fail:
 retry`" from this doc's original Out of Scope list. Solving that isn't
 "add another step type", it's the first step type whose *outcome*
 branches, and deserves its own design pass (a `wait_for_condition` step?
@@ -207,42 +207,58 @@ three purely time-based ones above. Not built yet.
 
 ### Logging
 
-Every mission run writes a fresh JSONL log — `missions/data/logs/
-<mission_name>_<yymmdd_hhmmss>.jsonl` — one line per step transition
+Every job run writes a fresh JSONL log — `jobs/data/logs/
+<job_name>_<yymmdd_hhmmss>.jsonl` — one line per step transition
 (step index, path name, start/end time, outcome, abort reason if any),
 plus periodic position snapshots while a step is running (same shape as
 `navigate`'s own `last_run_debug.jsonl`, reused rather than
 reinvented). Unlike that file (overwritten each run, "last run only"),
-mission logs accumulate — a mission run isn't watched live the way a
+job logs accumulate — a job run isn't watched live the way a
 single path run is, so there's nothing to compare a fresh log against
 after the fact. Retained for a configurable number of days
 (`log_retention_days`, default a couple of days per disk space being
 cheap), swept on service startup. A log *viewer* page is out of scope
 for this first version — raised in planning as a real future need
-("develop a viewer for logged files") but not blocking missions v1;
+("develop a viewer for logged files") but not blocking jobs v1;
 the raw JSONL is readable as-is in the meantime.
 
-### Mission page
+### Job page
 
 One page, same shape as `navigate`'s Run page: a dropdown of saved
-missions, Start (optionally from a chosen step)/Stop, live state +
-current step number/name via a websocket (`/ws/missions`), and the
-abort reason if stopped that way. A separate page lists saved missions
+jobs, Start (optionally from a chosen step)/Stop, live state +
+current step number/name via a websocket (`/ws/jobs`), and the
+abort reason if stopped that way. A separate page lists saved jobs
 (name, step count) — mirrors `navigate`'s Paths page.
 
-### Create/Edit mission page
+Added 2026-08-09, so lining a job up no longer needs switching to
+`navigate`: a jog joystick (identical `shared/web/static/jog.js`
+widget as `navigate`'s own Run page), proxied through a new
+`POST /jog/manual` here that just forwards to `navigate`'s own
+`/jog/manual` rather than talking to `drive` directly (same boundary
+as `pump_on()` above) — so `drive`'s control-arbiter manual/auto
+lockout is enforced in exactly one place regardless of which page's
+joystick sent the command. Disabled (dimmed, `pointer-events: none`)
+whenever a step is actually running, same reasoning as `navigate`'s
+own page. The preview map also plots a live trail of the robot's
+actual driven position (not just the planned step paths) by
+connecting the browser directly to `oxts-nav`'s feed
+(`oxtsnav_ws_url`, same pattern as `navigate`'s own trail) — no proxy
+needed since a WebSocket isn't subject to CORS the way a `fetch()`
+is.
+
+### Create/Edit job page
 
 One page for both, not two — unlike `navigate`'s Create Path (live
 recording by driving) vs. Edit map (hand-editing an existing file),
-composing a new mission and editing an existing one are the same
+composing a new job and editing an existing one are the same
 operation (an ordered step list), just starting empty vs. loaded.
-Reached either via "Create Mission" in the nav dropdown (no `name`
-in the URL — empty step list) or via the Missions page's "Edit"
-button (`?name=<mission>` — loads that mission's steps). The nav
-dropdown's own label is necessarily static ("Create Mission" — same
+Reached either via "Create Job" in the nav dropdown (no `name`
+in the URL — empty step list) or via the Jobs page's "Edit"
+button (`?name=<job>` — loads that job's steps). The nav
+dropdown's own label is necessarily static ("Create Job" — same
 as `create-path.html`'s dropdown entry staying "Create Path"
 regardless of progress), so the page's own on-page heading is what
-actually reflects "New mission" vs. "Editing: `<name>`", not the
+actually reflects "New job" vs. "Editing: `<name>`", not the
 dropdown text.
 
 Each step is one row: a dropdown of `navigate`'s saved paths (fetched
@@ -254,7 +270,7 @@ select-on-map), and Remove. **Add path** appends a new `run_path` step
 directly (same one-click append as before, just renamed once a second
 kind of step existed to disambiguate from). **Add step** (2026-08-08)
 opens a small modal instead — type (Pause/Water/Fill) plus a duration
-dropdown scoped to that type (see "Mission execution"'s "Timed steps")
+dropdown scoped to that type (see "Job execution"'s "Timed steps")
 — since unlike picking a path from a dropdown, a timed step needs two
 choices made before it means anything, so appending one blank and
 editing in place (the run_path pattern) wouldn't leave a step in any
@@ -276,13 +292,13 @@ for v1.
 ### Config additions
 
 ```yaml
-missions:
-  unit: robot-missions.service
+jobs:
+  unit: robot-jobs.service
   host: 0.0.0.0
   port: 8010
   web_ui: true
-  missions_dir: missions/data
-  mission_status_hz: 2        # poll rate against navigate's /ws/navigate while a step runs
+  jobs_dir: jobs/data
+  job_status_hz: 2        # poll rate against navigate's /ws/navigate while a step runs
   log_retention_days: 2
 ```
 
@@ -301,11 +317,11 @@ missions:
 - Retry/replan policy beyond "stop and let the operator decide" — no
   `on_fail: retry`, no conditionals, no branching.
 - Reading `safety`'s output to decide whether to stop — `safety`
-  doesn't exist yet; `missions` currently only reacts to `navigate`'s
+  doesn't exist yet; `jobs` currently only reacts to `navigate`'s
   own abort reasons (cross-track/heading/accuracy), same as an operator
   watching the Run page would.
 - A log viewer page — logs are written in a form a future viewer can
   read, but no viewer is built now.
-- Mission *authoring* UI (a drag-and-reorder step list, etc.) — v1
-  missions are hand-written YAML, same starting point paths themselves
+- Job *authoring* UI (a drag-and-reorder step list, etc.) — v1
+  jobs are hand-written YAML, same starting point paths themselves
   had before the Edit map page existed.

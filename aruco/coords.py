@@ -115,7 +115,7 @@ def rvec_to_C_CM(rvec):
     """C_CM (raw marker frame -> raw camera frame) from ArUco's own
     rvec output, as cv2.Rodrigues defines it: a marker-frame point X_M
     maps to camera-frame X_C via X_C = C_CM @ X_M + tvec."""
-    dcm, _ = cv2.Rodrigues(rvec)
+    dcm, _ = cv2.Rodrigues(np.asarray(rvec, dtype=float))
     return dcm
 
 
@@ -155,3 +155,70 @@ def displacement_camera_to_body(v_C, hpr_cb_deg):
     lever-arm vector (see gad.py) and the Add Marker survey position."""
     c_cb = hpr_to_dcm(*hpr_cb_deg)
     return c_cb.T @ C_Cc.T @ v_C
+
+
+def camera_position_in_marker_frame(rvec, tvec):
+    """Camera origin, expressed in the marker's own (raw ArUco M) frame -
+    the inverse of X_C = C_CM . X_M + tvec (X_M = -C_CM^T . tvec, since
+    C_CM is a rotation). The marker itself doesn't move, so this frame
+    is fixed regardless of the camera's current orientation - unlike the
+    raw tvec (or displacement_camera_to_body's body-frame result), which
+    both change with a pure rotation even at an unchanged position. Used
+    by waterbutt's QC marker check to isolate real positional drift from
+    an incidental heading difference between two readings - see
+    qc_marker_delta_body_frame below and waterbutt-prd.md."""
+    c_cm = rvec_to_C_CM(rvec)
+    return -c_cm.T @ np.asarray(tvec, dtype=float)
+
+
+def target_position_in_marker_frame(rvec, tvec, target_offset_c=(0.0, 0.0, 0.0)):
+    """Like camera_position_in_marker_frame, but for a point rigidly
+    offset from the camera by target_offset_c - expressed in c (the
+    HPR-friendly camera frame: X forward out of the camera, Y right, Z
+    down; same convention hpr_cb/displacement_camera_to_body use), not
+    the raw camera frame. E.g. waterbutt's funnel sits a fixed distance
+    behind the camera on the same rigid mount (see
+    config.yaml's waterbutt_funnel_offset_c, waterbutt-prd.md's QC
+    marker section) - defaults to (0,0,0), i.e. the camera itself, so
+    qc_marker_delta_body_frame's old (camera-only) behaviour is just
+    this function's zero-offset case, not a separate code path.
+
+    Since the offset is fixed relative to the camera, it must be
+    rotated by the SAME orientation (this reading's own C_CM) as the
+    camera position itself before being added - a fixed lever arm
+    doesn't stay expressed in the same marker-frame components as the
+    camera rotates between readings, any more than tvec does."""
+    c_cm = rvec_to_C_CM(rvec)
+    offset_C = C_Cc @ np.asarray(target_offset_c, dtype=float)  # c -> raw camera frame C
+    offset_M = c_cm.T @ offset_C  # raw camera frame -> marker frame, same rotation as camera_position_in_marker_frame
+    return camera_position_in_marker_frame(rvec, tvec) + offset_M
+
+
+def qc_marker_delta_body_frame(
+    rvec_ideal, tvec_ideal, rvec_live, tvec_live, hpr_cb_deg, target_offset_c=(0.0, 0.0, 0.0)
+):
+    """The displacement between two readings of the same fixed marker,
+    with any difference in the camera's own orientation between the two
+    readings removed - so a robot that's simply facing a different way
+    than when the "ideal" reading was taken doesn't show up as a false
+    positional error (found live 2026-08-09: Ben moved much closer to
+    the saved ideal spot but the plain body-frame comparison still
+    showed an error, because it was confounded by the rotation).
+
+    target_offset_c shifts the point being tracked from the camera
+    itself to some other point rigidly mounted relative to it (e.g. the
+    water butt funnel, ~23cm behind the camera - see
+    target_position_in_marker_frame) - defaults to the camera.
+
+    Computed by differencing target_position_in_marker_frame() between
+    the two readings (a frame the marker's own fixedness makes rotation-
+    independent), then rotating that delta back into body-frame terms
+    anchored to the *ideal* reading's orientation - so the result stays
+    interpretable as forward/right/down, just "as the robot was facing
+    when the ideal was saved" rather than "as it's facing right now"."""
+    delta_m = target_position_in_marker_frame(
+        rvec_live, tvec_live, target_offset_c
+    ) - target_position_in_marker_frame(rvec_ideal, tvec_ideal, target_offset_c)
+    c_cm_ideal = rvec_to_C_CM(rvec_ideal)
+    delta_c = c_cm_ideal @ delta_m  # marker-frame delta -> raw-camera-frame-as-oriented-at-ideal-time
+    return displacement_camera_to_body(delta_c, hpr_cb_deg)

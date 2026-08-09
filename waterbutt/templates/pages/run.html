@@ -17,6 +17,10 @@
           <span class="text-body-secondary">State:</span> <span id="stat-state">idle</span>
           <span id="remaining-wrap" class="d-none">(<span id="stat-remaining_s">—</span>s left)</span>
         </div>
+        <div class="mt-3">
+          <span class="text-body-secondary">Distance from ideal:</span>
+          <span id="qc-message">—</span>
+        </div>
       </div>
     </div>
   </div>
@@ -61,6 +65,31 @@ connectWs("/ws/waterbutt", (msg) => {
   slider.disabled = watering;
   stopBtn.disabled = !watering;
   document.getElementById("remaining-wrap").classList.toggle("d-none", !watering);
+  renderQcMarker(msg.qc_marker);
 });
+
+// --- QC marker: a GNSS-independent "is the robot where it should be"
+// check before an automatic fill - see waterbutt-prd.md's "QC marker".
+// The comparison itself (rotation-aware, so facing a different way than
+// the saved ideal doesn't read as a false positional error) runs
+// server-side (app.py's _qc_loop / qc_check.compare) and arrives here
+// ready-made over /ws/waterbutt - this page just renders whichever
+// state it's in. See the config page (qc-marker.html) for where the
+// saved record comes from.
+
+const qcMessage = document.getElementById("qc-message");
+
+function renderQcMarker(qc) {
+  if (!qc || qc.state === "not_configured") {
+    qcMessage.textContent = "No QC marker set — see the QC Marker page.";
+  } else if (qc.state === "aruco_unreachable") {
+    qcMessage.textContent = "Can't reach aruco right now.";
+  } else if (qc.state === "not_visible") {
+    qcMessage.textContent = `No marker visible (expecting marker ${qc.marker_id}).`;
+  } else {
+    qcMessage.textContent =
+      `${qc.distance_m.toFixed(3)} m (forward ${qc.forward_m.toFixed(3)}, right ${qc.right_m.toFixed(3)}, down ${qc.down_m.toFixed(3)})`;
+  }
+}
 </script>
 {% endblock %}

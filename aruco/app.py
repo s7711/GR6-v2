@@ -14,6 +14,7 @@ import threading
 import time
 from pathlib import Path
 
+import numpy as np
 from flask import Flask, Response, abort, jsonify, request
 from flask_sock import Sock
 from PIL import Image
@@ -27,6 +28,7 @@ from shared.web import register_pages, service_url, use_shared_static, use_share
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "oxts-nav"))
 from ncomrx import machine_time_to_gps  # noqa: E402
 
+import coords  # noqa: E402
 import detection  # noqa: E402
 import gad  # noqa: E402
 import marker_map  # noqa: E402
@@ -218,6 +220,18 @@ def _detection_loop():
         gps_time = machine_time_to_gps(read["timestamp"], connection.get("timeOffset"))
 
         for d in detections:
+            # Body-frame (X forward, Y right, Z down - vehicle convention,
+            # not the raw camera frame) displacement to every detected
+            # marker, mapped or not - independent of nav/GNSS entirely
+            # (only needs the tvec plus the camera's own static mounting
+            # calibration), for waterbutt's GNSS-independent "distance
+            # from ideal" QC check - see waterbutt-prd.md.
+            debug[d["id"]] = {
+                "tvec_camera_frame": list(d["tvec"]),
+                "rvec_camera_frame": list(d["rvec"]),
+                "displacement_body_frame": (np.array(dxc_b) + coords.displacement_camera_to_body(d["tvec"], hpr_cb)).tolist(),
+            }
+
             marker = marker_map.find_marker(marker_map_path, d["id"])
             if marker is not None:
                 if gps_time is not None:

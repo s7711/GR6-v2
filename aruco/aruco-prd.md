@@ -241,6 +241,27 @@ decide what to render.
   found via testing" below) needed exactly this to diagnose; kept
   permanently since "hand-verify a measurement against a tape measure" is
   a recurring, not one-off, need. Data: `aruco`'s own websocket.
+
+  Extended 2026-08-09: `/ws/aruco`'s `debug` field now publishes
+  `tvec_camera_frame`/`rvec_camera_frame`/`displacement_body_frame` for
+  **every** detected marker, not just unmapped ones — needed nothing
+  beyond the tvec/rvec themselves and the camera's static mounting
+  calibration (`hpr_cb`), no nav/GNSS fix required, since it's the same
+  `coords.displacement_camera_to_body()` transform `survey.py` already
+  used, just applied regardless of whether the marker's in the map.
+  Consumed externally by `waterbutt`'s QC marker check (see
+  `waterbutt-prd.md`) — a GNSS-independent "is the robot where it
+  should be" sanity check before an automatic fill, which specifically
+  needs a measurement that doesn't share GNSS's own blind spot at
+  close range. `rvec` was added after `displacement_body_frame` alone
+  turned out to confound rotation with position (see below) — `coords.
+  py` gained `camera_position_in_marker_frame()` and
+  `qc_marker_delta_body_frame()` to fix that, both covered by new
+  `test_coords.py` cases proving rotation-invariance numerically, not
+  just by inspection. Also gained `target_position_in_marker_frame()`
+  and a `target_offset_c` parameter so the tracked point can be shifted
+  off the camera itself — e.g. `waterbutt`'s funnel, rigidly offset
+  behind it (`config.yaml`'s `waterbutt_funnel_offset_c`).
 - **Map** — plan view, vehicle-centred (recentred live on the current
   position every redraw — no fixed origin, see the origin discussion
   below), with gridlines and a scale bar at a matching "nice" spacing,

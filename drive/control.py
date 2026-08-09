@@ -1,5 +1,5 @@
 """Control arbitration between manual (web jog page) and automatic
-(future `navigate`/`missions`) callers of `drive`.
+(future `navigate`/`jobs`) callers of `drive`.
 
 No lock that can *block* a manual command — the moment a human needs
 to take over is often exactly when something automatic is going wrong,

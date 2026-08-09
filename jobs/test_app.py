@@ -1,9 +1,9 @@
-"""End-to-end tests against the Flask app — routes, mission control
+"""End-to-end tests against the Flask app — routes, job control
 wiring, save-time continuity warnings. Never makes a real HTTP call to
-navigate: app.runner is replaced with a fresh MissionRunner built over
-recording stubs (see test_control.py for MissionRunner's own
-behaviour). app.MISSIONS_DIR/app.NAVIGATE_PATHS_DIR point at temp
-directories so tests never touch this robot's real saved missions/paths.
+navigate: app.runner is replaced with a fresh JobRunner built over
+recording stubs (see test_control.py for JobRunner's own
+behaviour). app.JOBS_DIR/app.NAVIGATE_PATHS_DIR point at temp
+directories so tests never touch this robot's real saved jobs/paths.
 """
 
 import tempfile
@@ -14,8 +14,8 @@ from unittest.mock import patch
 import requests
 
 import app
-import missions as missions_module
-from control import MissionRunner
+import jobs as jobs_module
+from control import JobRunner
 
 import paths as navigate_paths  # noqa: E402 - navigate/ already on sys.path, added by importing app above
 
@@ -66,33 +66,33 @@ class NavigateStub:
         pass
 
 
-class MissionsAppTestCase(unittest.TestCase):
+class JobsAppTestCase(unittest.TestCase):
     def setUp(self):
-        app.MISSIONS_DIR = Path(tempfile.mkdtemp())
-        app.LOGS_DIR = app.MISSIONS_DIR / "logs"
+        app.JOBS_DIR = Path(tempfile.mkdtemp())
+        app.LOGS_DIR = app.JOBS_DIR / "logs"
         app.NAVIGATE_PATHS_DIR = Path(tempfile.mkdtemp())
         self.stub = NavigateStub()
-        app.runner = MissionRunner(
+        app.runner = JobRunner(
             self.stub.load_path, self.stub.start_path, self.stub.stop_path, self.stub.navigate_status,
             self.stub.pump_on, self.stub.waterbutt_go, self.stub.waterbutt_stop,
         )
         self.client = app.app.test_client()
 
-    def test_list_missions_empty(self):
-        self.assertEqual(self.client.get("/api/missions").get_json(), [])
+    def test_list_jobs_empty(self):
+        self.assertEqual(self.client.get("/api/jobs").get_json(), [])
 
-    def test_save_get_delete_mission(self):
-        resp = self.client.post("/api/missions/front-beds", json={"steps": SAMPLE_STEPS})
+    def test_save_get_delete_job(self):
+        resp = self.client.post("/api/jobs/front-beds", json={"steps": SAMPLE_STEPS})
         self.assertEqual(resp.get_json(), {"warnings": []})
 
-        loaded = self.client.get("/api/missions/front-beds").get_json()
+        loaded = self.client.get("/api/jobs/front-beds").get_json()
         self.assertEqual(loaded["steps"], SAMPLE_STEPS)
 
-        self.assertEqual(self.client.delete("/api/missions/front-beds").status_code, 204)
-        self.assertEqual(self.client.get("/api/missions").get_json(), [])
+        self.assertEqual(self.client.delete("/api/jobs/front-beds").status_code, 204)
+        self.assertEqual(self.client.get("/api/jobs").get_json(), [])
 
-    def test_get_missing_mission_404(self):
-        self.assertEqual(self.client.get("/api/missions/does-not-exist").status_code, 404)
+    def test_get_missing_job_404(self):
+        self.assertEqual(self.client.get("/api/jobs/does-not-exist").status_code, 404)
 
     def test_save_warns_on_a_discontinuous_pair(self):
         navigate_paths.save_path(app.NAVIGATE_PATHS_DIR, "loop-a", SAMPLE_PATH_POINTS)
@@ -103,30 +103,30 @@ class MissionsAppTestCase(unittest.TestCase):
         ]
         navigate_paths.save_path(app.NAVIGATE_PATHS_DIR, "loop-b", far_points)
 
-        resp = self.client.post("/api/missions/front-beds", json={"steps": SAMPLE_STEPS})
+        resp = self.client.post("/api/jobs/front-beds", json={"steps": SAMPLE_STEPS})
         warnings = resp.get_json()["warnings"]
         self.assertEqual(len(warnings), 1)
         self.assertEqual(warnings[0]["from_path"], "loop-a")
         self.assertEqual(warnings[0]["to_path"], "loop-b")
 
     def test_control_start_loads_and_starts_first_step(self):
-        missions_module.save_mission(app.MISSIONS_DIR, "front-beds", SAMPLE_STEPS)
+        jobs_module.save_job(app.JOBS_DIR, "front-beds", SAMPLE_STEPS)
         resp = self.client.post("/control/start", json={"name": "front-beds"})
         self.assertEqual(resp.get_json()["state"], "running")
         self.assertEqual(self.stub.loaded, ["loop-a"])
 
     def test_control_start_can_resume_from_a_step(self):
-        missions_module.save_mission(app.MISSIONS_DIR, "front-beds", SAMPLE_STEPS)
+        jobs_module.save_job(app.JOBS_DIR, "front-beds", SAMPLE_STEPS)
         resp = self.client.post("/control/start", json={"name": "front-beds", "start_index": 1})
         self.assertEqual(resp.get_json()["current_step_index"], 1)
         self.assertEqual(self.stub.loaded, ["loop-b"])
 
-    def test_control_start_missing_mission_404(self):
+    def test_control_start_missing_job_404(self):
         resp = self.client.post("/control/start", json={"name": "does-not-exist"})
         self.assertEqual(resp.status_code, 404)
 
     def test_control_stop(self):
-        missions_module.save_mission(app.MISSIONS_DIR, "front-beds", SAMPLE_STEPS)
+        jobs_module.save_job(app.JOBS_DIR, "front-beds", SAMPLE_STEPS)
         self.client.post("/control/start", json={"name": "front-beds"})
         resp = self.client.post("/control/stop")
         self.assertEqual(resp.status_code, 204)
@@ -134,7 +134,7 @@ class MissionsAppTestCase(unittest.TestCase):
         self.assertEqual(self.stub.stop_calls, 1)
 
     def test_pages_render(self):
-        for path in ["/", "/pages/missions", "/pages/create-mission"]:
+        for path in ["/", "/pages/jobs", "/pages/create-job"]:
             resp = self.client.get(path)
             self.assertEqual(resp.status_code, 200, path)
 

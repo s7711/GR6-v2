@@ -220,7 +220,7 @@ class NavigateAppTestCase(unittest.TestCase):
         self.assertEqual(self.recorder.velocity_calls[-1], (0.0, 0.0))
 
     def test_control_load_refused_while_a_path_is_already_running(self):
-        # Found live 2026-07-31: a second caller (missions, another
+        # Found live 2026-07-31: a second caller (jobs, another
         # browser tab) loading a different path mid-run used to reset
         # straight to idle with no explicit stop, abandoning the run.
         other_points = [
@@ -257,7 +257,7 @@ class NavigateAppTestCase(unittest.TestCase):
         self.assertEqual(self.recorder.pump_calls, [True, False])
 
     def test_pump_manual_refused_while_a_path_is_running(self):
-        # missions' "water" step sends this between path steps - it must
+        # jobs' "water" step sends this between path steps - it must
         # not be able to race an interactively-started path's own
         # per-tick pump commands (see navigate/control.py's step()).
         paths_module.save_path(app.PATHS_DIR, "loop", SAMPLE_POINTS)

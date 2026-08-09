@@ -369,8 +369,8 @@ def control_load(name):
 
 @app.route("/pump/manual", methods=["POST"])
 def pump_manual():
-    """Direct on/off outside of any path-following - for missions'
-    stationary "water" step (see missions/control.py). Refuses while a
+    """Direct on/off outside of any path-following - for jobs'
+    stationary "water" step (see jobs/control.py). Refuses while a
     path is actually running: that path's own step() is already
     resending pump commands every tick, and an out-of-band manual
     command here would just race it."""

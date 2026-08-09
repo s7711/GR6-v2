@@ -20,8 +20,12 @@ aruco/data/
 # Recorded paths — this robot's real-world data, see navigate-prd.md
 navigate/data/
 
-# Saved missions + run logs — this robot's real-world data, see missions-prd.md
-missions/data/
+# Saved jobs + run logs — this robot's real-world data, see jobs-prd.md
+jobs/data/
+
+# Saved QC marker record — this robot's real-world calibration, see
+# waterbutt-prd.md's QC marker section
+waterbutt/data/
 
 # Per-interface recovery choices — this robot's own runtime state, see
 # network/network-prd.md

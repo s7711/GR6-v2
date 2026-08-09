@@ -1,11 +1,11 @@
-{# title: Create Mission #}
+{# title: Create Job #}
 {% extends "base.html" %}
-{% block title %}GR6 — Create Mission{% endblock %}
+{% block title %}GR6 — Create Job{% endblock %}
 
 {% block content %}
 <div class="card mb-3">
   <div class="card-body">
-    <h5 id="page-heading">New mission</h5>
+    <h5 id="page-heading">New job</h5>
 
     <div id="warnings" class="alert alert-warning d-none"></div>
 
@@ -62,14 +62,14 @@
   <div class="modal-dialog">
     <div class="modal-content">
       <div class="modal-header">
-        <h5 class="modal-title">Save mission</h5>
+        <h5 class="modal-title">Save job</h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
         <label class="form-label">Filename</label>
         <input id="save-filename" type="text" class="form-control">
         <div id="save-overwrite-note" class="text-warning small mt-2 d-none">
-          A mission with this name already exists — saving will overwrite it.
+          A job with this name already exists — saving will overwrite it.
         </div>
       </div>
       <div class="modal-footer">
@@ -85,7 +85,7 @@
 <script src="/static/geomap.js"></script>
 <script>
 const params = new URLSearchParams(window.location.search);
-const missionName = params.get("name");
+const jobName = params.get("name");
 
 // Cycled by step index, not by path name — two steps using the same
 // path (e.g. the same bed driven twice) still get distinct colours, so
@@ -238,9 +238,9 @@ document.getElementById("save-filename").addEventListener("input", updateOverwri
 
 document.getElementById("save-btn").addEventListener("click", () => {
   if (steps.length === 0) { alert("Add at least one step first."); return; }
-  fetch("/api/missions").then((r) => r.json()).then((list) => {
+  fetch("/api/jobs").then((r) => r.json()).then((list) => {
     existingNames = list.map((m) => m.name);
-    document.getElementById("save-filename").value = missionName || "";
+    document.getElementById("save-filename").value = jobName || "";
     updateOverwriteNote();
     saveModal.show();
   });
@@ -260,7 +260,7 @@ function showWarnings(warnings) {
 function doSave(thenExit) {
   const name = document.getElementById("save-filename").value.trim();
   if (!name) { alert("Enter a filename."); return; }
-  fetch(`/api/missions/${encodeURIComponent(name)}`, {
+  fetch(`/api/jobs/${encodeURIComponent(name)}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ steps }),
@@ -273,7 +273,7 @@ function doSave(thenExit) {
     saveModal.hide();
     showWarnings(result.warnings);
     if (thenExit) {
-      window.location.href = "/pages/missions";
+      window.location.href = "/pages/jobs";
     } else {
       window.history.replaceState(null, "", `?name=${encodeURIComponent(name)}`);
       document.getElementById("page-heading").textContent = `Editing: ${name}`;
@@ -294,13 +294,13 @@ window.addEventListener("beforeunload", (e) => {
 fetch("/api/navigate-paths").then((r) => r.json()).then((list) => {
   navigatePaths = list;
 
-  if (missionName) {
-    document.getElementById("page-heading").textContent = `Editing: ${missionName}`;
-    fetch(`/api/missions/${encodeURIComponent(missionName)}`).then((r) => {
+  if (jobName) {
+    document.getElementById("page-heading").textContent = `Editing: ${jobName}`;
+    fetch(`/api/jobs/${encodeURIComponent(jobName)}`).then((r) => {
       if (!r.ok) return null;
       return r.json();
-    }).then((mission) => {
-      if (mission) steps = mission.steps;
+    }).then((job) => {
+      if (job) steps = job.steps;
       renderSteps();
     });
   } else {

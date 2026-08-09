@@ -139,8 +139,8 @@ general-purpose sysadmin tool.
    then `navigate` (waypoint/path-following) — done, **field-proven
    2026-07-30**: a real autonomous run (`Waterstablebed`, 29 points,
    30.2m) completed end-to-end with no abort, watering a real bed —
-   then `missions` (sequencing multiple stops + pump actions) — **built
-   2026-07-31, see `missions/missions-prd.md`**: the first genuinely
+   then `jobs` (sequencing multiple stops + pump actions) — **built
+   2026-07-31, see `jobs/jobs-prd.md`**: the first genuinely
    new capability this project has needed (no GR6-v1 equivalent to port
    from), sequencing saved `navigate` paths with a save-time continuity
    check between consecutive paths — then `safety` (obstacle-avoidance
@@ -198,7 +198,7 @@ general-purpose sysadmin tool.
    butt's own ESP8266 pinch-valve controller (not part of the Pi's
    architecture, a separate microcontroller on the same wifi network),
    giving an operator a duration-based "Go"/"Stop" page. Independent of
-   `navigate`/`missions` for now — the future `missions` service (item
+   `navigate`/`jobs` for now — the future `jobs` service (item
    4) would call this one's `/go`/`/stop` rather than reimplement the
    valve timing.
 

@@ -1,6 +1,6 @@
 import unittest
 
-from control import MissionRunner
+from control import RUN_PATH_FEED_GRACE_S, JobRunner
 
 STEPS = [{"path": "A"}, {"path": "B"}, {"path": "C"}]
 
@@ -57,7 +57,7 @@ class HardwareStub:
 
 
 class FakeClock:
-    """Injected as MissionRunner's `now` - lets timed-step tests advance
+    """Injected as JobRunner's `now` - lets timed-step tests advance
     time explicitly instead of sleeping in real wall-clock time."""
 
     def __init__(self, t=0.0):
@@ -74,7 +74,7 @@ def make_runner(clock=None):
     stub = NavigateStub()
     hw = HardwareStub()
     kwargs = {"now": clock} if clock is not None else {}
-    runner = MissionRunner(
+    runner = JobRunner(
         stub.load_path, stub.start_path, stub.stop_path, stub.navigate_status,
         hw.pump_on, hw.waterbutt_go, hw.waterbutt_stop, **kwargs,
     )
@@ -84,24 +84,24 @@ def make_runner(clock=None):
 class TestGo(unittest.TestCase):
     def test_go_loads_and_starts_the_first_step(self):
         runner, stub, hw = make_runner()
-        runner.go("test-mission", STEPS)
+        runner.go("test-job", STEPS)
         self.assertEqual(stub.loaded, ["A"])
         self.assertEqual(stub.start_calls, 1)
         status = runner.status()
         self.assertEqual(status["state"], "running")
         self.assertEqual(status["current_step_index"], 0)
-        self.assertEqual(status["mission_name"], "test-mission")
+        self.assertEqual(status["job_name"], "test-job")
 
     def test_go_can_resume_from_a_later_step(self):
         runner, stub, hw = make_runner()
-        runner.go("test-mission", STEPS, start_index=1)
+        runner.go("test-job", STEPS, start_index=1)
         self.assertEqual(stub.loaded, ["B"])
         self.assertEqual(runner.status()["current_step_index"], 1)
 
     def test_failed_start_aborts_immediately(self):
         runner, stub, hw = make_runner()
         stub.start_result = {"ok": False, "reason": "no segment within entry tolerance"}
-        runner.go("test-mission", STEPS)
+        runner.go("test-job", STEPS)
         status = runner.status()
         self.assertEqual(status["state"], "aborted")
         self.assertIn("entry tolerance", status["abort_reason"])
@@ -111,7 +111,7 @@ class TestGo(unittest.TestCase):
         # see navigate/control.py's load_path() guard.
         runner, stub, hw = make_runner()
         stub.load_result = {"ok": False, "reason": "another path is already running - stop it first"}
-        runner.go("test-mission", STEPS)
+        runner.go("test-job", STEPS)
         status = runner.status()
         self.assertEqual(status["state"], "aborted")
         self.assertIn("already running", status["abort_reason"])
@@ -130,16 +130,20 @@ class TestTick(unittest.TestCase):
     def test_tick_advances_to_next_step_on_stopped_ok(self):
         runner, stub, hw = make_runner()
         runner.go("m", STEPS)
+        stub.set_status("running")  # navigate's feed catches up to the step actually running
+        runner.tick()
         stub.set_status("stopped_ok")
         runner.tick()
         self.assertEqual(runner.status()["current_step_index"], 1)
         self.assertEqual(stub.loaded, ["A", "B"])
         self.assertEqual(stub.start_calls, 2)
 
-    def test_tick_finishes_mission_after_last_step(self):
+    def test_tick_finishes_job_after_last_step(self):
         runner, stub, hw = make_runner()
         runner.go("m", STEPS)
         for _ in range(len(STEPS)):
+            stub.set_status("running")
+            runner.tick()
             stub.set_status("stopped_ok")
             runner.tick()
         status = runner.status()
@@ -147,9 +151,11 @@ class TestTick(unittest.TestCase):
         self.assertIsNone(status["current_step_index"])
         self.assertEqual(stub.loaded, ["A", "B", "C"])
 
-    def test_tick_aborts_mission_on_navigate_abort(self):
+    def test_tick_aborts_job_on_navigate_abort(self):
         runner, stub, hw = make_runner()
         runner.go("m", STEPS)
+        stub.set_status("running")
+        runner.tick()
         stub.set_status("aborted", "heading error 80.0deg exceeds limit 70.0deg")
         runner.tick()
         status = runner.status()
@@ -157,15 +163,80 @@ class TestTick(unittest.TestCase):
         self.assertIn("heading error", status["abort_reason"])
         self.assertEqual(stub.loaded, ["A"])  # never proceeded to B
 
-    def test_tick_is_noop_once_mission_already_finished(self):
+    def test_tick_is_noop_once_job_already_finished(self):
         runner, stub, hw = make_runner()
         runner.go("m", [{"path": "A"}])
+        stub.set_status("running")
+        runner.tick()
         stub.set_status("stopped_ok")
         runner.tick()
         self.assertEqual(runner.status()["state"], "stopped_ok")
         stub.set_status("running")  # something odd happening on navigate's side now
         runner.tick()
         self.assertEqual(runner.status()["state"], "stopped_ok")  # unaffected
+
+
+class TestRunPathFeedRace(unittest.TestCase):
+    """navigate's own feed (navigate/feed.py) pushes on a fixed timer,
+    independent of when its internal state actually changes - so right
+    after start_path() returns, navigate_status() can still report the
+    *previous* run's terminal state for up to one push period. Seen
+    live 2026-08-09: a job read that stale "stopped_ok" immediately
+    after starting, treated it as the just-started step already having
+    finished, and moved on to loading the next step while the first
+    path was actually still running - which navigate correctly refused."""
+
+    def test_stale_terminal_status_right_after_start_does_not_advance(self):
+        runner, stub, hw = make_runner()
+        stub.set_status("stopped_ok")  # leftover from a previous run of this same path
+        runner.go("m", STEPS)
+        runner.tick()  # lands before navigate's feed has caught up
+        self.assertEqual(runner.status()["current_step_index"], 0)
+        self.assertEqual(stub.loaded, ["A"])  # never proceeded to B
+
+    def test_advances_once_navigate_actually_reports_running_then_finishes(self):
+        runner, stub, hw = make_runner()
+        stub.set_status("stopped_ok")  # stale, as above
+        runner.go("m", STEPS)
+        runner.tick()
+        stub.set_status("running")  # feed catches up to the real state
+        runner.tick()
+        stub.set_status("stopped_ok")  # genuine completion this time
+        runner.tick()
+        self.assertEqual(runner.status()["current_step_index"], 1)
+
+    def test_tick_does_not_crash_if_it_lands_while_load_path_is_still_in_flight(self):
+        # go()/_advance() set state to "running" before _start_run_path_step
+        # makes its (blocking, real network I/O in production) load_path/
+        # start_path calls - so the background tick loop can genuinely
+        # call tick() while a step is still starting, before its
+        # started-at timestamp used to get stamped. Simulated here by
+        # having load_path itself trigger a reentrant tick() call, same
+        # as a concurrent thread landing mid-flight would.
+        runner, stub, hw = make_runner()
+        real_load_path = runner.load_path
+
+        def load_path_that_races_a_concurrent_tick(name):
+            runner.tick()  # must not crash - _run_path_started_at may not be stamped yet
+            return real_load_path(name)
+
+        runner.load_path = load_path_that_races_a_concurrent_tick
+        runner.go("m", STEPS)  # must not raise
+        self.assertEqual(runner.status()["current_step_index"], 0)
+
+    def test_trusts_terminal_status_once_grace_period_elapses_even_without_seeing_running(self):
+        # Safety net for a real (not stale) near-instant completion that
+        # the feed's push timer happened to never report as "running" -
+        # this must not wait forever.
+        clock = FakeClock()
+        runner, stub, hw = make_runner(clock)
+        stub.set_status("stopped_ok")
+        runner.go("m", STEPS)
+        runner.tick()
+        self.assertEqual(runner.status()["current_step_index"], 0)  # still within the grace window
+        clock.advance(RUN_PATH_FEED_GRACE_S + 0.1)
+        runner.tick()
+        self.assertEqual(runner.status()["current_step_index"], 1)  # now trusted
 
 
 class TestStop(unittest.TestCase):
@@ -190,6 +261,8 @@ class TestStepLog(unittest.TestCase):
     def test_step_log_records_a_successful_step(self):
         runner, stub, hw = make_runner()
         runner.go("m", STEPS)
+        stub.set_status("running")
+        runner.tick()
         stub.set_status("stopped_ok")
         runner.tick()
         self.assertEqual(

@@ -1,0 +1,114 @@
+{# title: QC Marker #}
+{% extends "base.html" %}
+{% block title %}GR6 — QC Marker{% endblock %}
+
+{% block content %}
+<div class="row g-3 mb-3 justify-content-center">
+  <div class="col-12 col-md-8">
+    <div class="card mb-3">
+      <div class="card-body">
+        <h6 class="card-title">Saved ideal position</h6>
+        <p id="saved-none" class="text-body-secondary mb-0" style="display: none;">
+          No QC marker set — pick one below while the robot is sat in the position you want to check against.
+        </p>
+        <p id="saved-summary" class="mb-0" style="display: none;">
+          Marker <strong id="saved-marker-id">—</strong>,
+          forward <strong id="saved-x">—</strong> m,
+          right <strong id="saved-y">—</strong> m,
+          down <strong id="saved-z">—</strong> m.
+        </p>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-body">
+        <h6 class="card-title">Currently visible markers</h6>
+        <p id="empty-note" class="text-body-secondary small mb-0">No markers currently visible.</p>
+        <table class="table table-sm align-middle mb-0" id="visible-table" style="display: none;">
+          <thead>
+            <tr><th>Id</th><th>Forward (m)</th><th>Right (m)</th><th>Down (m)</th><th></th></tr>
+          </thead>
+          <tbody id="visible-rows"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Live camera-frame readings from aruco (raw tvec/rvec, plus a body-
+// frame forward/right/down version of tvec alone, just for a friendly
+// display here - see aruco/app.py's _detection_loop). The actual save
+// captures raw tvec AND rvec: the live "distance from ideal" comparison
+// (waterbutt's own background qc_check.compare, see app.py) needs both
+// readings' orientation, not just their derived positions, so a heading
+// difference alone doesn't read as a false positional error. Only one
+// saved record allowed (see waterbutt-prd.md's "QC marker") - this page
+// always overwrites it, there's no per-marker list.
+
+let latestDebug = {};
+
+function fmt(v) {
+  return v.toFixed(3);
+}
+
+function renderSaved(saved) {
+  document.getElementById("saved-none").style.display = saved ? "none" : "";
+  document.getElementById("saved-summary").style.display = saved ? "" : "none";
+  if (saved) {
+    document.getElementById("saved-marker-id").textContent = saved.marker_id;
+    document.getElementById("saved-x").textContent = fmt(saved.displacement_body_frame[0]);
+    document.getElementById("saved-y").textContent = fmt(saved.displacement_body_frame[1]);
+    document.getElementById("saved-z").textContent = fmt(saved.displacement_body_frame[2]);
+  }
+}
+
+function loadSaved() {
+  fetch("/api/qc-marker").then((r) => r.json()).then(renderSaved);
+}
+
+function saveMarker(id) {
+  const debug = latestDebug[id];
+  if (!debug) return;  // went out of view between render and click
+  fetch("/api/qc-marker", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      marker_id: id,
+      tvec_camera_frame: debug.tvec_camera_frame,
+      rvec_camera_frame: debug.rvec_camera_frame,
+    }),
+  }).then((r) => r.json()).then(renderSaved);
+}
+
+function renderVisible() {
+  const ids = Object.keys(latestDebug).filter((id) => latestDebug[id].displacement_body_frame);
+  document.getElementById("empty-note").style.display = ids.length ? "none" : "";
+  document.getElementById("visible-table").style.display = ids.length ? "" : "none";
+  document.getElementById("visible-rows").innerHTML = ids
+    .map((id) => {
+      const [x, y, z] = latestDebug[id].displacement_body_frame;
+      return `<tr>
+        <td>${id}</td>
+        <td>${fmt(x)}</td>
+        <td>${fmt(y)}</td>
+        <td>${fmt(z)}</td>
+        <td><button class="btn btn-sm btn-primary" data-save-id="${id}">Save as ideal</button></td>
+      </tr>`;
+    })
+    .join("");
+  document.querySelectorAll("[data-save-id]").forEach((btn) => {
+    btn.addEventListener("click", () => saveMarker(btn.dataset.saveId));
+  });
+}
+
+loadSaved();
+
+connectWsUrl("{{ aruco_ws_url }}", (msg) => {
+  latestDebug = msg.debug || {};
+  renderVisible();
+});
+</script>
+{% endblock %}

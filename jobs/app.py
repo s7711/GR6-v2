@@ -1,8 +1,8 @@
-"""GR6-v2 missions: sequences saved navigate paths into a mission —
+"""GR6-v2 jobs: sequences saved navigate paths into a job —
 drives navigate's existing HTTP API (load/start/stop) and watches its
 navigate_feed for real status, same "one process per responsibility"
-boundary every other service follows: missions never talks to drive or
-navigate's control loop directly. See missions-prd.md for the
+boundary every other service follows: jobs never talks to drive or
+navigate's control loop directly. See jobs-prd.md for the
 requirements this implements.
 """
 
@@ -27,20 +27,20 @@ sys.path.append(str(Path(__file__).resolve().parent.parent / "navigate"))  # app
 import paths as navigate_paths  # noqa: E402
 
 import continuity  # noqa: E402
-import missions as missions_module  # noqa: E402
-from control import MissionRunner  # noqa: E402
+import jobs as jobs_module  # noqa: E402
+from control import JobRunner  # noqa: E402
 
 PAGES_DIR = Path(__file__).resolve().parent / "templates" / "pages"
-MISSIONS_STATUS_HZ = 2
+JOBS_STATUS_HZ = 2
 NAVIGATE_TIMEOUT_S = 2.0
 
 cfg = load_config()
-service_cfg = cfg["services"]["missions"]
+service_cfg = cfg["services"]["jobs"]
 navigate_cfg = cfg["services"]["navigate"]
 waterbutt_cfg = cfg["services"]["waterbutt"]
 
-MISSIONS_DIR = Path(__file__).resolve().parent.parent / service_cfg["missions_dir"]
-LOGS_DIR = MISSIONS_DIR / "logs"
+JOBS_DIR = Path(__file__).resolve().parent.parent / service_cfg["jobs_dir"]
+LOGS_DIR = JOBS_DIR / "logs"
 NAVIGATE_PATHS_DIR = Path(__file__).resolve().parent.parent / navigate_cfg["paths_dir"]
 NAVIGATE_BASE_URL = f"http://localhost:{navigate_cfg['port']}"  # server-to-server, see navigate/app.py's own DRIVE_BASE_URL comment
 WATERBUTT_BASE_URL = f"http://localhost:{waterbutt_cfg['port']}"  # server-to-server - "fill" steps talk to waterbutt directly, it's a peer service like navigate, not owned by navigate the way drive is
@@ -73,7 +73,7 @@ def stop_path():
     try:
         requests.post(f"{NAVIGATE_BASE_URL}/control/stop", timeout=NAVIGATE_TIMEOUT_S)
     except requests.exceptions.RequestException:
-        logging.warning("[missions] Couldn't reach navigate to stop")
+        logging.warning("[jobs] Couldn't reach navigate to stop")
 
 
 def navigate_status():
@@ -82,7 +82,7 @@ def navigate_status():
 
 def pump_on(on):
     """For `water` steps - navigate owns the pump (see its /pump/manual),
-    missions never talks to drive directly, same boundary as run_path
+    jobs never talks to drive directly, same boundary as run_path
     steps."""
     try:
         resp = requests.post(f"{NAVIGATE_BASE_URL}/pump/manual", json={"on": on}, timeout=NAVIGATE_TIMEOUT_S)
@@ -93,7 +93,7 @@ def pump_on(on):
 
 def waterbutt_go(duration_s):
     """For `fill` steps - waterbutt is a peer service (like navigate),
-    not something owned by another service, so missions can call it
+    not something owned by another service, so jobs can call it
     directly."""
     try:
         resp = requests.post(f"{WATERBUTT_BASE_URL}/go", json={"duration_s": duration_s}, timeout=NAVIGATE_TIMEOUT_S)
@@ -108,27 +108,27 @@ def waterbutt_stop():
     try:
         requests.post(f"{WATERBUTT_BASE_URL}/stop", timeout=NAVIGATE_TIMEOUT_S)
     except requests.exceptions.RequestException:
-        logging.warning("[missions] Couldn't reach waterbutt to stop")
+        logging.warning("[jobs] Couldn't reach waterbutt to stop")
 
 
-runner = MissionRunner(load_path, start_path, stop_path, navigate_status, pump_on, waterbutt_go, waterbutt_stop)
+runner = JobRunner(load_path, start_path, stop_path, navigate_status, pump_on, waterbutt_go, waterbutt_stop)
 
 _log_lock = threading.Lock()
 _log_path = None
 _logged_step_count = 0
 
 
-def _start_new_log(mission_name):
-    """Fresh log per mission run, unlike navigate's own debug log
-    (overwritten each run) — a mission run isn't watched live the way a
+def _start_new_log(job_name):
+    """Fresh log per job run, unlike navigate's own debug log
+    (overwritten each run) — a job run isn't watched live the way a
     single path run is, so there's nothing to compare a stale file
-    against; see missions-prd.md's "Logging"."""
+    against; see jobs-prd.md's "Logging"."""
     global _log_path, _logged_step_count
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.datetime.now().strftime("%y%m%d_%H%M%S")
-    _log_path = LOGS_DIR / f"{mission_name}_{timestamp}.jsonl"
+    _log_path = LOGS_DIR / f"{job_name}_{timestamp}.jsonl"
     _logged_step_count = 0
-    _append_log({"event": "mission_start", "mission": mission_name})
+    _append_log({"event": "job_start", "job": job_name})
 
 
 def _append_log(entry: dict):
@@ -152,7 +152,7 @@ def _sweep_old_logs():
 
 def _tick_loop():
     global _logged_step_count
-    period = 1.0 / service_cfg["mission_status_hz"]
+    period = 1.0 / service_cfg["job_status_hz"]
     while True:
         runner.tick()
         status = runner.status()
@@ -166,10 +166,37 @@ def _tick_loop():
 @app.context_processor
 def inject_urls():
     browser_host = request.host.split(":")[0]
-    return {"manager_url": service_url(browser_host, "manager") + "/"}
+    return {
+        "manager_url": service_url(browser_host, "manager") + "/",
+        "oxtsnav_ws_url": service_url(browser_host, "oxts-nav", scheme="ws") + "/ws/nav",
+    }
 
 
-# --- Navigate paths proxy (Create/Edit mission page's path dropdowns) ---
+# --- Jog proxy (Run page) ---
+#
+# Proxies to navigate's own /jog/manual rather than talking to drive
+# directly - same "jobs never talks to drive directly" boundary as
+# pump_on() above, and it means the control arbiter's manual/auto
+# lockout (see drive-prd.md's "Control arbitration") is enforced in
+# exactly one place regardless of which page's joystick sent the
+# command.
+
+
+@app.route("/jog/manual", methods=["POST"])
+def jog_manual():
+    payload = request.get_json(force=True)
+    try:
+        resp = requests.post(
+            f"{NAVIGATE_BASE_URL}/jog/manual",
+            json={"left_mps": payload["left_mps"], "right_mps": payload["right_mps"]},
+            timeout=NAVIGATE_TIMEOUT_S,
+        )
+    except requests.exceptions.RequestException:
+        abort(502)
+    return resp.content, resp.status_code, {"Content-Type": "application/json"}
+
+
+# --- Navigate paths proxy (Create/Edit job page's path dropdowns) ---
 #
 # The browser fetches this, not navigate directly — same reasoning as
 # navigate's own /jog/manual proxy: a cross-origin fetch() is subject to
@@ -188,7 +215,7 @@ def api_navigate_paths():
 
 @app.route("/api/navigate-paths/<name>")
 def api_navigate_path_points(name):
-    """A step's actual lat/lon points, for the Create/Edit mission map
+    """A step's actual lat/lon points, for the Create/Edit job map
     preview — same proxy reasoning as the list endpoint above."""
     try:
         resp = requests.get(f"{NAVIGATE_BASE_URL}/api/paths/{name}", timeout=NAVIGATE_TIMEOUT_S)
@@ -197,27 +224,27 @@ def api_navigate_path_points(name):
     return resp.content, resp.status_code, {"Content-Type": "application/json"}
 
 
-# --- Mission storage API ---
+# --- Job storage API ---
 
 
-@app.route("/api/missions")
-def api_list_missions():
-    return jsonify(missions_module.list_missions(MISSIONS_DIR))
+@app.route("/api/jobs")
+def api_list_jobs():
+    return jsonify(jobs_module.list_jobs(JOBS_DIR))
 
 
-@app.route("/api/missions/<name>")
-def api_get_mission(name):
+@app.route("/api/jobs/<name>")
+def api_get_job(name):
     try:
-        return jsonify(missions_module.load_mission(MISSIONS_DIR, name))
-    except (FileNotFoundError, missions_module.InvalidMissionName):
+        return jsonify(jobs_module.load_job(JOBS_DIR, name))
+    except (FileNotFoundError, jobs_module.InvalidJobName):
         abort(404)
 
 
-@app.route("/api/missions/<name>", methods=["POST"])
-def api_save_mission(name):
-    """Saves the mission, and reports (but doesn't block on) any step
+@app.route("/api/jobs/<name>", methods=["POST"])
+def api_save_job(name):
+    """Saves the job, and reports (but doesn't block on) any step
     pair that navigate's own entry logic wouldn't accept back-to-back —
-    see missions-prd.md's "Path continuity"."""
+    see jobs-prd.md's "Path continuity"."""
     payload = request.get_json(force=True)
     steps = payload["steps"]
 
@@ -238,22 +265,22 @@ def api_save_mission(name):
             warnings.append({"after_step": i, "from_path": from_path, "to_path": to_path, **result})
 
     try:
-        missions_module.save_mission(MISSIONS_DIR, name, steps)
-    except missions_module.InvalidMissionName:
+        jobs_module.save_job(JOBS_DIR, name, steps)
+    except jobs_module.InvalidJobName:
         abort(400)
     return jsonify({"warnings": warnings})
 
 
-@app.route("/api/missions/<name>", methods=["DELETE"])
-def api_delete_mission(name):
+@app.route("/api/jobs/<name>", methods=["DELETE"])
+def api_delete_job(name):
     try:
-        missions_module.delete_mission(MISSIONS_DIR, name)
-    except (FileNotFoundError, missions_module.InvalidMissionName):
+        jobs_module.delete_job(JOBS_DIR, name)
+    except (FileNotFoundError, jobs_module.InvalidJobName):
         abort(404)
     return "", 204
 
 
-# --- Mission control ---
+# --- Job control ---
 
 
 @app.route("/control/start", methods=["POST"])
@@ -262,15 +289,15 @@ def control_start():
     name = payload["name"]
     start_index = int(payload.get("start_index", 0))
     try:
-        mission = missions_module.load_mission(MISSIONS_DIR, name)
-    except (FileNotFoundError, missions_module.InvalidMissionName):
+        job = jobs_module.load_job(JOBS_DIR, name)
+    except (FileNotFoundError, jobs_module.InvalidJobName):
         abort(404)
-    if not mission["steps"]:
-        return jsonify({"ok": False, "reason": "mission has no steps"})
-    if start_index < 0 or start_index >= len(mission["steps"]):
+    if not job["steps"]:
+        return jsonify({"ok": False, "reason": "job has no steps"})
+    if start_index < 0 or start_index >= len(job["steps"]):
         return jsonify({"ok": False, "reason": "invalid start_index"})
     _start_new_log(name)
-    runner.go(name, mission["steps"], start_index)
+    runner.go(name, job["steps"], start_index)
     return jsonify(runner.status())
 
 
@@ -281,9 +308,9 @@ def control_stop():
     return "", 204
 
 
-@sock.route("/ws/missions")
-def ws_missions(ws):
-    period = 1.0 / MISSIONS_STATUS_HZ
+@sock.route("/ws/jobs")
+def ws_jobs(ws):
+    period = 1.0 / JOBS_STATUS_HZ
     while True:
         ws.send(json.dumps(runner.status()))
         time.sleep(period)
@@ -293,11 +320,11 @@ def ws_missions(ws):
 
 
 def run_context():
-    return {"missions": missions_module.list_missions(MISSIONS_DIR)}
+    return {"jobs": jobs_module.list_jobs(JOBS_DIR)}
 
 
-def missions_context():
-    return {"missions": missions_module.list_missions(MISSIONS_DIR)}
+def jobs_context():
+    return {"jobs": jobs_module.list_jobs(JOBS_DIR)}
 
 
 register_pages(
@@ -306,7 +333,7 @@ register_pages(
     index_slug="run",
     context_providers={
         "run": run_context,
-        "missions": missions_context,
+        "jobs": jobs_context,
     },
 )
 

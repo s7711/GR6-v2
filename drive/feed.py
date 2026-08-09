@@ -1,5 +1,5 @@
 """Publishes drive's live state over a Unix domain socket, for other
-services on this machine to consume — the future `navigate`, `missions`,
+services on this machine to consume — the future `navigate`, `jobs`,
 a wheelspeed-GAD sender, `safety`. Same shape as `oxts-nav`'s
 `nav_feed.py` — see drive-prd.md ("Feed naming") for why this is one
 feed (`drive_feed`) covering motors/encoders/pump/ultrasonics together,

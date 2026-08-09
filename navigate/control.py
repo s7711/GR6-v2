@@ -43,7 +43,7 @@ class PathRunner:
         while a run is already in progress, rather than silently
         abandoning it — found live 2026-07-31: start() already refused
         to run while "running", but load_path() reset straight to idle
-        unconditionally, so a second caller (missions, another browser
+        unconditionally, so a second caller (jobs, another browser
         tab) loading a different path mid-run wiped out that state
         before start()'s own check ever saw it, abandoning the run with
         no explicit stop (the robot kept coasting at its last commanded

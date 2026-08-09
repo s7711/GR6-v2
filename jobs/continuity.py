@@ -2,11 +2,11 @@
 start, coming straight off the end of path A? Reuses navigate's own
 geometry primitives (find_entry_segment, the same thing /control/start
 checks live against the robot's real position) rather than a second
-implementation of the same tolerance rules — see missions-prd.md's
+implementation of the same tolerance rules — see jobs-prd.md's
 "Path continuity".
 
 Path A's final heading/position stand in for "wherever the robot is"
-here, since there's no live robot for this check (it runs at mission
+here, since there's no live robot for this check (it runs at job
 save time, not run time). The equirectangular local-frame conversion
 is per navigate/geometry.py's own convention: fine at garden scale,
 and translating between two paths' different reference points doesn't
@@ -18,13 +18,13 @@ import sys
 from pathlib import Path
 
 
-# Appended, not inserted at 0 - this directory (missions/) must keep
+# Appended, not inserted at 0 - this directory (jobs/) must keep
 # priority for same-named local modules (control.py, app.py, ...);
 # navigate/ is only a fallback for names not found here. Found live
 # 2026-07-31: an insert(0, ...) here made a same-process test run of
 # multiple modules resolve "test_app"/"control" to navigate/'s own
-# files instead of missions/'s, once this module's import had already
-# pushed navigate/ ahead of missions/ in sys.path.
+# files instead of jobs/'s, once this module's import had already
+# pushed navigate/ ahead of jobs/ in sys.path.
 sys.path.append(str(Path(__file__).resolve().parent.parent / "navigate"))
 import geometry  # noqa: E402
 

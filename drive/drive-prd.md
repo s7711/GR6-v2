@@ -12,11 +12,11 @@ diagnostics. Nothing in this repo does that yet — GR6-v1 had this logic
 mixed into one process alongside path-following and everything else (see
 Prior art). This service is the low-level "make the wheels/pump do what
 I say, tell me what the sensors see" layer everything else (future
-`navigate`, `missions`, `safety`, and a future wheelspeed-GAD sender)
+`navigate`, `jobs`, `safety`, and a future wheelspeed-GAD sender)
 will be built on top of.
 
 Explicitly not in scope here: path-following, waypoint navigation,
-mission scripting, obstacle-avoidance decisions, or sending wheelspeed
+job scripting, obstacle-avoidance decisions, or sending wheelspeed
 GAD updates to the xNAV650. Those are separate, later services that will
 *consume* what `drive` publishes — see "Out of Scope" below and the
 "Suggested migration order" in `top-prd.md`.
@@ -161,7 +161,7 @@ needs manual control is often exactly when something (e.g. `navigate`)
 is going wrong, so an override that has to wait or be granted is the
 wrong shape for what's ultimately a safety mechanism. Instead:
 - Two distinct command endpoints/paths — one for manual/human input
-  (the jog page), one for automatic callers (`navigate`, `missions`
+  (the jog page), one for automatic callers (`navigate`, `jobs`
   later). `drive` trusts *which endpoint* was called to know the
   source, rather than trusting a caller-supplied "I'm human" claim.
 - Any command via the manual endpoint immediately takes control **and
@@ -178,7 +178,7 @@ wrong shape for what's ultimately a safety mechanism. Instead:
   immediately — no explicit "release" action needed, releasing the
   joystick is enough.
 - `drive` publishes who's currently "in control" (and until when) in
-  `drive_feed`, so `navigate`/`missions` can notice they've been
+  `drive_feed`, so `navigate`/`jobs` can notice they've been
   overridden and back off gracefully (e.g. pause and show "overridden
   by manual control" in their own UI) rather than silently spamming
   rejected commands — a nice-to-have for those future services, not a
@@ -235,7 +235,7 @@ belongs to the future `safety` service once the sensors are actually
 trusted.
 
 ### Pump control: simple on/off, exposed alongside drive commands
-No timed/volume-based dosing logic here — that's a `missions`-layer
+No timed/volume-based dosing logic here — that's a `jobs`-layer
 concern later. `drive` just exposes on/off and reports current state,
 same as the firmware does.
 
@@ -270,7 +270,7 @@ drive:
   serial_port: /dev/ttyUSB0       # re-check once Pico is fitted — likely /dev/ttyACM0 or similar
   baud: 115200
   counts_per_metre: 250            # from GR6-v1, needs re-measuring on the real robot — the wheelspeed-GAD sender will depend on this being right
-  human_control_hold_ms: 500       # how long a manual jog command locks out automatic callers (navigate/missions)
+  human_control_hold_ms: 500       # how long a manual jog command locks out automatic callers (navigate/jobs)
   expected_firmware_version: "260720#1.GR6"
   tuning:                          # optional — pushed to the microcontroller right after drive opens the serial port
     Kp: [1.0, 1.0]                 # [left, right], matches firmware's per-wheel constants
@@ -282,7 +282,7 @@ drive:
 
 - **Encoder position wraparound (firmware bug)** — `EN` telemetry went
   through `sendFloat()`, which multiplies by 100 and truncates to a
-  16-bit `int` for transmission. Fine for velocities (small values,
+  16-bit `int` for transjob. Fine for velocities (small values,
   never overflow), but silently wraps encoder position after only ~327
   counts of travel (about 1.3m at ~250 counts/metre) — even though
   firmware's own internal `long LM_position`/`RM_position` never
@@ -346,7 +346,7 @@ drive:
 ## Out of Scope (v1 of this service)
 
 - Path-following / waypoint navigation — future `navigate` service.
-- Mission sequencing / scripting — future `missions` service.
+- Job sequencing / scripting — future `jobs` service.
 - Obstacle-avoidance decisions from ultrasonic (or any future vision)
   data — future `safety` service; `drive` only publishes raw sensor
   values.

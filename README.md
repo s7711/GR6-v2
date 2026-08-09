@@ -39,7 +39,7 @@ Early days. Nine of the planned services exist so far:
   pump, ultrasonic ranges, encoder/PID telemetry. Pages for manual jog
   control, live PID tuning (with scrolling graphs), an ultrasonic
   sensor diagram, and config. Publishes a `drive_feed` Unix
-  socket for future services (`navigate`, `missions`, a wheelspeed-GAD
+  socket for future services (`navigate`, `jobs`, a wheelspeed-GAD
   sender) to consume. See `drive/drive-prd.md`.
 - **`navigate`** — records a path by driving it once ("drop point"
   button, per-point speed/pump/clearance), then drives it back
@@ -83,19 +83,19 @@ Early days. Nine of the planned services exist so far:
   fail-safe auto-close; this service holds the valve open for an
   operator-chosen duration by re-issuing `/open` before that fail-safe
   fires, then `/close`s at the end — see `waterbutt/waterbutt-prd.md`.
-- **`missions`** — sequences saved `navigate` paths (a YAML step list,
+- **`jobs`** — sequences saved `navigate` paths (a YAML step list,
   interpreted by a small state machine rather than a scripting
   language), driving `navigate`'s own HTTP API exactly as a browser
   would. The first capability this project has needed with no GR6-v1
   equivalent to port from. Checks at save time whether each pair of
   consecutive paths lines up within `navigate`'s own entry tolerance,
-  flagging (not blocking) any gap — see `missions/missions-prd.md`.
+  flagging (not blocking) any gap — see `jobs/jobs-prd.md`.
 
 Nav decode, then the manager, were deliberately tackled first, then
 camera, then aruco, then drive, then navigate, then network, then
-wheelspeed, then waterbutt, then missions — see "Suggested migration
+wheelspeed, then waterbutt, then jobs — see "Suggested migration
 order" in `top-prd.md` for the reasoning and what's still to come
-(`safety` built on top of `navigate`/`missions`).
+(`safety` built on top of `navigate`/`jobs`).
 
 ## Architecture
 
@@ -134,7 +134,7 @@ python navigate/app.py
 python network/app.py
 python wheelspeed/app.py
 python waterbutt/app.py
-python missions/app.py
+python jobs/app.py
 ```
 
 Then visit the manager's home page (port 8000 by default) to reach

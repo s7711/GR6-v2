@@ -129,5 +129,115 @@ class TestChainRoundTrip(unittest.TestCase):
         np.testing.assert_allclose(recovered_vehicle_dcm, vehicle_dcm, atol=1e-9)
 
 
+class TestCameraPositionInMarkerFrame(unittest.TestCase):
+    def test_recovers_the_true_camera_position(self):
+        # Forward model: a point at the camera's own location, expressed
+        # in marker-frame terms, must map to the camera origin (X_C=0)
+        # under X_C = C_CM . X_M + tvec - so tvec = -C_CM @ true_position_m.
+        rng = np.random.default_rng(2)
+        for _ in range(50):
+            true_position_m = rng.normal(size=3)
+            rvec = rng.normal(size=3)
+            rvec = rvec / np.linalg.norm(rvec) * random.uniform(0, math.pi)
+            c_cm = coords.rvec_to_C_CM(rvec)
+            tvec = -c_cm @ true_position_m
+            recovered = coords.camera_position_in_marker_frame(rvec, tvec)
+            np.testing.assert_allclose(recovered, true_position_m, atol=1e-9)
+
+    def test_pure_rotation_at_the_same_position_gives_the_same_result(self):
+        # The property the QC marker check depends on: two readings of
+        # the same fixed marker from the same physical camera position
+        # but a different orientation must agree here - even though the
+        # raw tvec for the two readings is quite different.
+        true_position_m = np.array([0.5, -0.2, 1.0])
+        rvec_a = np.array([0.1, 0.2, 0.05])
+        rvec_b = np.array([0.4, -0.3, 0.2])
+        tvec_a = -coords.rvec_to_C_CM(rvec_a) @ true_position_m
+        tvec_b = -coords.rvec_to_C_CM(rvec_b) @ true_position_m
+        self.assertFalse(np.allclose(tvec_a, tvec_b))  # sanity: the raw readings really do differ
+        np.testing.assert_allclose(
+            coords.camera_position_in_marker_frame(rvec_a, tvec_a),
+            coords.camera_position_in_marker_frame(rvec_b, tvec_b),
+            atol=1e-9,
+        )
+
+
+class TestQcMarkerDeltaBodyFrame(unittest.TestCase):
+    def test_zero_for_identical_readings(self):
+        rvec = np.array([0.1, 0.2, 0.05])
+        tvec = np.array([0.3, -0.1, 0.9])
+        delta = coords.qc_marker_delta_body_frame(rvec, tvec, rvec, tvec, (0.0, 0.0, 0.0))
+        np.testing.assert_allclose(delta, [0.0, 0.0, 0.0], atol=1e-9)
+
+    def test_zero_for_a_pure_rotation_even_though_tvec_and_rvec_both_change(self):
+        # The actual bug report: Ben moved much closer to the ideal spot,
+        # but a rotation-only difference in how the robot was facing
+        # still showed up as an error under the old (plain body-frame)
+        # comparison. This must come out as ~zero.
+        true_position_m = np.array([0.5, -0.2, 1.0])
+        rvec_ideal = np.array([0.1, 0.2, 0.05])
+        rvec_live = np.array([0.4, -0.3, 0.2])
+        tvec_ideal = -coords.rvec_to_C_CM(rvec_ideal) @ true_position_m
+        tvec_live = -coords.rvec_to_C_CM(rvec_live) @ true_position_m
+        delta = coords.qc_marker_delta_body_frame(
+            rvec_ideal, tvec_ideal, rvec_live, tvec_live, (0.0, 0.0, 0.0)
+        )
+        np.testing.assert_allclose(delta, [0.0, 0.0, 0.0], atol=1e-9)
+
+    def test_zero_offset_matches_the_camera_only_case(self):
+        rng = np.random.default_rng(4)
+        rvec_ideal, rvec_live = rng.normal(size=3), rng.normal(size=3)
+        tvec_ideal, tvec_live = rng.normal(size=3), rng.normal(size=3)
+        hpr_cb = (5.0, 0.0, 0.0)
+        camera_only = coords.qc_marker_delta_body_frame(rvec_ideal, tvec_ideal, rvec_live, tvec_live, hpr_cb)
+        zero_offset = coords.qc_marker_delta_body_frame(
+            rvec_ideal, tvec_ideal, rvec_live, tvec_live, hpr_cb, target_offset_c=(0.0, 0.0, 0.0)
+        )
+        np.testing.assert_allclose(zero_offset, camera_only, atol=1e-12)
+
+    def test_zero_for_a_pure_rotation_with_a_real_offset_behind_the_camera(self):
+        # The waterbutt funnel case: a point ~23cm behind the camera on
+        # the same rigid mount must ALSO be rotation-invariant, not just
+        # the camera itself - the whole point of rotating the offset by
+        # each reading's own orientation before differencing.
+        true_funnel_position_m = np.array([0.5, -0.2, 1.0])
+        funnel_offset_c = (-0.228, 0.0, 0.0)
+        rvec_ideal = np.array([0.1, 0.2, 0.05])
+        rvec_live = np.array([0.4, -0.3, 0.2])
+
+        def tvec_for(rvec):
+            # Place the CAMERA such that the FUNNEL ends up exactly at
+            # true_funnel_position_m, for this reading's orientation.
+            c_cm = coords.rvec_to_C_CM(rvec)
+            offset_C = coords.C_Cc @ np.array(funnel_offset_c)
+            offset_M = c_cm.T @ offset_C
+            camera_position_m = true_funnel_position_m - offset_M
+            return -c_cm @ camera_position_m
+
+        delta = coords.qc_marker_delta_body_frame(
+            rvec_ideal, tvec_for(rvec_ideal), rvec_live, tvec_for(rvec_live), (0.0, 0.0, 0.0), funnel_offset_c
+        )
+        np.testing.assert_allclose(delta, [0.0, 0.0, 0.0], atol=1e-9)
+
+    def test_matches_a_manual_composition_of_the_underlying_primitives(self):
+        # Checks qc_marker_delta_body_frame is wired up as documented -
+        # a faithful composition of the (separately tested) primitives
+        # it's built from, for a real camera-mount offset this time.
+        rng = np.random.default_rng(3)
+        rvec_ideal = rng.normal(size=3)
+        rvec_live = rng.normal(size=3)
+        tvec_ideal = rng.normal(size=3)
+        tvec_live = rng.normal(size=3)
+        hpr_cb = (12.0, -3.0, 1.5)
+
+        delta_m = coords.camera_position_in_marker_frame(
+            rvec_live, tvec_live
+        ) - coords.camera_position_in_marker_frame(rvec_ideal, tvec_ideal)
+        expected = coords.displacement_camera_to_body(coords.rvec_to_C_CM(rvec_ideal) @ delta_m, hpr_cb)
+
+        actual = coords.qc_marker_delta_body_frame(rvec_ideal, tvec_ideal, rvec_live, tvec_live, hpr_cb)
+        np.testing.assert_allclose(actual, expected, atol=1e-12)
+
+
 if __name__ == "__main__":
     unittest.main()

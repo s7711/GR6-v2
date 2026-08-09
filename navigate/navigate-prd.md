@@ -1,12 +1,12 @@
 # PRD: Path-Following Service (navigate)
 
 See `top-prd.md` for where this fits in the overall migration order: `drive`
-(done) → **navigate** (this document) → `missions` (sequencing multiple
+(done) → **navigate** (this document) → `jobs` (sequencing multiple
 stops + pump actions, future) → `safety` (obstacle-avoidance, future). This
 is the "dumb path-following" layer — it drives a pre-recorded path exactly
 as authored and gives up cleanly when it can't safely continue. Deciding
 *what to do* about a failure (replan, try an alternative route, call for
-help) is explicitly `missions`' future job, not this one's — see
+help) is explicitly `jobs`' future job, not this one's — see
 "Ownership of tolerance/accuracy enforcement" below.
 
 ## Problem Statement
@@ -251,8 +251,8 @@ doc — in practice almost every real field session so far has ended
 with manual point-by-point lat/lon nudges (move this point 8cm west,
 slow those three points down, ...) done by hand-editing the YAML via an
 AI assistant. That's not sustainable as a long-term workflow, and it's
-also a real prerequisite for `missions` (top-prd.md item 4/the
-mission-composition idea): composing a mission out of several paths in
+also a real prerequisite for `jobs` (top-prd.md item 4/the
+job-composition idea): composing a job out of several paths in
 the same area needs a way to see and adjust those paths together, not
 just record a fresh one from scratch each time.
 
@@ -321,7 +321,7 @@ not on the edit page itself.
 
 ## Manual pump control (`/pump/manual`)
 
-Added 2026-08-08 for `missions`' `water` step (single-plant watering:
+Added 2026-08-08 for `jobs`' `water` step (single-plant watering:
 go to a plant, water it stationary, come back for more) — the pump had
 previously only ever been driven from inside `PathRunner.step()`, tied
 to a moving path's per-point pump state, with nothing to turn it on
@@ -332,9 +332,9 @@ that path's own `step()` is already resending pump commands every tick,
 and an out-of-band manual command here would just race it. Like
 `/jog/manual`, this bypasses `PathRunner` entirely rather than routing
 through it; unlike `/jog/manual` it's not a CORS-avoidance proxy (the
-caller is `missions`, a server, not a browser) - the only reason it
-lives on `navigate` at all is `missions`' own "never talk to `drive`
-directly" boundary (see missions-prd.md).
+caller is `jobs`, a server, not a browser) - the only reason it
+lives on `navigate` at all is `jobs`' own "never talk to `drive`
+directly" boundary (see jobs-prd.md).
 
 ## Variable tolerance ("clearance")
 
@@ -363,13 +363,13 @@ GR6-v1's single global `MAX_LINE_DEPARTURE`. While running:
 ## Ownership of tolerance/accuracy enforcement
 
 `navigate` owns this fully for now — it is the only layer that exists.
-When `missions` is eventually built, it can read the same
+When `jobs` is eventually built, it can read the same
 `navigate_feed` numbers (cross-track error, clearance headroom,
 accuracy) `navigate` is already publishing, and decide to do something
 smarter than a hard stop (replan, try an alternative route, wait and
 retry). Nothing about `navigate`'s design needs to anticipate that
 architecturally beyond "publish the numbers clearly" — no new
-plumbing is added now on the assumption `missions` will need it later.
+plumbing is added now on the assumption `jobs` will need it later.
 
 ## Path entry
 
@@ -515,7 +515,7 @@ without data.
 
 - **Heading error went unstable (~180°, from GNSS/INS noise alone) once
   a path finished and sat loaded-but-not-yet-started** — found live
-  2026-08-08, watching a `missions` run string paths together.
+  2026-08-08, watching a `jobs` run string paths together.
   `find_lookahead_point`'s lookahead walk, on running out of path
   (robot at or very near the final point), just returned that last
   point itself as the steering target. `heading_error_deg` is a bearing
@@ -529,7 +529,7 @@ without data.
   finished path for the Run page's display, by design — see its own
   docstring) rather than live steering, since `step()` had already
   called `_finish()` by the time a real run reaches this point — a
-  display artifact during a mission's inter-path pause, not an actual
+  display artifact during a job's inter-path pause, not an actual
   steering fault, but alarming enough to look like one. Fixed by
   extending the lookahead target virtually past the path's last point
   along that final segment's own direction whenever the walk runs out
@@ -540,7 +540,7 @@ without data.
   `start()` already refused to run while `state == "running"`, but
   `load_path()` reset straight to `idle` unconditionally regardless of
   current state — so a second caller loading a different path mid-run
-  (found live 2026-07-31, thinking through what `missions` starting a
+  (found live 2026-07-31, thinking through what `jobs` starting a
   step while a manual run was active would actually do) wiped out the
   "running" state before `start()`'s own guard ever got to see it. The
   robot itself wasn't stopped either — no velocity command was sent,
@@ -550,8 +550,8 @@ without data.
   `start()` already had, returning `{"ok": false, "reason": "another
   path is already running - stop it first"}` — surfaced through the
   same `result.reason` message display the Run/Paths pages already use
-  for entry-check failures, and propagated through `missions`'
-  `MissionRunner` as a `failed_to_load` step outcome.
+  for entry-check failures, and propagated through `jobs`'
+  `JobRunner` as a `failed_to_load` step outcome.
 - **Jog steering was inverted, on both `drive`'s Home page and
   `create-path`'s jog widget** — confirmed on real hardware: pushing the
   stick right turned the robot left. Root cause was the joystick-to-
@@ -666,7 +666,7 @@ without data.
 - In-app YAML editing of saved paths — a text editor is sufficient;
   not worth building a UI for.
 - Graceful (non-hard-stop) recovery from a tolerance/accuracy breach —
-  `missions`' future job, not this service's, per "Ownership of
+  `jobs`' future job, not this service's, per "Ownership of
   tolerance/accuracy enforcement."
 - Obstacle avoidance / ultrasonics-based decisions — `safety`'s future
   job, per `top-prd.md`'s migration order.

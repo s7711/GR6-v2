@@ -7,6 +7,11 @@
 
 xnav_ip: 192.168.0.0  # placeholder — set to the real xNAV650 IP
 
+# Water butt funnel, relative to the aruco camera on the same rigid
+# mount - in c (X forward out of the camera, Y right, Z down), not the
+# raw camera frame. See waterbutt-prd.md's "QC marker" section.
+waterbutt_funnel_offset_c: [0.0, 0.0, 0.0]  # placeholder — measure the real offset
+
 services:
   manager:
     unit: robot-manager.service
@@ -59,7 +64,7 @@ services:
     baud: 115200
     counts_per_metre: 250            # from GR6-v1, needs re-measuring on this robot — the wheelspeed-GAD sender will depend on this being right
     wheel_base_m: 0.42               # distance between the two wheels' contact points, from GR6-v1 — lives here (not under navigate:) alongside counts_per_metre, the other physical-drivetrain constant; navigate reads it from here rather than keeping its own copy
-    human_control_hold_ms: 500       # how long a manual jog command locks out automatic callers (navigate/missions) — see drive-prd.md
+    human_control_hold_ms: 500       # how long a manual jog command locks out automatic callers (navigate/jobs) — see drive-prd.md
     expected_firmware_version: "260720#1.GR6"
     drive_feed_socket: /tmp/gr6-drive-feed.sock  # Unix domain socket — see "Feed naming" in drive-prd.md
     drive_feed_hz: 20
@@ -106,13 +111,14 @@ services:
     port: 8009
     web_ui: true
     hostname: waterbutt.local  # mDNS name the ESP8266 valve controller advertises — see waterbutt/waterbutt-prd.md
+    qc_marker_file: waterbutt/data/qc-marker.yaml  # the single saved "ideal position" marker record — see waterbutt-prd.md's QC marker section
 
-  missions:
-    unit: robot-missions.service
+  jobs:
+    unit: robot-jobs.service
     host: 0.0.0.0
     port: 8010
     web_ui: true
-    missions_dir: missions/data
-    mission_status_hz: 2
+    jobs_dir: jobs/data
+    job_status_hz: 2
     log_retention_days: 2
       scale: 1.0

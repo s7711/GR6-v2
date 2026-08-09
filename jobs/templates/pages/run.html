@@ -1,6 +1,6 @@
 {# title: Run #}
 {% extends "base.html" %}
-{% block title %}GR6 — Missions{% endblock %}
+{% block title %}GR6 — Jobs{% endblock %}
 
 {% block content %}
 <div class="row g-3 mb-3">
@@ -8,10 +8,10 @@
     <div class="card">
       <div class="card-body">
         <div class="mb-2">
-          <label class="form-label">Mission</label>
-          <select id="mission-select" class="form-select">
-            <option value="">-- choose a mission --</option>
-            {% for m in missions %}
+          <label class="form-label">Job</label>
+          <select id="job-select" class="form-select">
+            <option value="">-- choose a job --</option>
+            {% for m in jobs %}
             <option value="{{ m.name }}" data-step-count="{{ m.step_count }}">{{ m.name }} ({{ m.step_count }} steps)</option>
             {% endfor %}
           </select>
@@ -32,7 +32,7 @@
       <div class="card-body">
         <table class="table table-sm mb-0">
           <tbody>
-            <tr><th scope="row">Mission</th><td><span id="stat-mission_name">—</span></td></tr>
+            <tr><th scope="row">Job</th><td><span id="stat-job_name">—</span></td></tr>
             <tr><th scope="row">State</th><td><span id="stat-state">—</span> <span id="stat-abort_reason" class="text-danger small"></span></td></tr>
             <tr><th scope="row">Step</th><td><span id="stat-current_step_index">—</span> / <span id="stat-step_count">—</span> <span id="stat-step-desc" class="text-body-secondary small"></span></td></tr>
           </tbody>
@@ -52,6 +52,13 @@
         <button type="button" class="btn btn-sm zoom-btn" data-zoom="20">20 m</button>
         <button type="button" class="btn btn-sm zoom-btn" data-zoom="50">50 m</button>
       </div>
+
+      <div class="position-absolute bottom-0 start-0 m-3 text-center" style="opacity: 0.9;">
+        <div id="joystick" style="touch-action: none; width: 200px; height: 200px; background: var(--bs-tertiary-bg); border: 1px solid var(--bs-border-color); border-radius: 0.5rem; position: relative; cursor: grab;">
+          <div id="joystick-thumb" style="width: 50px; height: 50px; border-radius: 50%; background: var(--bs-primary); position: absolute; left: 75px; top: 75px; pointer-events: none;"></div>
+        </div>
+        <div class="text-body-secondary small mt-1">Drag to jog into position, release to stop</div>
+      </div>
     </div>
   </div>
 </div>
@@ -59,22 +66,35 @@
 
 {% block scripts %}
 <script src="/static/geomap.js"></script>
+<script src="/static/jog.js"></script>
 <script>
-// Same step-colour cycling as Create/Edit Mission's own preview map —
-// see that page's comment: cycled by step index (not path name) so a
-// mission that reuses a path for two steps still tells them apart.
-const STEP_COLORS = ["#0d6efd", "#dc3545", "#198754", "#fd7e14", "#6f42c1"];
+createJoystick(document.getElementById("joystick"), document.getElementById("joystick-thumb"), {
+  postUrl: "/jog/manual",
+  maxSpeedMps: 0.8,
+});
+</script>
+<script>
+// Same step-colour cycling as Create/Edit Job's own preview map — see
+// that page's comment: cycled by step index (not path name) so a job
+// that reuses a path for two steps still tells them apart. Faded
+// (unlike the full-strength colours there) so the planned steps read
+// as background against the live trail below, which uses the same
+// blue at full strength for "what actually happened".
+const STEP_COLORS = [
+  "rgba(13, 110, 253, 0.35)", "rgba(220, 53, 69, 0.35)", "rgba(25, 135, 84, 0.35)",
+  "rgba(253, 126, 20, 0.35)", "rgba(111, 66, 193, 0.35)",
+];
 const STEP_LABELS = { pause: "Pause", water: "Water (stationary)", fill: "Fill water butt" };
 const pathPointsCache = {};
-let currentMissionSteps = []; // set by updateMap() whenever a mission's steps are fetched - reused by the status display below
+let currentJobSteps = []; // set by updateMap() whenever a job's steps are fetched - reused by the status display below
 
-const missionSelect = document.getElementById("mission-select");
+const jobSelect = document.getElementById("job-select");
 const startStepSelect = document.getElementById("start-step");
 const map = createGeoMap(document.getElementById("map-canvas"), document.getElementById("map-wrapper"), ".zoom-btn");
 map.setZoom("auto");
 
 function fillStartSteps() {
-  const opt = missionSelect.selectedOptions[0];
+  const opt = jobSelect.selectedOptions[0];
   const stepCount = opt ? parseInt(opt.dataset.stepCount || "0", 10) : 0;
   startStepSelect.innerHTML = "";
   for (let i = 0; i < stepCount; i++) {
@@ -84,24 +104,24 @@ function fillStartSteps() {
     startStepSelect.appendChild(o);
   }
 }
-missionSelect.addEventListener("change", () => {
+jobSelect.addEventListener("change", () => {
   fillStartSteps();
   updateMap();
 });
 
 let lastRenderedStepCount = 0;
 function updateMap() {
-  const name = missionSelect.value;
+  const name = jobSelect.value;
   if (!name) {
     for (let i = 0; i < lastRenderedStepCount; i++) map.setLayer(`step-${i}`, []);
     lastRenderedStepCount = 0;
     map.resize();
     return;
   }
-  fetch(`/api/missions/${encodeURIComponent(name)}`).then((r) => (r.ok ? r.json() : null)).then((mission) => {
-    if (!mission) return;
-    const steps = mission.steps;
-    currentMissionSteps = steps;
+  fetch(`/api/jobs/${encodeURIComponent(name)}`).then((r) => (r.ok ? r.json() : null)).then((job) => {
+    if (!job) return;
+    const steps = job.steps;
+    currentJobSteps = steps;
     const names = [...new Set(steps.map((s) => s.path).filter(Boolean))];
     const toFetch = names.filter((n) => !(n in pathPointsCache));
     Promise.all(toFetch.map((pathName) =>
@@ -122,15 +142,15 @@ function updateMap() {
   });
 }
 
-const preselect = new URLSearchParams(window.location.search).get("mission");
-if (preselect) missionSelect.value = preselect;
+const preselect = new URLSearchParams(window.location.search).get("job");
+if (preselect) jobSelect.value = preselect;
 fillStartSteps();
 updateMap();
 map.resize();
 
 document.getElementById("start-btn").addEventListener("click", () => {
-  const name = missionSelect.value;
-  if (!name) { alert("Choose a mission first."); return; }
+  const name = jobSelect.value;
+  if (!name) { alert("Choose a job first."); return; }
   const start_index = parseInt(startStepSelect.value || "0", 10);
   fetch("/control/start", {
     method: "POST",
@@ -146,14 +166,41 @@ document.getElementById("stop-btn").addEventListener("click", () => {
 });
 
 function stepDescription(index) {
-  const step = currentMissionSteps[index];
+  const step = currentJobSteps[index];
   if (!step) return "";
   return step.type === "run_path" ? step.path : `${STEP_LABELS[step.type]} (${step.duration_s}s)`;
 }
 
-connectWs("/ws/missions", (msg) => {
+const joystickEl = document.getElementById("joystick");
+
+connectWs("/ws/jobs", (msg) => {
   fillFields("stat-", msg);
   document.getElementById("stat-step-desc").textContent = stepDescription(msg.current_step_index);
+  // Same reasoning as navigate's own Run page: jogging while a step is
+  // actually driving would fight its auto commands via drive's control
+  // arbiter - the joystick here is only for lining up before Start.
+  const running = msg.state === "running";
+  joystickEl.style.pointerEvents = running ? "none" : "auto";
+  joystickEl.style.opacity = running ? "0.4" : "1";
+});
+
+// --- Live trail: where the robot has actually been, same mechanism as
+// navigate's own Run page (connects straight to oxts-nav's feed, not
+// proxied - a WebSocket isn't subject to CORS the way a fetch() is).
+
+const trail = [];
+const MAX_TRAIL_POINTS = 2000;
+
+connectWsUrl("{{ oxtsnav_ws_url }}", (msg) => {
+  const nav = msg.nav || {};
+  if (nav.Lat !== undefined && nav.Lon !== undefined) {
+    const current = { lat: (nav.Lat * 180) / Math.PI, lon: (nav.Lon * 180) / Math.PI };
+    trail.push(current);
+    if (trail.length > MAX_TRAIL_POINTS) trail.shift();
+    map.setLayer("trail", trail, { color: "#0d6efd" });
+    map.setCurrent(current.lat, current.lon);
+    map.draw();
+  }
 });
 </script>
 {% endblock %}

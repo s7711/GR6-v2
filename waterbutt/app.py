@@ -13,14 +13,21 @@ import threading
 import time
 from pathlib import Path
 
+import numpy as np
 import requests
 from flask import Flask, abort, jsonify, request
 from flask_sock import Sock
+from simple_websocket import Client as WsClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from shared.config import load_config  # noqa: E402
 from shared.web import register_pages, service_url, use_shared_static, use_shared_templates  # noqa: E402
 
+sys.path.append(str(Path(__file__).resolve().parent.parent / "aruco"))  # append, not insert(0) - see jobs/continuity.py's comment: insert(0) here risked shadowing this directory's own same-named modules in a same-process test run
+import coords  # noqa: E402
+
+import qc_check  # noqa: E402
+import qc_marker  # noqa: E402
 from control import ValveController  # noqa: E402
 
 PAGES_DIR = Path(__file__).resolve().parent / "templates" / "pages"
@@ -35,8 +42,15 @@ DURATIONS_S = [1, 2, 5, 10, 20, 50, 120]
 
 cfg = load_config()
 service_cfg = cfg["services"]["waterbutt"]
+aruco_cfg = cfg["services"]["aruco"]
 
 VALVE_BASE_URL = f"http://{service_cfg['hostname']}"
+QC_MARKER_PATH = Path(__file__).resolve().parent.parent / service_cfg["qc_marker_file"]
+QC_HPR_CB = tuple(aruco_cfg["camera_extrinsics"]["hpr_cb"])
+QC_DXC_B = tuple(aruco_cfg["camera_extrinsics"]["d_xc_b"])
+QC_FUNNEL_OFFSET_C = tuple(cfg["waterbutt_funnel_offset_c"])  # camera -> funnel, in c - see config.yaml's comment
+ARUCO_WS_URL = f"ws://127.0.0.1:{aruco_cfg['port']}/ws/aruco"  # server-to-server, same machine — 127.0.0.1 not localhost: simple_websocket's raw client, unlike requests/curl, doesn't fall back from IPv6 ::1 to IPv4 on refusal
+QC_RECONNECT_DELAY_S = 2.0
 
 app = Flask(__name__)
 use_shared_templates(app)
@@ -60,6 +74,42 @@ def send_close():
 
 valve = ValveController(send_open, send_close)
 
+_qc_lock = threading.Lock()
+_qc_reading = {"state": "not_configured"}
+
+
+def _set_qc_reading(reading):
+    global _qc_reading
+    with _qc_lock:
+        _qc_reading = reading
+
+
+def get_qc_reading():
+    with _qc_lock:
+        return dict(_qc_reading)
+
+
+def _qc_loop():
+    """Connects to aruco's own /ws/aruco as a client (server-to-server,
+    like every other cross-service feed in this project, just over a
+    websocket rather than FeedClient's Unix socket) and keeps
+    get_qc_reading() current - the rotation-aware comparison itself
+    (qc_check.compare) needs real matrix math (see coords.py's
+    qc_marker_delta_body_frame), so it stays in Python rather than being
+    reimplemented in the page's own JS the way most live comparisons in
+    this project are."""
+    while True:
+        try:
+            ws = WsClient.connect(ARUCO_WS_URL)
+            while True:
+                msg = json.loads(ws.receive())
+                saved = qc_marker.load(QC_MARKER_PATH)
+                _set_qc_reading(qc_check.compare(saved, msg.get("debug"), QC_HPR_CB, QC_FUNNEL_OFFSET_C))
+        except Exception as e:
+            app.logger.warning("[waterbutt] QC marker: lost/couldn't reach aruco's feed (%s), retrying", e)
+            _set_qc_reading({"state": "aruco_unreachable"})
+            time.sleep(QC_RECONNECT_DELAY_S)
+
 
 def _tick_loop():
     period = 1.0 / TICK_HZ
@@ -73,7 +123,34 @@ def inject_urls():
     browser_host = request.host.split(":")[0]
     return {
         "manager_url": service_url(browser_host, "manager") + "/",
+        "aruco_ws_url": service_url(browser_host, "aruco", scheme="ws") + "/ws/aruco",
     }
+
+
+# --- QC marker (independent-of-GNSS pre-fill sanity check) ---
+#
+# Deliberately just one saved record, not a list - one waterbutt, one
+# marker allowed for this check (see waterbutt-prd.md's "QC marker").
+
+
+@app.route("/api/qc-marker")
+def api_get_qc_marker():
+    saved = qc_marker.load(QC_MARKER_PATH)
+    if saved is not None:
+        # Display-only convenience for the QC Marker page - a single
+        # reading's own forward/right/down, same formula aruco itself
+        # uses (not the ideal-vs-live comparison, which needs both
+        # readings' rvec - see qc_check.compare).
+        displacement = np.array(QC_DXC_B) + coords.displacement_camera_to_body(saved["tvec_camera_frame"], QC_HPR_CB)
+        saved = {**saved, "displacement_body_frame": displacement.tolist()}
+    return jsonify(saved)
+
+
+@app.route("/api/qc-marker", methods=["POST"])
+def api_save_qc_marker():
+    payload = request.get_json(force=True)
+    qc_marker.save(QC_MARKER_PATH, int(payload["marker_id"]), payload["tvec_camera_frame"], payload["rvec_camera_frame"])
+    return jsonify(qc_marker.load(QC_MARKER_PATH))
 
 
 @app.route("/go", methods=["POST"])
@@ -96,7 +173,7 @@ def stop():
 def ws_waterbutt(ws):
     period = 1.0 / WATERBUTT_STATUS_HZ
     while True:
-        ws.send(json.dumps(valve.status()))
+        ws.send(json.dumps({**valve.status(), "qc_marker": get_qc_reading()}))
         time.sleep(period)
 
 
@@ -109,4 +186,5 @@ register_pages(app, PAGES_DIR, index_slug="run", context_providers={"run": run_c
 
 if __name__ == "__main__":
     threading.Thread(target=_tick_loop, daemon=True).start()
+    threading.Thread(target=_qc_loop, daemon=True).start()
     app.run(host=service_cfg["host"], port=service_cfg["port"], threaded=True)
