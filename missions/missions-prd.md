@@ -77,6 +77,12 @@ name: Front beds
 steps:
   - type: run_path
     path: HouseFrontEight
+  - type: pause
+    duration_s: 30
+  - type: water
+    duration_s: 60
+  - type: fill
+    duration_s: 20
   - type: run_path
     path: HouseFrontSquiggle
 ```
@@ -86,10 +92,18 @@ Stored as `missions/data/<name>.yaml`, same `paths.py`-style storage
 `missions/missions.py` module mirroring `navigate/paths.py` rather than
 a new storage convention.
 
-v1 has exactly one step type, matching the stated first need ("Run path
-xxx" twice). Everything else discussed (waiting near a marker, pump-
-only steps) is deliberately not built yet — paths already carry their
-own per-point pump state, so a mission doesn't need its own pump step
+v1 shipped with exactly one step type (`run_path`), matching the stated
+first need ("Run path xxx" twice). Three more were added 2026-08-08 for
+single-plant watering (go to a plant, water it stationary, come back for
+more) - `pause` (wait, nothing else), `water` (the robot's own pump on
+for `duration_s`, stationary - see "Timed steps" below), `fill`
+(`waterbutt`'s valve open for `duration_s`). All three are deliberately
+just a fixed duration, no conditions - see "Deferred: conditional
+steps" below for why that's a bigger step than adding a step type.
+Everything else discussed (waiting for a GNSS quality condition,
+waiting for an aruco marker to come into view) is still deliberately
+not built yet - paths already carry their own per-point pump state for
+watering while moving, so only *stationary* watering needed a new step
 to get the first watering sequence working.
 
 ### Path continuity
@@ -150,6 +164,47 @@ than rerunning the whole mission from scratch. No automatic retry
 policy in v1 (`on_fail` is effectively always "stop") — the operator
 decides what "fixed" means before pressing Start again.
 
+**Timed steps** (`pause`/`water`/`fill`, added 2026-08-08): no external
+state to poll like `run_path` has, so completion is tracked against an
+injected clock (`now`, defaulting to `time.monotonic`, overridable in
+tests so they don't sleep in real wall-clock time) instead — `tick()`
+just checks whether `duration_s` has elapsed since the step started.
+`water` calls navigate's `/pump/manual` (new — direct pump on/off
+outside of any path-following, refused if a path is actually running,
+since that path's own `step()` is already resending pump commands every
+tick) at step start, **resends it on every tick** while waiting (not
+just once — `drive`'s firmware watchdog turns the pump off after 2000ms
+of silence, the same reason `navigate/control.py`'s own `step()`
+resends every tick rather than only on change), then turns it off once
+the duration elapses. `fill` calls `waterbutt`'s own `/go` directly (a
+peer service, not something owned by another service the way `drive`
+is) — its valve controller self-terminates at the same duration on its
+own, so no explicit stop call is needed on the success path. An
+operator **Stop** mid-`water`/mid-`fill` explicitly turns the pump off
+/ calls `waterbutt`'s `/stop` — leaving hardware running unattended on
+an operator-requested stop would defeat the whole point of a stop
+button. `fill`'s duration options are drawn from `waterbutt`'s own
+`DURATIONS_S` allow-list (`[1, 2, 5, 10, 20, 50, 120]`) rather than the
+same fixed set offered for `pause`/`water` — a duration `waterbutt`
+would just reject isn't offered as a choice in the first place.
+
+### Deferred: conditional steps
+
+The harder half of "water one plant" is the return trip: get to open
+ground, wait for a GNSS quality condition (ideally `gxInteger`, rare
+enough that getting it is "game over" — good enough to finish the
+approach on GNSS alone), then switch to marker-guided approach for the
+final stretch where GNSS is least reliable anyway (multipath near the
+waterbutt/marker structure). That's real conditional logic — wait for a
+live condition, then behave differently depending on the outcome — which
+none of the four step types above have: each just runs and either
+succeeds or fails the mission, matching "no branching, no `on_fail:
+retry`" from this doc's original Out of Scope list. Solving that isn't
+"add another step type", it's the first step type whose *outcome*
+branches, and deserves its own design pass (a `wait_for_condition` step?
+per-step `on_timeout`?) rather than being squeezed in alongside the
+three purely time-based ones above. Not built yet.
+
 ### Logging
 
 Every mission run writes a fresh JSONL log — `missions/data/logs/
@@ -195,7 +250,21 @@ via a same-origin proxy, `GET /api/navigate-paths` → navigate's own
 `/api/paths` — same CORS-avoidance reasoning as `navigate`'s own
 `/jog/manual` proxy), up/down to reorder (no drag-and-drop, same
 "skip the fancier interaction" call as the path editor's no-click-to-
-select-on-map), and Remove. Add step appends a new `run_path` step.
+select-on-map), and Remove. **Add path** appends a new `run_path` step
+directly (same one-click append as before, just renamed once a second
+kind of step existed to disambiguate from). **Add step** (2026-08-08)
+opens a small modal instead — type (Pause/Water/Fill) plus a duration
+dropdown scoped to that type (see "Mission execution"'s "Timed steps")
+— since unlike picking a path from a dropdown, a timed step needs two
+choices made before it means anything, so appending one blank and
+editing in place (the run_path pattern) wouldn't leave a step in any
+sensible default state.
+
+A step's colour swatch and the preview map below only ever draw
+`run_path` steps (a `pause`/`water`/`fill` step has no points to plot) —
+the map layer computation already skips any step without a `.path`, so
+this fell out for free rather than needing special-casing.
+
 Save uses the same dialog shape as the path editor (filename,
 live overwrite detection, Save-and-continue/Save-and-exit) and
 surfaces any continuity warnings the save endpoint returns. No undo —
@@ -219,9 +288,13 @@ missions:
 
 ## Out of Scope (v1 of this service)
 
-- Any step type beyond `run_path` (waiting, turn-in-place, pump-only
-  steps) — natural, small future additions to the step interpreter, not
-  needed for the first real mission.
+- Any step type beyond `run_path`/`pause`/`water`/`fill` (turn-in-place,
+  a `wait_for_condition` step) — see "Deferred: conditional steps" above
+  for the marker-approach case that actually needs one.
+- Configurable durations for `pause`/`water`/`fill` beyond a fixed
+  dropdown of choices — free-text would be easy to add later if the
+  fixed set (5/10/20/60s, or `waterbutt`'s own allow-list for `fill`)
+  turns out not to be enough.
 - Automatic "bridge path" generation to cover a continuity gap — that's
   the future path planner's job (`top-prd.md` item 4), not a stand-in
   built here.

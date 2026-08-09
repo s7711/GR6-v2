@@ -259,6 +259,17 @@ decide what to render.
   marker resurveyed after its true heading turned out to have drifted
   from a year-old value) — not part of the original three-page plan, but
   a small, obvious enough addition not to need its own design discussion.
+  Each row also has 1cm N/S/E/W/altitude **nudge** buttons (added
+  2026-08-08, `POST /marker-map/<id>/nudge`, `marker_map.nudge_marker`
+  using `shared/geodesy.py`'s `ned_to_lla` directly — the same primitive
+  `navigate/geometry.py`'s own `project_forward` is built on, not a
+  second offset approximation) — for correcting a marker placement found
+  to be slightly off once the robot's actually used it, tuned live by
+  watching the effect rather than re-running the survey workflow. Since
+  the marker map is already read fresh off disk on every use (no
+  caching layer to invalidate), a nudge takes effect on the very next
+  detection with no restart needed — same live-edit property the file
+  format already had, just exercised by a second write path now.
 
 ### Add Marker workflow: single-shot Grab, then Cancel or Save
 

@@ -34,9 +34,23 @@
           <tbody>
             <tr><th scope="row">Mission</th><td><span id="stat-mission_name">—</span></td></tr>
             <tr><th scope="row">State</th><td><span id="stat-state">—</span> <span id="stat-abort_reason" class="text-danger small"></span></td></tr>
-            <tr><th scope="row">Step</th><td><span id="stat-current_step_index">—</span> / <span id="stat-step_count">—</span></td></tr>
+            <tr><th scope="row">Step</th><td><span id="stat-current_step_index">—</span> / <span id="stat-step_count">—</span> <span id="stat-step-desc" class="text-body-secondary small"></span></td></tr>
           </tbody>
         </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card mb-3">
+  <div class="card-body">
+    <div id="map-wrapper" style="position: relative; width: 100%;">
+      <canvas id="map-canvas" style="display: block; width: 100%; height: 100%;"></canvas>
+      <div class="btn-group-vertical position-absolute top-0 end-0 m-2" role="group">
+        <button type="button" class="btn btn-sm zoom-btn" data-zoom="auto">Auto</button>
+        <button type="button" class="btn btn-sm zoom-btn" data-zoom="5">5 m</button>
+        <button type="button" class="btn btn-sm zoom-btn" data-zoom="20">20 m</button>
+        <button type="button" class="btn btn-sm zoom-btn" data-zoom="50">50 m</button>
       </div>
     </div>
   </div>
@@ -44,9 +58,20 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="/static/geomap.js"></script>
 <script>
+// Same step-colour cycling as Create/Edit Mission's own preview map —
+// see that page's comment: cycled by step index (not path name) so a
+// mission that reuses a path for two steps still tells them apart.
+const STEP_COLORS = ["#0d6efd", "#dc3545", "#198754", "#fd7e14", "#6f42c1"];
+const STEP_LABELS = { pause: "Pause", water: "Water (stationary)", fill: "Fill water butt" };
+const pathPointsCache = {};
+let currentMissionSteps = []; // set by updateMap() whenever a mission's steps are fetched - reused by the status display below
+
 const missionSelect = document.getElementById("mission-select");
 const startStepSelect = document.getElementById("start-step");
+const map = createGeoMap(document.getElementById("map-canvas"), document.getElementById("map-wrapper"), ".zoom-btn");
+map.setZoom("auto");
 
 function fillStartSteps() {
   const opt = missionSelect.selectedOptions[0];
@@ -59,11 +84,49 @@ function fillStartSteps() {
     startStepSelect.appendChild(o);
   }
 }
-missionSelect.addEventListener("change", fillStartSteps);
+missionSelect.addEventListener("change", () => {
+  fillStartSteps();
+  updateMap();
+});
+
+let lastRenderedStepCount = 0;
+function updateMap() {
+  const name = missionSelect.value;
+  if (!name) {
+    for (let i = 0; i < lastRenderedStepCount; i++) map.setLayer(`step-${i}`, []);
+    lastRenderedStepCount = 0;
+    map.resize();
+    return;
+  }
+  fetch(`/api/missions/${encodeURIComponent(name)}`).then((r) => (r.ok ? r.json() : null)).then((mission) => {
+    if (!mission) return;
+    const steps = mission.steps;
+    currentMissionSteps = steps;
+    const names = [...new Set(steps.map((s) => s.path).filter(Boolean))];
+    const toFetch = names.filter((n) => !(n in pathPointsCache));
+    Promise.all(toFetch.map((pathName) =>
+      fetch(`/api/navigate-paths/${encodeURIComponent(pathName)}`)
+        .then((r) => (r.ok ? r.json() : []))
+        .then((points) => { pathPointsCache[pathName] = points; })
+    )).then(() => {
+      steps.forEach((step, i) => {
+        const points = pathPointsCache[step.path] || [];
+        map.setLayer(`step-${i}`, points, { color: STEP_COLORS[i % STEP_COLORS.length], dots: true, dotRadius: 3 });
+      });
+      for (let i = steps.length; i < lastRenderedStepCount; i++) {
+        map.setLayer(`step-${i}`, []);
+      }
+      lastRenderedStepCount = steps.length;
+      map.resize();
+    });
+  });
+}
 
 const preselect = new URLSearchParams(window.location.search).get("mission");
 if (preselect) missionSelect.value = preselect;
 fillStartSteps();
+updateMap();
+map.resize();
 
 document.getElementById("start-btn").addEventListener("click", () => {
   const name = missionSelect.value;
@@ -82,8 +145,15 @@ document.getElementById("stop-btn").addEventListener("click", () => {
   fetch("/control/stop", { method: "POST" });
 });
 
+function stepDescription(index) {
+  const step = currentMissionSteps[index];
+  if (!step) return "";
+  return step.type === "run_path" ? step.path : `${STEP_LABELS[step.type]} (${step.duration_s}s)`;
+}
+
 connectWs("/ws/missions", (msg) => {
   fillFields("stat-", msg);
+  document.getElementById("stat-step-desc").textContent = stepDescription(msg.current_step_index);
 });
 </script>
 {% endblock %}

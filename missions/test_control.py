@@ -32,15 +32,58 @@ class NavigateStub:
         self._status = {"state": state, "abort_reason": abort_reason}
 
 
-def make_runner():
+class HardwareStub:
+    """Fakes the pump (via navigate's /pump/manual) and the water butt's
+    valve (waterbutt's own /go, /stop) - the two pieces of hardware the
+    `water`/`fill` step types drive outside of any path."""
+
+    def __init__(self):
+        self.pump_calls = []       # [True, False, True, ...] in call order
+        self.waterbutt_go_calls = []
+        self.waterbutt_stop_calls = 0
+        self.pump_result = {"ok": True}
+        self.waterbutt_go_result = {"ok": True}
+
+    def pump_on(self, on):
+        self.pump_calls.append(on)
+        return self.pump_result
+
+    def waterbutt_go(self, duration_s):
+        self.waterbutt_go_calls.append(duration_s)
+        return self.waterbutt_go_result
+
+    def waterbutt_stop(self):
+        self.waterbutt_stop_calls += 1
+
+
+class FakeClock:
+    """Injected as MissionRunner's `now` - lets timed-step tests advance
+    time explicitly instead of sleeping in real wall-clock time."""
+
+    def __init__(self, t=0.0):
+        self.t = t
+
+    def __call__(self):
+        return self.t
+
+    def advance(self, dt):
+        self.t += dt
+
+
+def make_runner(clock=None):
     stub = NavigateStub()
-    runner = MissionRunner(stub.load_path, stub.start_path, stub.stop_path, stub.navigate_status)
-    return runner, stub
+    hw = HardwareStub()
+    kwargs = {"now": clock} if clock is not None else {}
+    runner = MissionRunner(
+        stub.load_path, stub.start_path, stub.stop_path, stub.navigate_status,
+        hw.pump_on, hw.waterbutt_go, hw.waterbutt_stop, **kwargs,
+    )
+    return runner, stub, hw
 
 
 class TestGo(unittest.TestCase):
     def test_go_loads_and_starts_the_first_step(self):
-        runner, stub = make_runner()
+        runner, stub, hw = make_runner()
         runner.go("test-mission", STEPS)
         self.assertEqual(stub.loaded, ["A"])
         self.assertEqual(stub.start_calls, 1)
@@ -50,13 +93,13 @@ class TestGo(unittest.TestCase):
         self.assertEqual(status["mission_name"], "test-mission")
 
     def test_go_can_resume_from_a_later_step(self):
-        runner, stub = make_runner()
+        runner, stub, hw = make_runner()
         runner.go("test-mission", STEPS, start_index=1)
         self.assertEqual(stub.loaded, ["B"])
         self.assertEqual(runner.status()["current_step_index"], 1)
 
     def test_failed_start_aborts_immediately(self):
-        runner, stub = make_runner()
+        runner, stub, hw = make_runner()
         stub.start_result = {"ok": False, "reason": "no segment within entry tolerance"}
         runner.go("test-mission", STEPS)
         status = runner.status()
@@ -66,7 +109,7 @@ class TestGo(unittest.TestCase):
     def test_failed_load_aborts_immediately_without_calling_start(self):
         # e.g. navigate refusing because a path is already running -
         # see navigate/control.py's load_path() guard.
-        runner, stub = make_runner()
+        runner, stub, hw = make_runner()
         stub.load_result = {"ok": False, "reason": "another path is already running - stop it first"}
         runner.go("test-mission", STEPS)
         status = runner.status()
@@ -77,7 +120,7 @@ class TestGo(unittest.TestCase):
 
 class TestTick(unittest.TestCase):
     def test_tick_is_noop_while_navigate_still_running(self):
-        runner, stub = make_runner()
+        runner, stub, hw = make_runner()
         runner.go("m", STEPS)
         stub.set_status("running")
         runner.tick()
@@ -85,7 +128,7 @@ class TestTick(unittest.TestCase):
         self.assertEqual(stub.start_calls, 1)
 
     def test_tick_advances_to_next_step_on_stopped_ok(self):
-        runner, stub = make_runner()
+        runner, stub, hw = make_runner()
         runner.go("m", STEPS)
         stub.set_status("stopped_ok")
         runner.tick()
@@ -94,7 +137,7 @@ class TestTick(unittest.TestCase):
         self.assertEqual(stub.start_calls, 2)
 
     def test_tick_finishes_mission_after_last_step(self):
-        runner, stub = make_runner()
+        runner, stub, hw = make_runner()
         runner.go("m", STEPS)
         for _ in range(len(STEPS)):
             stub.set_status("stopped_ok")
@@ -105,7 +148,7 @@ class TestTick(unittest.TestCase):
         self.assertEqual(stub.loaded, ["A", "B", "C"])
 
     def test_tick_aborts_mission_on_navigate_abort(self):
-        runner, stub = make_runner()
+        runner, stub, hw = make_runner()
         runner.go("m", STEPS)
         stub.set_status("aborted", "heading error 80.0deg exceeds limit 70.0deg")
         runner.tick()
@@ -115,7 +158,7 @@ class TestTick(unittest.TestCase):
         self.assertEqual(stub.loaded, ["A"])  # never proceeded to B
 
     def test_tick_is_noop_once_mission_already_finished(self):
-        runner, stub = make_runner()
+        runner, stub, hw = make_runner()
         runner.go("m", [{"path": "A"}])
         stub.set_status("stopped_ok")
         runner.tick()
@@ -127,14 +170,14 @@ class TestTick(unittest.TestCase):
 
 class TestStop(unittest.TestCase):
     def test_stop_returns_to_idle_and_stops_navigate(self):
-        runner, stub = make_runner()
+        runner, stub, hw = make_runner()
         runner.go("m", STEPS)
         runner.stop()
         self.assertEqual(runner.status()["state"], "idle")
         self.assertEqual(stub.stop_calls, 1)
 
     def test_stop_prevents_a_pending_ticks_stale_success_from_advancing(self):
-        runner, stub = make_runner()
+        runner, stub, hw = make_runner()
         runner.go("m", STEPS)
         runner.stop()
         stub.set_status("stopped_ok")  # a stale success for the step that was just stopped
@@ -145,14 +188,17 @@ class TestStop(unittest.TestCase):
 
 class TestStepLog(unittest.TestCase):
     def test_step_log_records_a_successful_step(self):
-        runner, stub = make_runner()
+        runner, stub, hw = make_runner()
         runner.go("m", STEPS)
         stub.set_status("stopped_ok")
         runner.tick()
-        self.assertEqual(runner.status()["step_log"], [{"index": 0, "path": "A", "outcome": "ok"}])
+        self.assertEqual(
+            runner.status()["step_log"],
+            [{"index": 0, "type": "run_path", "path": "A", "outcome": "ok"}],
+        )
 
     def test_step_log_records_a_failed_start(self):
-        runner, stub = make_runner()
+        runner, stub, hw = make_runner()
         stub.start_result = {"ok": False, "reason": "no segment within entry tolerance"}
         runner.go("m", STEPS)
         log = runner.status()["step_log"]
@@ -160,12 +206,128 @@ class TestStepLog(unittest.TestCase):
         self.assertEqual(log[0]["outcome"], "failed_to_start")
 
     def test_step_log_records_a_failed_load(self):
-        runner, stub = make_runner()
+        runner, stub, hw = make_runner()
         stub.load_result = {"ok": False, "reason": "another path is already running - stop it first"}
         runner.go("m", STEPS)
         log = runner.status()["step_log"]
         self.assertEqual(len(log), 1)
         self.assertEqual(log[0]["outcome"], "failed_to_load")
+
+
+class TestPauseStep(unittest.TestCase):
+    def test_pause_advances_only_once_duration_elapses(self):
+        clock = FakeClock()
+        runner, stub, hw = make_runner(clock)
+        runner.go("m", [{"type": "pause", "duration_s": 30}, {"type": "run_path", "path": "A"}])
+        clock.advance(29)
+        runner.tick()
+        self.assertEqual(runner.status()["current_step_index"], 0)  # not yet
+        clock.advance(2)
+        runner.tick()
+        self.assertEqual(runner.status()["current_step_index"], 1)
+        self.assertEqual(stub.loaded, ["A"])
+
+    def test_pause_never_touches_pump_or_waterbutt(self):
+        clock = FakeClock()
+        runner, stub, hw = make_runner(clock)
+        runner.go("m", [{"type": "pause", "duration_s": 5}])
+        clock.advance(5)
+        runner.tick()
+        self.assertEqual(hw.pump_calls, [])
+        self.assertEqual(hw.waterbutt_go_calls, [])
+
+
+class TestWaterStep(unittest.TestCase):
+    def test_water_turns_pump_on_immediately(self):
+        clock = FakeClock()
+        runner, stub, hw = make_runner(clock)
+        runner.go("m", [{"type": "water", "duration_s": 60}])
+        self.assertEqual(hw.pump_calls, [True])
+
+    def test_water_resends_pump_on_each_tick_until_done(self):
+        # Drive's own firmware watchdog turns the pump off after 2000ms
+        # of silence - the pump command must be resent well within that,
+        # not just fired once at step start.
+        clock = FakeClock()
+        runner, stub, hw = make_runner(clock)
+        runner.go("m", [{"type": "water", "duration_s": 60}])
+        clock.advance(1)
+        runner.tick()
+        clock.advance(1)
+        runner.tick()
+        self.assertEqual(hw.pump_calls, [True, True, True])
+
+    def test_water_turns_pump_off_once_duration_elapses(self):
+        clock = FakeClock()
+        runner, stub, hw = make_runner(clock)
+        runner.go("m", [{"type": "water", "duration_s": 60}, {"type": "pause", "duration_s": 1}])
+        clock.advance(60)
+        runner.tick()
+        self.assertEqual(hw.pump_calls[-1], False)
+        self.assertEqual(runner.status()["current_step_index"], 1)
+
+    def test_water_step_fails_if_pump_cannot_be_started(self):
+        # e.g. a path is currently running - see navigate's /pump/manual guard.
+        clock = FakeClock()
+        runner, stub, hw = make_runner(clock)
+        hw.pump_result = {"ok": False, "reason": "a path is already running"}
+        runner.go("m", [{"type": "water", "duration_s": 60}])
+        status = runner.status()
+        self.assertEqual(status["state"], "aborted")
+        self.assertIn("already running", status["abort_reason"])
+
+
+class TestFillStep(unittest.TestCase):
+    def test_fill_starts_waterbutt_with_the_step_duration(self):
+        clock = FakeClock()
+        runner, stub, hw = make_runner(clock)
+        runner.go("m", [{"type": "fill", "duration_s": 20}])
+        self.assertEqual(hw.waterbutt_go_calls, [20])
+
+    def test_fill_advances_without_an_explicit_stop_call(self):
+        # waterbutt's own valve controller self-terminates at the same
+        # duration - no explicit stop needed on the success path.
+        clock = FakeClock()
+        runner, stub, hw = make_runner(clock)
+        runner.go("m", [{"type": "fill", "duration_s": 20}, {"type": "pause", "duration_s": 1}])
+        clock.advance(20)
+        runner.tick()
+        self.assertEqual(runner.status()["current_step_index"], 1)
+        self.assertEqual(hw.waterbutt_stop_calls, 0)
+
+    def test_fill_step_fails_if_waterbutt_cannot_be_started(self):
+        clock = FakeClock()
+        runner, stub, hw = make_runner(clock)
+        hw.waterbutt_go_result = {"ok": False, "reason": "couldn't reach waterbutt"}
+        runner.go("m", [{"type": "fill", "duration_s": 20}])
+        status = runner.status()
+        self.assertEqual(status["state"], "aborted")
+        self.assertIn("waterbutt", status["abort_reason"])
+
+
+class TestStopDuringTimedStep(unittest.TestCase):
+    def test_stop_during_water_turns_pump_off(self):
+        clock = FakeClock()
+        runner, stub, hw = make_runner(clock)
+        runner.go("m", [{"type": "water", "duration_s": 60}])
+        runner.stop()
+        self.assertEqual(hw.pump_calls, [True, False])
+        self.assertEqual(runner.status()["state"], "idle")
+
+    def test_stop_during_fill_stops_the_waterbutt(self):
+        clock = FakeClock()
+        runner, stub, hw = make_runner(clock)
+        runner.go("m", [{"type": "fill", "duration_s": 60}])
+        runner.stop()
+        self.assertEqual(hw.waterbutt_stop_calls, 1)
+
+    def test_stop_during_pause_touches_neither(self):
+        clock = FakeClock()
+        runner, stub, hw = make_runner(clock)
+        runner.go("m", [{"type": "pause", "duration_s": 60}])
+        runner.stop()
+        self.assertEqual(hw.pump_calls, [])
+        self.assertEqual(hw.waterbutt_stop_calls, 0)
 
 
 if __name__ == "__main__":

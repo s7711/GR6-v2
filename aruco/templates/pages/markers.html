@@ -9,7 +9,7 @@
       <thead>
         <tr>
           <th>Id</th><th>Size (m)</th><th>Lat</th><th>Lon</th><th>Alt (m)</th>
-          <th>Heading</th><th>Pitch</th><th>Roll</th><th></th>
+          <th>Heading</th><th>Pitch</th><th>Roll</th><th>Nudge (1cm)</th><th></th>
         </tr>
       </thead>
       <tbody id="marker-rows"></tbody>
@@ -38,6 +38,18 @@ function loadMarkers() {
           <td>${m.heading}</td>
           <td>${m.pitch}</td>
           <td>${m.roll}</td>
+          <td class="text-nowrap">
+            <div class="btn-group btn-group-sm" role="group">
+              <button class="btn btn-outline-secondary" title="North 1cm" data-nudge-id="${m.id}" data-north="0.01" data-east="0">&uarr;</button>
+              <button class="btn btn-outline-secondary" title="South 1cm" data-nudge-id="${m.id}" data-north="-0.01" data-east="0">&darr;</button>
+              <button class="btn btn-outline-secondary" title="West 1cm" data-nudge-id="${m.id}" data-north="0" data-east="-0.01">&larr;</button>
+              <button class="btn btn-outline-secondary" title="East 1cm" data-nudge-id="${m.id}" data-north="0" data-east="0.01">&rarr;</button>
+            </div>
+            <div class="btn-group btn-group-sm ms-1" role="group">
+              <button class="btn btn-outline-secondary" title="Up 1cm" data-nudge-id="${m.id}" data-alt="0.01">Alt+</button>
+              <button class="btn btn-outline-secondary" title="Down 1cm" data-nudge-id="${m.id}" data-alt="-0.01">Alt&minus;</button>
+            </div>
+          </td>
           <td><button class="btn btn-sm btn-outline-danger" data-delete-id="${m.id}">Delete</button></td>
         </tr>`)
         .join("");
@@ -45,6 +57,22 @@ function loadMarkers() {
         btn.addEventListener("click", () => {
           if (!confirm(`Delete marker ${btn.dataset.deleteId}? This can't be undone.`)) return;
           fetch(`/marker-map/${btn.dataset.deleteId}`, { method: "DELETE" }).then(loadMarkers);
+        });
+      });
+      // Applied and reloaded immediately on every click, deliberately no
+      // debounce/batching - this is meant for watching the effect live
+      // while standing next to the marker, one 1cm step at a time.
+      document.querySelectorAll("[data-nudge-id]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          fetch(`/marker-map/${btn.dataset.nudgeId}/nudge`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              north_m: parseFloat(btn.dataset.north || "0"),
+              east_m: parseFloat(btn.dataset.east || "0"),
+              alt_m: parseFloat(btn.dataset.alt || "0"),
+            }),
+          }).then(loadMarkers);
         });
       });
     });

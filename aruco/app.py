@@ -14,7 +14,7 @@ import threading
 import time
 from pathlib import Path
 
-from flask import Flask, Response, jsonify, request
+from flask import Flask, Response, abort, jsonify, request
 from flask_sock import Sock
 from PIL import Image
 
@@ -281,6 +281,24 @@ def marker_map_route():
 @app.route("/marker-map/<int:marker_id>", methods=["DELETE"])
 def marker_map_delete(marker_id):
     return ("", 204) if marker_map.delete_marker(marker_map_path, marker_id) else ("", 404)
+
+
+@app.route("/marker-map/<int:marker_id>/nudge", methods=["POST"])
+def marker_map_nudge(marker_id):
+    """Small live position corrections from the Markers page - see
+    marker_map.nudge_marker. Applied and persisted immediately (no
+    caching layer to invalidate - see marker_map.py's own docstring),
+    so the very next detection picks up the new position."""
+    body = request.get_json(force=True)
+    updated = marker_map.nudge_marker(
+        marker_map_path, marker_id,
+        north_m=float(body.get("north_m", 0.0)),
+        east_m=float(body.get("east_m", 0.0)),
+        alt_m=float(body.get("alt_m", 0.0)),
+    )
+    if updated is None:
+        abort(404)
+    return jsonify(updated)
 
 
 # --- Add Marker workflow: grab (freeze + candidate poses) -> cancel/save ---

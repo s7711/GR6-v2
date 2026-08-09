@@ -56,6 +56,15 @@ class NavigateStub:
     def set_status(self, state, abort_reason=None):
         self._status = {"state": state, "abort_reason": abort_reason}
 
+    def pump_on(self, on):
+        return {"ok": True}
+
+    def waterbutt_go(self, duration_s):
+        return {"ok": True}
+
+    def waterbutt_stop(self):
+        pass
+
 
 class MissionsAppTestCase(unittest.TestCase):
     def setUp(self):
@@ -63,7 +72,10 @@ class MissionsAppTestCase(unittest.TestCase):
         app.LOGS_DIR = app.MISSIONS_DIR / "logs"
         app.NAVIGATE_PATHS_DIR = Path(tempfile.mkdtemp())
         self.stub = NavigateStub()
-        app.runner = MissionRunner(self.stub.load_path, self.stub.start_path, self.stub.stop_path, self.stub.navigate_status)
+        app.runner = MissionRunner(
+            self.stub.load_path, self.stub.start_path, self.stub.stop_path, self.stub.navigate_status,
+            self.stub.pump_on, self.stub.waterbutt_go, self.stub.waterbutt_stop,
+        )
         self.client = app.app.test_client()
 
     def test_list_missions_empty(self):

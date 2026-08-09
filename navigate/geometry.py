@@ -172,8 +172,17 @@ def find_lookahead_point(path, start_index, robot_north, robot_east, lookahead_d
     remaining = lookahead_distance_m
     idx = best_index
     cur_north, cur_east = proj_north, proj_east
+    last_dir = None
     while remaining > 0 and idx < len(path) - 1:
         a, b = path[idx], path[idx + 1]
+        # The segment's own direction (a->b), not (b - cur) - cur can
+        # already equal b (clamped there by the projection above), which
+        # would make that vector zero even though the segment itself has
+        # a perfectly good direction to extrapolate along below.
+        full_seg_north, full_seg_east = b.north - a.north, b.east - a.east
+        full_seg_len = math.hypot(full_seg_north, full_seg_east)
+        if full_seg_len > 0:
+            last_dir = (full_seg_north / full_seg_len, full_seg_east / full_seg_len)
         seg_north, seg_east = b.north - cur_north, b.east - cur_east
         seg_len = math.hypot(seg_north, seg_east)
         if seg_len <= 0:
@@ -188,6 +197,27 @@ def find_lookahead_point(path, start_index, robot_north, robot_east, lookahead_d
             remaining -= seg_len
             cur_north, cur_east = b.north, b.east
             idx += 1
+
+    if remaining > 0 and last_dir is not None:
+        # Ran out of path before covering the full lookahead distance
+        # (near the very end, or on a path shorter than
+        # lookahead_distance_m outright) - extend virtually past the
+        # last point along its own final direction, rather than leaving
+        # the target sitting right on top of wherever the robot now is.
+        # Found live 2026-08-08: with the target coincident with the
+        # robot, heading_error_deg's bearing calculation becomes a
+        # near-zero vector dominated by GNSS/INS noise, not a real
+        # steering signal - a stationary robot sitting on a just-
+        # finished path showed heading errors swinging wildly (~170+
+        # degrees) purely from centimetre-scale position jitter. Mostly
+        # visible via preview() (which keeps evaluating a finished path
+        # for the Run page's display - see its own docstring) rather
+        # than live steering, since step() has already called _finish()
+        # by the time a real run reaches this point - but it's a
+        # genuine instability in the lookahead maths itself, not just a
+        # display quirk, so fixed at the source.
+        cur_north += last_dir[0] * remaining
+        cur_east += last_dir[1] * remaining
 
     # Speed/pump: the segment currently being tracked (best_index) governs
     # both — pump in particular is deliberately tied to the tracked point,

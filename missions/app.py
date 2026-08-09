@@ -37,11 +37,13 @@ NAVIGATE_TIMEOUT_S = 2.0
 cfg = load_config()
 service_cfg = cfg["services"]["missions"]
 navigate_cfg = cfg["services"]["navigate"]
+waterbutt_cfg = cfg["services"]["waterbutt"]
 
 MISSIONS_DIR = Path(__file__).resolve().parent.parent / service_cfg["missions_dir"]
 LOGS_DIR = MISSIONS_DIR / "logs"
 NAVIGATE_PATHS_DIR = Path(__file__).resolve().parent.parent / navigate_cfg["paths_dir"]
 NAVIGATE_BASE_URL = f"http://localhost:{navigate_cfg['port']}"  # server-to-server, see navigate/app.py's own DRIVE_BASE_URL comment
+WATERBUTT_BASE_URL = f"http://localhost:{waterbutt_cfg['port']}"  # server-to-server - "fill" steps talk to waterbutt directly, it's a peer service like navigate, not owned by navigate the way drive is
 
 app = Flask(__name__)
 use_shared_templates(app)
@@ -78,7 +80,38 @@ def navigate_status():
     return navigate_feed.latest()
 
 
-runner = MissionRunner(load_path, start_path, stop_path, navigate_status)
+def pump_on(on):
+    """For `water` steps - navigate owns the pump (see its /pump/manual),
+    missions never talks to drive directly, same boundary as run_path
+    steps."""
+    try:
+        resp = requests.post(f"{NAVIGATE_BASE_URL}/pump/manual", json={"on": on}, timeout=NAVIGATE_TIMEOUT_S)
+        return resp.json()
+    except requests.exceptions.RequestException:
+        return {"ok": False, "reason": "couldn't reach navigate"}
+
+
+def waterbutt_go(duration_s):
+    """For `fill` steps - waterbutt is a peer service (like navigate),
+    not something owned by another service, so missions can call it
+    directly."""
+    try:
+        resp = requests.post(f"{WATERBUTT_BASE_URL}/go", json={"duration_s": duration_s}, timeout=NAVIGATE_TIMEOUT_S)
+        if resp.status_code != 200:
+            return {"ok": False, "reason": f"waterbutt refused duration_s={duration_s}"}
+        return {"ok": True}
+    except requests.exceptions.RequestException:
+        return {"ok": False, "reason": "couldn't reach waterbutt"}
+
+
+def waterbutt_stop():
+    try:
+        requests.post(f"{WATERBUTT_BASE_URL}/stop", timeout=NAVIGATE_TIMEOUT_S)
+    except requests.exceptions.RequestException:
+        logging.warning("[missions] Couldn't reach waterbutt to stop")
+
+
+runner = MissionRunner(load_path, start_path, stop_path, navigate_status, pump_on, waterbutt_go, waterbutt_stop)
 
 _log_lock = threading.Lock()
 _log_path = None
@@ -148,6 +181,17 @@ def inject_urls():
 def api_navigate_paths():
     try:
         resp = requests.get(f"{NAVIGATE_BASE_URL}/api/paths", timeout=NAVIGATE_TIMEOUT_S)
+    except requests.exceptions.RequestException:
+        abort(502)
+    return resp.content, resp.status_code, {"Content-Type": "application/json"}
+
+
+@app.route("/api/navigate-paths/<name>")
+def api_navigate_path_points(name):
+    """A step's actual lat/lon points, for the Create/Edit mission map
+    preview — same proxy reasoning as the list endpoint above."""
+    try:
+        resp = requests.get(f"{NAVIGATE_BASE_URL}/api/paths/{name}", timeout=NAVIGATE_TIMEOUT_S)
     except requests.exceptions.RequestException:
         abort(502)
     return resp.content, resp.status_code, {"Content-Type": "application/json"}

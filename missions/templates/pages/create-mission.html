@@ -10,12 +10,51 @@
     <div id="warnings" class="alert alert-warning d-none"></div>
 
     <table class="table align-middle">
-      <thead><tr><th>#</th><th>Path</th><th></th></tr></thead>
+      <thead><tr><th>#</th><th>Colour</th><th>Step</th><th></th></tr></thead>
       <tbody id="steps-body"></tbody>
     </table>
 
-    <button id="add-step" class="btn btn-outline-primary btn-sm">Add step</button>
+    <button id="add-path" class="btn btn-outline-primary btn-sm">Add path</button>
+    <button id="add-step" class="btn btn-outline-primary btn-sm ms-2">Add step&hellip;</button>
     <button id="save-btn" class="btn btn-success ms-2">Save&hellip;</button>
+  </div>
+</div>
+
+<div class="card mb-3">
+  <div class="card-body">
+    <div id="map-wrapper" style="position: relative; width: 100%;">
+      <canvas id="map-canvas" style="display: block; width: 100%; height: 100%;"></canvas>
+      <div class="btn-group-vertical position-absolute top-0 end-0 m-2" role="group">
+        <button type="button" class="btn btn-sm zoom-btn" data-zoom="auto">Auto</button>
+        <button type="button" class="btn btn-sm zoom-btn" data-zoom="5">5 m</button>
+        <button type="button" class="btn btn-sm zoom-btn" data-zoom="20">20 m</button>
+        <button type="button" class="btn btn-sm zoom-btn" data-zoom="50">50 m</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="step-modal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Add step</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <label class="form-label">Type</label>
+        <select id="step-type" class="form-select mb-3">
+          <option value="pause">Pause</option>
+          <option value="water">Water (stationary)</option>
+          <option value="fill">Fill water butt</option>
+        </select>
+        <label class="form-label">Duration</label>
+        <select id="step-duration" class="form-select"></select>
+      </div>
+      <div class="modal-footer">
+        <button id="step-modal-add" type="button" class="btn btn-success">Add</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -43,16 +82,33 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="/static/geomap.js"></script>
 <script>
 const params = new URLSearchParams(window.location.search);
 const missionName = params.get("name");
 
-let steps = []; // [{type: "run_path", path: "..."}]
+// Cycled by step index, not by path name — two steps using the same
+// path (e.g. the same bed driven twice) still get distinct colours, so
+// the "which line is which step" question the map exists to answer
+// stays answerable even then.
+const STEP_COLORS = ["#0d6efd", "#dc3545", "#198754", "#fd7e14", "#6f42c1"];
+
+const STEP_LABELS = { pause: "Pause", water: "Water (stationary)", fill: "Fill water butt" };
+// Fill is a real waterbutt API call (see waterbutt/control.py's own
+// DURATIONS_S allow-list) - 60s isn't one of the values it accepts, so
+// it gets its own shorter list rather than a duration that would always
+// be refused at run time. Pause/water have no such restriction.
+const DURATION_OPTIONS_S = { pause: [5, 10, 20, 60], water: [5, 10, 20, 60], fill: [5, 10, 20] };
+
+let steps = []; // [{type: "run_path", path: "..."}, {type: "pause"|"water"|"fill", duration_s: N}]
 let dirty = false;
 let existingNames = [];
 let navigatePaths = [];
+const pathPointsCache = {}; // path name -> points, fetched lazily as steps reference it
 
 const stepsBody = document.getElementById("steps-body");
+const map = createGeoMap(document.getElementById("map-canvas"), document.getElementById("map-wrapper"), ".zoom-btn");
+map.setZoom("auto");
 
 function pathOptionsHtml(selected) {
   return navigatePaths.map((p) => {
@@ -61,23 +117,35 @@ function pathOptionsHtml(selected) {
   }).join("");
 }
 
+function stepCellHtml(step) {
+  if (step.type === "run_path") {
+    return `<select class="form-select form-select-sm step-path">${pathOptionsHtml(step.path)}</select>`;
+  }
+  return `${STEP_LABELS[step.type]} &mdash; ${step.duration_s}s`;
+}
+
 function renderSteps() {
   stepsBody.innerHTML = "";
   steps.forEach((step, i) => {
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>${i}</td>
-      <td><select class="form-select form-select-sm step-path">${pathOptionsHtml(step.path)}</select></td>
+      <td><div style="width: 1.5rem; height: 1.5rem; border-radius: 4px; background-color: ${STEP_COLORS[i % STEP_COLORS.length]};"></div></td>
+      <td>${stepCellHtml(step)}</td>
       <td class="text-nowrap">
         <button class="btn btn-sm btn-outline-secondary step-up" ${i === 0 ? "disabled" : ""}>&uarr;</button>
         <button class="btn btn-sm btn-outline-secondary step-down" ${i === steps.length - 1 ? "disabled" : ""}>&darr;</button>
         <button class="btn btn-sm btn-outline-danger step-remove">Remove</button>
       </td>
     `;
-    tr.querySelector(".step-path").addEventListener("change", (e) => {
-      steps[i].path = e.target.value;
-      dirty = true;
-    });
+    const pathSelect = tr.querySelector(".step-path");
+    if (pathSelect) {
+      pathSelect.addEventListener("change", (e) => {
+        steps[i].path = e.target.value;
+        dirty = true;
+        updateMap();
+      });
+    }
     tr.querySelector(".step-up").addEventListener("click", () => {
       [steps[i - 1], steps[i]] = [steps[i], steps[i - 1]];
       dirty = true;
@@ -95,11 +163,61 @@ function renderSteps() {
     });
     stepsBody.appendChild(tr);
   });
+  updateMap();
 }
 
-document.getElementById("add-step").addEventListener("click", () => {
+// Fetches (and caches) whichever paths the current steps reference,
+// then draws one layer per step — reordering/removing steps redraws
+// instantly from cache; only genuinely new path names hit the network.
+let lastRenderedStepCount = 0;
+function updateMap() {
+  const names = [...new Set(steps.map((s) => s.path).filter(Boolean))];
+  const toFetch = names.filter((n) => !(n in pathPointsCache));
+  Promise.all(toFetch.map((name) =>
+    fetch(`/api/navigate-paths/${encodeURIComponent(name)}`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then((points) => { pathPointsCache[name] = points; })
+  )).then(() => {
+    steps.forEach((step, i) => {
+      const points = pathPointsCache[step.path] || [];
+      map.setLayer(`step-${i}`, points, { color: STEP_COLORS[i % STEP_COLORS.length], dots: true, dotRadius: 3 });
+    });
+    for (let i = steps.length; i < lastRenderedStepCount; i++) {
+      map.setLayer(`step-${i}`, []);
+    }
+    lastRenderedStepCount = steps.length;
+    map.resize();
+  });
+}
+
+document.getElementById("add-path").addEventListener("click", () => {
   steps.push({ type: "run_path", path: navigatePaths.length ? navigatePaths[0].name : "" });
   dirty = true;
+  renderSteps();
+});
+
+// --- Add step (pause/water/fill) modal ---
+
+const stepModalEl = document.getElementById("step-modal");
+const stepModal = new bootstrap.Modal(stepModalEl);
+const stepTypeSelect = document.getElementById("step-type");
+const stepDurationSelect = document.getElementById("step-duration");
+
+function fillStepDurationOptions() {
+  const options = DURATION_OPTIONS_S[stepTypeSelect.value];
+  stepDurationSelect.innerHTML = options.map((s) => `<option value="${s}">${s}s</option>`).join("");
+}
+stepTypeSelect.addEventListener("change", fillStepDurationOptions);
+
+document.getElementById("add-step").addEventListener("click", () => {
+  fillStepDurationOptions();
+  stepModal.show();
+});
+
+document.getElementById("step-modal-add").addEventListener("click", () => {
+  steps.push({ type: stepTypeSelect.value, duration_s: parseInt(stepDurationSelect.value, 10) });
+  dirty = true;
+  stepModal.hide();
   renderSteps();
 });
 

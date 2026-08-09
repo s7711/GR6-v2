@@ -254,6 +254,22 @@ class TestFindLookaheadPoint(unittest.TestCase):
         )
         self.assertTrue(result.path_complete)
 
+    def test_lookahead_target_extends_past_final_point_not_coincident_with_robot(self):
+        # Found live 2026-08-08: with the robot sitting right on the
+        # path's last point, a target that just returns that same point
+        # makes the "bearing from robot to target" a near-zero vector -
+        # numerically unstable, noise-dominated heading error (see
+        # find_lookahead_point's own comment). The target must instead
+        # sit lookahead_distance_m further north (continuing the path's
+        # own direction), a well-defined point clearly ahead of - not
+        # on top of - the robot, however close to the endpoint it is.
+        path = _straight_north_path(length=20, step=10)
+        result = geometry.find_lookahead_point(
+            path, start_index=0, robot_north=20, robot_east=0, lookahead_distance_m=2,
+        )
+        self.assertAlmostEqual(result.north, 22)
+        self.assertAlmostEqual(result.east, 0)
+
     def test_path_complete_flag_false_mid_path(self):
         path = _straight_north_path(length=20, step=10)
         result = geometry.find_lookahead_point(

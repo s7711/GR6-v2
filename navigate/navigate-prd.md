@@ -319,6 +319,23 @@ not on the edit page itself.
   edit, rather than a second, JS-side implementation that could drift
   from it.
 
+## Manual pump control (`/pump/manual`)
+
+Added 2026-08-08 for `missions`' `water` step (single-plant watering:
+go to a plant, water it stationary, come back for more) — the pump had
+previously only ever been driven from inside `PathRunner.step()`, tied
+to a moving path's per-point pump state, with nothing to turn it on
+just standing still. `POST /pump/manual` (`{"on": bool}`) calls
+`send_pump` directly, refusing (`{"ok": false, "reason": "a path is
+already running"}`) while `runner.status()["state"] == "running"` —
+that path's own `step()` is already resending pump commands every tick,
+and an out-of-band manual command here would just race it. Like
+`/jog/manual`, this bypasses `PathRunner` entirely rather than routing
+through it; unlike `/jog/manual` it's not a CORS-avoidance proxy (the
+caller is `missions`, a server, not a browser) - the only reason it
+lives on `navigate` at all is `missions`' own "never talk to `drive`
+directly" boundary (see missions-prd.md).
+
 ## Variable tolerance ("clearance")
 
 Each segment carries its own `clearance_m` value (set at recording
@@ -496,6 +513,29 @@ without data.
 
 ## Real bugs found via testing
 
+- **Heading error went unstable (~180°, from GNSS/INS noise alone) once
+  a path finished and sat loaded-but-not-yet-started** — found live
+  2026-08-08, watching a `missions` run string paths together.
+  `find_lookahead_point`'s lookahead walk, on running out of path
+  (robot at or very near the final point), just returned that last
+  point itself as the steering target. `heading_error_deg` is a bearing
+  *from the robot to that target* — with the two nearly coincident,
+  that bearing is a near-zero vector, and the direction of a few
+  centimetres of position noise is essentially random. Live debug log
+  showed exactly this on a stationary, already-finished robot:
+  `heading_error_deg` swinging -172° to -174° across four consecutive
+  1Hz samples with `tracked_index` and `distance_travelled_m` both
+  frozen. Only really visible via `preview()` (which keeps evaluating a
+  finished path for the Run page's display, by design — see its own
+  docstring) rather than live steering, since `step()` had already
+  called `_finish()` by the time a real run reaches this point — a
+  display artifact during a mission's inter-path pause, not an actual
+  steering fault, but alarming enough to look like one. Fixed by
+  extending the lookahead target virtually past the path's last point
+  along that final segment's own direction whenever the walk runs out
+  of path to advance along (also covers a path shorter than
+  `lookahead_distance_m` outright), so the target is always a real
+  distance ahead of the robot, never coincident with it.
 - **`load_path()` could silently abandon a run already in progress.**
   `start()` already refused to run while `state == "running"`, but
   `load_path()` reset straight to `idle` unconditionally regardless of

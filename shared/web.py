@@ -15,6 +15,7 @@ from shared.config import load_config
 SHARED_TEMPLATES = Path(__file__).resolve().parent / "web" / "templates"
 SHARED_STATIC = Path(__file__).resolve().parent / "web" / "static"
 TITLE_COMMENT = re.compile(r"\{#\s*title:\s*(.+?)\s*#\}")
+NAV_HIDDEN_COMMENT = re.compile(r"\{#\s*nav:\s*hidden\s*#\}")
 
 
 def use_shared_templates(app):
@@ -41,20 +42,29 @@ def service_url(browser_host: str, service_name: str, scheme: str = "http") -> s
 
 
 def discover_pages(pages_dir: Path):
-    """List (slug, title) for every template in a service's pages/ folder.
+    """List (slug, title, hidden) for every template in a service's
+    pages/ folder.
 
     Title comes from a `{# title: My Page #}` comment at the top of the
     template, falling back to the filename. This is what lets a page be
     added just by dropping a new template in — by hand, or later by an
     AI page-generator — with no code change needed to make it show up in
     the nav or be reachable.
-    """
+
+    A page also carrying `{# nav: hidden #}` is still routable at
+    /pages/<slug> exactly the same way, but register_pages() excludes it
+    from the dropdown — for pages only ever meant to be entered from
+    elsewhere (e.g. navigate's edit-path, reached via the Paths page's
+    own Edit button with a `?name=` query string, not chosen directly
+    from the nav)."""
     pages = []
     for path in sorted(Path(pages_dir).glob("*.html")):
         slug = path.stem
-        match = TITLE_COMMENT.search(path.read_text())
+        text = path.read_text()
+        match = TITLE_COMMENT.search(text)
         title = match.group(1) if match else slug.replace("-", " ").title()
-        pages.append((slug, title))
+        hidden = bool(NAV_HIDDEN_COMMENT.search(text))
+        pages.append((slug, title, hidden))
     return pages
 
 
@@ -74,11 +84,12 @@ def register_pages(app, pages_dir: Path, index_slug: str, context_providers: dic
 
     def render(slug):
         extra = context_providers[slug]() if slug in context_providers else {}
-        pages = discover_pages(pages_dir)
-        current_title = next((title for s, title in pages if s == slug), slug)
+        all_pages = discover_pages(pages_dir)
+        nav_pages = [(s, title) for s, title, hidden in all_pages if not hidden]
+        current_title = next((title for s, title, _hidden in all_pages if s == slug), slug)
         return render_template(
             f"pages/{slug}.html",
-            pages=pages,
+            pages=nav_pages,
             current_slug=slug,
             current_title=current_title,
             index_slug=index_slug,

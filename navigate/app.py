@@ -367,6 +367,20 @@ def control_load(name):
     return jsonify(runner.load_path(points))
 
 
+@app.route("/pump/manual", methods=["POST"])
+def pump_manual():
+    """Direct on/off outside of any path-following - for missions'
+    stationary "water" step (see missions/control.py). Refuses while a
+    path is actually running: that path's own step() is already
+    resending pump commands every tick, and an out-of-band manual
+    command here would just race it."""
+    if runner.status()["state"] == "running":
+        return jsonify({"ok": False, "reason": "a path is already running"})
+    payload = request.get_json(force=True)
+    send_pump(bool(payload["on"]))
+    return jsonify({"ok": True})
+
+
 @app.route("/control/entry-check")
 def control_entry_check():
     position = _current_position()

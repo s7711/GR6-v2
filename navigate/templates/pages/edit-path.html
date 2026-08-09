@@ -1,4 +1,5 @@
 {# title: Edit Path #}
+{# nav: hidden #}
 {% extends "base.html" %}
 {% block title %}GR6 — Edit Path{% endblock %}
 
@@ -299,10 +300,55 @@ function insertAt(neighbourIndex, afterInsertIndex) {
   refresh();
 }
 
+// Same equirectangular approximation as distanceMetres above, matching
+// navigate's own geometry.bearing convention (0=North, clockwise) —
+// used below to keep "insert ahead"/"insert behind" at either end of
+// the path continuing in the same direction the path was already
+// heading, rather than requiring an existing neighbour on that side to
+// build a midpoint from.
+function bearingDeg(fromLat, fromLon, toLat, toLon) {
+  const metresPerDegLat = 111320;
+  const metresPerDegLon = 111320 * Math.cos((fromLat * Math.PI) / 180);
+  const dNorth = (toLat - fromLat) * metresPerDegLat;
+  const dEast = (toLon - fromLon) * metresPerDegLon;
+  return ((Math.atan2(dEast, dNorth) * 180) / Math.PI + 360) % 360;
+}
+
+// Extends the path past its first/last point, projected forward by the
+// chosen "Move point" distance along whatever direction that end was
+// already heading — for when insert-ahead/insert-behind has no
+// neighbour on that side to build a midpoint from. With only one point
+// in the path there's no direction to continue, so it just goes north.
+function extendPath(atStart) {
+  const p = atStart ? points[0] : points[points.length - 1];
+  const neighbour = points.length > 1 ? (atStart ? points[1] : points[points.length - 2]) : null;
+  const bearing = neighbour ? bearingDeg(neighbour.lat, neighbour.lon, p.lat, p.lon) : 0;
+  const distance_m = parseFloat(document.getElementById("move-distance").value);
+  fetch("/api/project", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ lat: p.lat, lon: p.lon, bearing_deg: bearing, distance_m }),
+  }).then((r) => r.json()).then((result) => {
+    pushUndo();
+    const newPoint = { lat: result.lat, lon: result.lon, speed_mps: p.speed_mps, pump: p.pump, clearance_m: p.clearance_m };
+    if (atStart) {
+      points.unshift(newPoint);
+      selectedIndex = 0;
+    } else {
+      points.push(newPoint);
+      selectedIndex = points.length - 1;
+    }
+    markDirty();
+    refresh();
+  });
+}
+
 document.getElementById("insert-ahead").addEventListener("click", () => {
+  if (selectedIndex === points.length - 1) { extendPath(false); return; }
   insertAt(selectedIndex + 1, selectedIndex + 1);
 });
 document.getElementById("insert-behind").addEventListener("click", () => {
+  if (selectedIndex === 0) { extendPath(true); return; }
   insertAt(selectedIndex - 1, selectedIndex);
 });
 

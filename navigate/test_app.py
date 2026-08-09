@@ -248,6 +248,28 @@ class NavigateAppTestCase(unittest.TestCase):
         resp = self.client.post("/control/load/other")
         self.assertEqual(resp.get_json(), {"ok": True})
 
+    def test_pump_manual_turns_pump_on_and_off(self):
+        with patch.object(app, "send_pump", self.recorder.send_pump):
+            resp_on = self.client.post("/pump/manual", json={"on": True})
+            resp_off = self.client.post("/pump/manual", json={"on": False})
+        self.assertEqual(resp_on.get_json(), {"ok": True})
+        self.assertEqual(resp_off.get_json(), {"ok": True})
+        self.assertEqual(self.recorder.pump_calls, [True, False])
+
+    def test_pump_manual_refused_while_a_path_is_running(self):
+        # missions' "water" step sends this between path steps - it must
+        # not be able to race an interactively-started path's own
+        # per-tick pump commands (see navigate/control.py's step()).
+        paths_module.save_path(app.PATHS_DIR, "loop", SAMPLE_POINTS)
+        self.client.post("/control/load/loop")
+        self._set_position(52.2, -1.5, 0)
+        self.client.post("/control/start")
+
+        with patch.object(app, "send_pump", self.recorder.send_pump):
+            resp = self.client.post("/pump/manual", json={"on": True})
+        self.assertEqual(resp.get_json(), {"ok": False, "reason": "a path is already running"})
+        self.assertEqual(self.recorder.pump_calls, [])
+
     def test_successful_start_resets_the_debug_log(self):
         app.DEBUG_LOG_PATH.write_text('{"stale": "entry from a previous run"}\n')
         paths_module.save_path(app.PATHS_DIR, "loop", SAMPLE_POINTS)

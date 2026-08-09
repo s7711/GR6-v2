@@ -7,9 +7,13 @@ immediately, with no cache-invalidation logic and no service restart
 needed.
 """
 
+import sys
 from pathlib import Path
 
 import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from shared.geodesy import ned_to_lla  # noqa: E402
 
 # See aruco-prd.md's precision note: 9 decimal places gives comfortable
 # sub-mm ground precision at any latitude (6 places =~ 11cm, 7 =~ 1.1cm,
@@ -59,6 +63,24 @@ def upsert_marker(path, marker: dict) -> None:
     markers.append(record)
     markers.sort(key=lambda m: m["id"])
     save_markers(path, markers)
+
+
+def nudge_marker(path, marker_id: int, north_m: float = 0.0, east_m: float = 0.0, alt_m: float = 0.0):
+    """Shift a surveyed marker's position by a small local offset and
+    save immediately - for live-tuning a marker's pose from the Markers
+    page (small physical misplacements found once the robot's actually
+    used it) without re-running the Add Marker survey workflow. Uses
+    shared/geodesy.py directly, the same primitive navigate/geometry.py's
+    own project_forward is built on, rather than a second lat/lon offset
+    approximation - see this file's own LATLON_DECIMALS note, small
+    nudges need the same care as everything else here. Returns the
+    updated (rounded) record, or None if the marker doesn't exist."""
+    marker = find_marker(path, marker_id)
+    if marker is None:
+        return None
+    lat, lon, _down = ned_to_lla(north_m, east_m, 0.0, marker["lat"], marker["lon"], marker["alt"])
+    upsert_marker(path, {**marker, "lat": lat, "lon": lon, "alt": marker["alt"] + alt_m})
+    return find_marker(path, marker_id)
 
 
 def find_marker(path, marker_id: int):

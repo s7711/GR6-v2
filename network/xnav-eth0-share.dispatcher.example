@@ -1,0 +1,76 @@
+#!/bin/bash
+# Deploy: copy to /etc/NetworkManager/dispatcher.d/90-xnav-eth0-share,
+# owned by root, mode 0755 (NetworkManager refuses to run dispatcher
+# scripts that are group/world-writable).
+#
+#   sudo cp network/xnav-eth0-share.dispatcher.example \
+#       /etc/NetworkManager/dispatcher.d/90-xnav-eth0-share
+#   sudo chown root:root /etc/NetworkManager/dispatcher.d/90-xnav-eth0-share
+#   sudo chmod 755 /etc/NetworkManager/dispatcher.d/90-xnav-eth0-share
+#
+# Keeps eth0 (the xNAV650's own link, used for its NTRIP corrections)
+# NAT'd out via whichever interface currently holds the default route.
+#
+# Found live 2026-08-08: the previous setup was a MASQUERADE/FORWARD
+# rule typed by hand over SSH at some point, with an interface name
+# (wlan0) hardcoded literally into the command - see
+# network-prd.md's "hand-written iptables script that resets on every
+# reboot, not a managed service". wlan0 is only ever meant to be a
+# hotspot AP with no internet of its own (see network-prd.md's
+# "Hardware layout") - the rule likely dates from before the roaming
+# USB dongle (wlan1) was fitted and roles were split, and nobody
+# updated it when they were. When wlan1 (the real internet client)
+# dropped and reconnected, nothing re-evaluated which interface the
+# rule should point at, so NTRIP silently stayed broken even after
+# wlan1 came back - not caught until someone happened to be watching.
+#
+# This script re-derives the right target every time, instead of
+# assuming it stays fixed: it runs on every NetworkManager interface
+# up/down (any interface, not just the one that changed, since e.g.
+# wlan1 coming back is exactly the event that needs to be reacted to),
+# and rebuilds a small dedicated chain from scratch each time - cheap,
+# idempotent, and safe to run as often as NetworkManager likes.
+#
+# Deliberately not the fuller `ipv4.method: shared` NM-native mechanism
+# network-prd.md describes as the eventual goal (that needs the
+# `network` service's own management to configure safely) - this is a
+# minimal, self-contained fix that doesn't wait on that being built.
+
+set -euo pipefail
+
+XNAV_SUBNET="192.168.196.0/24"
+XNAV_IFACE="eth0"
+NAT_CHAIN="XNAV-NAT"
+FWD_CHAIN="XNAV-FWD"
+
+# Only worth re-deriving on an interface actually coming up or down -
+# NetworkManager also fires this for other events (dhcp4-change, etc.)
+# that don't change which interface has the default route.
+case "$2" in
+    up|down) ;;
+    *) exit 0 ;;
+esac
+
+# Custom chains, created once and left in place - lets every later run
+# cleanly flush just its own rules rather than needing to pattern-match
+# a previous, possibly differently-worded rule back out of the main
+# chains (which is exactly what made the old setup hard to fix live).
+iptables -t nat -N "$NAT_CHAIN" 2>/dev/null || true
+iptables -N "$FWD_CHAIN" 2>/dev/null || true
+iptables -t nat -C POSTROUTING -j "$NAT_CHAIN" 2>/dev/null || iptables -t nat -I POSTROUTING -j "$NAT_CHAIN"
+iptables -C FORWARD -j "$FWD_CHAIN" 2>/dev/null || iptables -I FORWARD -j "$FWD_CHAIN"
+
+iptables -t nat -F "$NAT_CHAIN"
+iptables -F "$FWD_CHAIN"
+
+DEFAULT_IFACE=$(ip route show default | awk '{print $5; exit}')
+
+if [ -n "$DEFAULT_IFACE" ] && [ "$DEFAULT_IFACE" != "$XNAV_IFACE" ]; then
+    iptables -t nat -A "$NAT_CHAIN" -s "$XNAV_SUBNET" -o "$DEFAULT_IFACE" -j MASQUERADE
+    iptables -A "$FWD_CHAIN" -s "$XNAV_SUBNET" -o "$DEFAULT_IFACE" -m state --state NEW,ESTABLISHED,RELATED -j ACCEPT
+    iptables -A "$FWD_CHAIN" -d "$XNAV_SUBNET" -i "$DEFAULT_IFACE" -m state --state ESTABLISHED,RELATED -j ACCEPT
+fi
+# No default route at all right now: chains are left empty (just
+# flushed above) - eth0 simply has no internet path until one shows up
+# and this script runs again, which is the honest state of the world,
+# not something to paper over.
