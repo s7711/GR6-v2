@@ -75,6 +75,7 @@ class PathRunner:
             index = geometry.find_entry_segment(
                 self.path, robot_north, robot_east, robot_heading_deg,
                 self.config["entry_max_distance_m"], self.config["entry_max_heading_deg"],
+                self.config["lookahead_distance_m"],
             )
             if index is not None:
                 return {"ok": True, "index": index}
@@ -86,8 +87,11 @@ class PathRunner:
                     robot_north, robot_east, a.north, a.east, b.north, b.east
                 )
                 if best is None or dist < best[1]:
-                    segment_heading = geometry.bearing(a.north, a.east, b.north, b.east)
-                    heading_err = geometry.angle_diff(segment_heading, robot_heading_deg)
+                    px, py, _t, _dist = geometry.project_onto_segment(
+                        robot_north, robot_east, a.north, a.east, b.north, b.east
+                    )
+                    point_bearing = geometry.bearing(robot_north, robot_east, px, py)
+                    heading_err = geometry.angle_diff(point_bearing, robot_heading_deg)
                     best = (i, dist, heading_err)
             return {
                 "ok": False,
@@ -147,6 +151,7 @@ class PathRunner:
             index = geometry.find_entry_segment(
                 self.path, robot_north, robot_east, robot_heading_deg,
                 self.config["entry_max_distance_m"], self.config["entry_max_heading_deg"],
+                self.config["lookahead_distance_m"],
             )
             if index is None:
                 offset = geometry.nearest_segment_offset(self.path, robot_north, robot_east, robot_heading_deg)

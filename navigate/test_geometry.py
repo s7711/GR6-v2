@@ -118,7 +118,7 @@ class TestFindEntrySegment(unittest.TestCase):
         path = _straight_north_path()
         index = geometry.find_entry_segment(
             path, robot_north=0.1, robot_east=0.1, robot_heading_deg=1,
-            max_distance_m=1.0, max_heading_deg=45,
+            max_distance_m=1.0, max_heading_deg=45, lookahead_distance_m=0.4,
         )
         self.assertEqual(index, 0)
 
@@ -126,7 +126,7 @@ class TestFindEntrySegment(unittest.TestCase):
         path = _straight_north_path()
         index = geometry.find_entry_segment(
             path, robot_north=5, robot_east=100, robot_heading_deg=0,
-            max_distance_m=1.0, max_heading_deg=45,
+            max_distance_m=1.0, max_heading_deg=45, lookahead_distance_m=0.4,
         )
         self.assertIsNone(index)
 
@@ -134,15 +134,20 @@ class TestFindEntrySegment(unittest.TestCase):
         path = _straight_north_path()
         index = geometry.find_entry_segment(
             path, robot_north=5, robot_east=0, robot_heading_deg=180,  # facing backwards
-            max_distance_m=1.0, max_heading_deg=45,
+            max_distance_m=1.0, max_heading_deg=45, lookahead_distance_m=0.4,
         )
         self.assertIsNone(index)
 
     def test_close_to_first_but_only_aligned_at_second_segment(self):
         # Two path segments with different headings: first heads east,
         # second heads north. Robot sits right at the junction, facing
-        # north — should be rejected on the first (heading mismatch) and
-        # accepted on the second.
+        # north. The first segment's own bearing (east) doesn't match,
+        # but the robot is exactly at its far end, so the lookahead
+        # point 0.4m ahead lands in the (correctly-aligned) second
+        # segment regardless of which one is entered — both are
+        # equally valid entries here, so the first (index 0) is
+        # returned, same as any other case where multiple candidates
+        # qualify.
         path = [
             PathPoint(north=0, east=0, speed_mps=0.5, pump=False, clearance_m=0.5),
             PathPoint(north=0, east=10, speed_mps=0.5, pump=False, clearance_m=0.5),
@@ -150,9 +155,66 @@ class TestFindEntrySegment(unittest.TestCase):
         ]
         index = geometry.find_entry_segment(
             path, robot_north=0, robot_east=10, robot_heading_deg=0,
-            max_distance_m=1.0, max_heading_deg=45,
+            max_distance_m=1.0, max_heading_deg=45, lookahead_distance_m=0.4,
         )
-        self.assertEqual(index, 1)
+        self.assertEqual(index, 0)
+
+    def test_rejects_a_self_crossing_paths_wrong_loop_even_though_its_own_segment_bearing_matches(self):
+        # Reproduces (with the real local-frame coordinates, trimmed to
+        # the relevant points) the live 2026-08-10 Waterbutt8 abort: a
+        # figure-8 path whose return loop passes close by its own
+        # start. The robot sits right at the path's actual start
+        # (segment 0), but segment 0's own bearing doesn't closely
+        # match the robot's heading (it's mid-curve there), while a
+        # segment on the distant return loop - within max_distance_m,
+        # since the two loops pass close together - happens to have a
+        # segment bearing that *does* match, by coincidence.
+        #
+        # The old check (segment's own bearing vs robot heading) picked
+        # that distant, coincidentally-aligned return-loop segment
+        # instead of the correct nearby one, since it only compared
+        # each segment's own direction of travel, not what tracking
+        # would actually do next. Once locked onto it, the very next
+        # tracking step demanded a real ~86 degree heading correction
+        # (the return loop bends sharply right there) and aborted
+        # almost immediately. Checking the lookahead point - what
+        # step() will actually try to track towards - instead correctly
+        # favours the close, low-correction entry.
+        path = [
+            PathPoint(north=0.0, east=0.0, speed_mps=0.2, pump=False, clearance_m=0.5),
+            PathPoint(north=0.225, east=0.0029, speed_mps=0.2, pump=False, clearance_m=0.5),
+            PathPoint(north=0.6499, east=0.1057, speed_mps=0.2, pump=False, clearance_m=0.5),
+            # The figure-8's return loop, passing close by the start again.
+            PathPoint(north=0.1072, east=1.652, speed_mps=0.2, pump=False, clearance_m=0.5),
+            PathPoint(north=-0.1896, east=1.4269, speed_mps=0.2, pump=False, clearance_m=0.5),
+            PathPoint(north=-0.3555, east=1.1517, speed_mps=0.2, pump=False, clearance_m=0.5),
+            PathPoint(north=-0.3788, east=0.8545, speed_mps=0.2, pump=False, clearance_m=0.5),
+            PathPoint(north=-0.1538, east=0.5577, speed_mps=0.2, pump=False, clearance_m=0.5),
+            PathPoint(north=0.2067, east=0.4781, speed_mps=0.2, pump=False, clearance_m=0.5),
+        ]
+        robot_north, robot_east, robot_heading_deg = -0.1068, 0.1674, 309.98
+        max_distance_m, max_heading_deg, lookahead_distance_m = 1.0, 45, 0.4
+
+        old_index = None
+        for i in range(len(path) - 1):
+            a, b = path[i], path[i + 1]
+            _px, _py, _t, dist = geometry.project_onto_segment(
+                robot_north, robot_east, a.north, a.east, b.north, b.east
+            )
+            if dist > max_distance_m:
+                continue
+            segment_heading = geometry.bearing(a.north, a.east, b.north, b.east)
+            if abs(geometry.angle_diff(robot_heading_deg, segment_heading)) > max_heading_deg:
+                continue
+            old_index = i
+            break
+        self.assertNotEqual(old_index, 0, "the old segment-bearing check should skip the correct entry")
+
+        index = geometry.find_entry_segment(
+            path, robot_north, robot_east, robot_heading_deg,
+            max_distance_m, max_heading_deg, lookahead_distance_m,
+        )
+        self.assertEqual(index, 0)
 
 
 class TestNearestSegmentOffset(unittest.TestCase):

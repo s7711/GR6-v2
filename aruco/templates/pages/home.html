@@ -57,7 +57,14 @@ connectWs("/ws/aruco", (msg) => {
     document.getElementById("stat-gad").textContent = `marker ${gad.id}, ${ago.toFixed(0)}s ago`;
   }
 
-  const debugEntries = Object.entries(msg.debug || {});
+  // This table is unmapped-marker diagnostics only (per its own heading
+  // below) - but /ws/aruco's debug field now carries an entry for every
+  // detected marker, mapped or not (added for waterbutt's QC marker
+  // check, see aruco-prd.md), and a mapped marker's entry doesn't have
+  // the survey fields (range_m etc.) this table renders. Filter back
+  // down to the unmapped shape, or a mapped marker showing up here
+  // throws mid-render and silently breaks the whole table.
+  const debugEntries = Object.entries(msg.debug || {}).filter(([, d]) => d.range_m !== undefined);
   document.getElementById("debug-card").style.display = debugEntries.length ? "" : "none";
   const fmt = (arr) => arr.map((v) => v.toFixed(3)).join(", ");
   document.getElementById("debug-rows").innerHTML = debugEntries

@@ -29,7 +29,10 @@ sys.path.append(str(Path(__file__).resolve().parent.parent / "navigate"))
 import geometry  # noqa: E402
 
 
-def check(points_a: list, points_b: list, entry_max_distance_m: float, entry_max_heading_deg: float) -> dict:
+def check(
+    points_a: list, points_b: list, entry_max_distance_m: float, entry_max_heading_deg: float,
+    lookahead_distance_m: float,
+) -> dict:
     """{"ok": True} if path B's start would be enterable straight off
     the end of path A, else {"ok": False, "reason": ..., "distance_m":
     ..., "heading_error_deg": ...} (matching navigate's own entry_check
@@ -47,7 +50,7 @@ def check(points_a: list, points_b: list, entry_max_distance_m: float, entry_max
 
     index = geometry.find_entry_segment(
         path_b_local, last_north, last_east, approach_heading_deg,
-        entry_max_distance_m, entry_max_heading_deg,
+        entry_max_distance_m, entry_max_heading_deg, lookahead_distance_m,
     )
     if index is not None:
         return {"ok": True}

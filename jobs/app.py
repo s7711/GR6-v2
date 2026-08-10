@@ -259,7 +259,8 @@ def api_save_job(name):
         except (FileNotFoundError, navigate_paths.InvalidPathName):
             continue
         result = continuity.check(
-            points_a, points_b, navigate_cfg["entry_max_distance_m"], navigate_cfg["entry_max_heading_deg"]
+            points_a, points_b, navigate_cfg["entry_max_distance_m"], navigate_cfg["entry_max_heading_deg"],
+            navigate_cfg["lookahead_distance_m"],
         )
         if not result["ok"]:
             warnings.append({"after_step": i, "from_path": from_path, "to_path": to_path, **result})

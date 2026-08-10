@@ -202,57 +202,80 @@ def _detection_loop():
                 time.sleep(remaining)
 
         read = frame_reader.read()
-        if read is None:
+        # frame_reader.read() only guards against the shared-memory
+        # segment not existing yet (see _get_frame_reader) - it can
+        # still return a technically-valid seqlock read whose width/
+        # height are still zero, if the camera service has attached but
+        # hasn't written its first real frame yet. That's a genuine
+        # startup race, not a hypothetical: it crashed this exact loop
+        # live 2026-08-09/10, on cv2.cvtColor's "!_src.empty()"
+        # assertion, 6 seconds after this service started - killing
+        # detection silently for the rest of the night, since an
+        # uncaught exception in a background thread only takes down
+        # that thread, leaving the page/websocket looking perfectly
+        # alive with no new data. Treated the same as read is None:
+        # skip this tick, try again next time.
+        if read is None or read["frame"].size == 0:
             time.sleep(0.05)
             continue
 
         last_detection_time = time.monotonic()
 
-        frame = read["frame"]  # BGR byte order — see shared/frame_ipc.py
-        detections = detection.detect_markers(frame, camera_matrix, dist_coeffs, size_for_id=_marker_size_lookup)
+        try:
+            frame = read["frame"]  # BGR byte order — see shared/frame_ipc.py
+            detections = detection.detect_markers(frame, camera_matrix, dist_coeffs, size_for_id=_marker_size_lookup)
 
-        gad_status = None
-        unmapped = {}
-        debug = {}
-        nav_payload = nav_client.latest()
-        connection = nav_payload.get("connection", {})
-        nav = nav_payload.get("nav", {})
-        gps_time = machine_time_to_gps(read["timestamp"], connection.get("timeOffset"))
+            gad_status = None
+            unmapped = {}
+            debug = {}
+            nav_payload = nav_client.latest()
+            connection = nav_payload.get("connection", {})
+            nav = nav_payload.get("nav", {})
+            gps_time = machine_time_to_gps(read["timestamp"], connection.get("timeOffset"))
 
-        for d in detections:
-            # Body-frame (X forward, Y right, Z down - vehicle convention,
-            # not the raw camera frame) displacement to every detected
-            # marker, mapped or not - independent of nav/GNSS entirely
-            # (only needs the tvec plus the camera's own static mounting
-            # calibration), for waterbutt's GNSS-independent "distance
-            # from ideal" QC check - see waterbutt-prd.md.
-            debug[d["id"]] = {
-                "tvec_camera_frame": list(d["tvec"]),
-                "rvec_camera_frame": list(d["rvec"]),
-                "displacement_body_frame": (np.array(dxc_b) + coords.displacement_camera_to_body(d["tvec"], hpr_cb)).tolist(),
-            }
+            for d in detections:
+                # Body-frame (X forward, Y right, Z down - vehicle
+                # convention, not the raw camera frame) displacement to
+                # every detected marker, mapped or not - independent of
+                # nav/GNSS entirely (only needs the tvec plus the
+                # camera's own static mounting calibration), for
+                # waterbutt's GNSS-independent "distance from ideal" QC
+                # check - see waterbutt-prd.md.
+                debug[d["id"]] = {
+                    "tvec_camera_frame": list(d["tvec"]),
+                    "rvec_camera_frame": list(d["rvec"]),
+                    "displacement_body_frame": (
+                        np.array(dxc_b) + coords.displacement_camera_to_body(d["tvec"], hpr_cb)
+                    ).tolist(),
+                }
 
-            marker = marker_map.find_marker(marker_map_path, d["id"])
-            if marker is not None:
-                if gps_time is not None:
-                    gad_sender.send(d, marker, gps_time[0], gps_time[1], hpr_cb, dxc_b, hpr_ib)
-                    gad_status = {"id": d["id"], "at": time.time()}
-            elif nav:
-                # Not in the map yet — a rough, single-shot position
-                # estimate for the Map page to show greyed out (see
-                # aruco-prd.md's "unmapped marker" display). Not a
-                # survey, just a "roughly here, go measure it properly"
-                # hint — same limitation v1 had.
-                try:
-                    marker_debug = {}
-                    est = survey.survey_marker(nav, d, hpr_cb, dxc_b, hpr_ib, debug=marker_debug)
-                    unmapped[d["id"]] = {"lat": est["lat"], "lon": est["lon"]}
-                    debug[d["id"]] = marker_debug
-                except (KeyError, ZeroDivisionError, ValueError):
-                    pass
+                marker = marker_map.find_marker(marker_map_path, d["id"])
+                if marker is not None:
+                    if gps_time is not None:
+                        gad_sender.send(d, marker, gps_time[0], gps_time[1], hpr_cb, dxc_b, hpr_ib)
+                        gad_status = {"id": d["id"], "at": time.time()}
+                elif nav:
+                    # Not in the map yet — a rough, single-shot position
+                    # estimate for the Map page to show greyed out (see
+                    # aruco-prd.md's "unmapped marker" display). Not a
+                    # survey, just a "roughly here, go measure it properly"
+                    # hint — same limitation v1 had.
+                    try:
+                        marker_debug = {}
+                        est = survey.survey_marker(nav, d, hpr_cb, dxc_b, hpr_ib, debug=marker_debug)
+                        unmapped[d["id"]] = {"lat": est["lat"], "lon": est["lon"]}
+                        debug[d["id"]] = marker_debug
+                    except (KeyError, ZeroDivisionError, ValueError):
+                        pass
 
-        overlay = detection.draw_overlay(frame, detections, camera_matrix, dist_coeffs)
-        state.update(overlay, [d["id"] for d in detections], gad_status, unmapped, debug)
+            overlay = detection.draw_overlay(frame, detections, camera_matrix, dist_coeffs)
+            state.update(overlay, [d["id"] for d in detections], gad_status, unmapped, debug)
+        except Exception:
+            # Safety net, not the empty-frame fix's substitute - any
+            # other unexpected error in a single frame's processing must
+            # not be allowed to silently kill detection for hours the
+            # way the empty-frame case did.
+            logging.exception("[aruco] Detection loop hit an unexpected error, skipping this frame")
 
 
 def _mjpeg_generator(get_frame):

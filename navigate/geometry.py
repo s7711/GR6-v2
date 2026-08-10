@@ -117,20 +117,52 @@ def project_onto_segment(px, py, ax, ay, bx, by):
 
 
 def find_entry_segment(path, robot_north, robot_east, robot_heading_deg,
-                        max_distance_m, max_heading_deg):
+                        max_distance_m, max_heading_deg, lookahead_distance_m):
     """Scan forward through the path from its start; return the index of
-    the first segment within max_distance_m of the robot's position AND
-    within max_heading_deg of the robot's current heading. None if no
-    segment qualifies — the caller must surface this to the operator
-    (distance/angle to the nearest candidate), not silently proceed, per
-    navigate-prd.md's fix over GR6-v1's silent-failure behaviour."""
+    the first segment within max_distance_m of the robot's position,
+    where heading towards the *lookahead point* step() would immediately
+    track from there is within max_heading_deg. None if no segment
+    qualifies — the caller must surface this to the operator (distance/
+    angle to the nearest candidate), not silently proceed, per
+    navigate-prd.md's fix over GR6-v1's silent-failure behaviour.
+
+    Deliberately checks the heading to the lookahead point (what step()
+    will immediately try to track towards), not the segment's own
+    bearing — found live 2026-08-10 on a figure-8 path (Waterbutt8) that
+    crosses near itself: the correct, nearby entry (right at the
+    robot's actual position) failed a segment-bearing check by a
+    modest margin, while a distant crossing of the return leg passed it
+    by chance, so the scan walked straight past the right entry and
+    locked onto the wrong loop of the path instead — which then
+    aborted almost immediately once tracking reached that loop's own
+    sharp turn, on a heading correction that was real, just for the
+    wrong entry.
+
+    An earlier version of this fix compared heading against the
+    bearing to the raw *projected point* on the segment instead of the
+    segment's own bearing. That discriminated the Waterbutt8 case
+    correctly, but broke the common case of starting right at a
+    path's own beginning with a small lateral offset: close to the
+    segment, the bearing to a point almost beside you is dominated by
+    the cross-track direction, not the along-path one, and swings
+    towards +/-90 degrees for even a tiny offset regardless of how well
+    your heading matches the path. Using the lookahead point instead of
+    the raw projection fixes that: it's always lookahead_distance_m
+    ahead along the path, so it stays a stable, physically meaningful
+    "where tracking would send me next" direction at any distance from
+    the path — and it's the exact same point step() itself would use,
+    so this check is literally "would the very next tracking step
+    accept this entry," not an approximation of it."""
     for i in range(len(path) - 1):
         a, b = path[i], path[i + 1]
         _px, _py, _t, dist = project_onto_segment(robot_north, robot_east, a.north, a.east, b.north, b.east)
         if dist > max_distance_m:
             continue
-        segment_heading = bearing(a.north, a.east, b.north, b.east)
-        if abs(angle_diff(robot_heading_deg, segment_heading)) > max_heading_deg:
+        result = find_lookahead_point(path, i, robot_north, robot_east, lookahead_distance_m)
+        if result is None:
+            continue
+        heading_err = heading_error_deg(robot_heading_deg, robot_north, robot_east, result.north, result.east)
+        if abs(heading_err) > max_heading_deg:
             continue
         return i
     return None
