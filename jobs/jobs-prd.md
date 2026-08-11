@@ -1,7 +1,8 @@
 # PRD: Job Sequencing Service (jobs)
 
 See `top-prd.md` for where this fits: `drive` → `navigate` → **jobs**
-(this document) → `safety` (obstacle-avoidance, future, blocked on
+(this document) → `missions` (sequences several jobs — see its own
+`missions-prd.md`) → `safety` (obstacle-avoidance, future, blocked on
 relocating the ultrasonics). Unlike the earlier services, `jobs` has
 no equivalent at all in GR6-v1 — it's the first genuinely new capability
 this project has needed, not a port of prior art.
@@ -112,14 +113,20 @@ Checked two ways, both against `navigate`'s existing
 `/control/entry-check` (never reimplemented — that endpoint already
 does exactly this check):
 
-- **At save time**: for every step after the first, entry-check *would*
-  be run against wherever the previous path's own last point/heading
-  leaves the robot (computed the same way `navigate`'s own entry logic
-  does, from the two paths' point data alone — no live robot needed).
-  A failing pair is flagged to the operator as a warning when saving the
-  job (not blocked outright — a route the robot doesn't naturally
-  end facing correctly might still be intentionally fixed by the
-  operator jogging it between paths, see below).
+- **At save time**: for every `run_path` step, entry-check *would* be
+  run against wherever the *nearest preceding* `run_path` step's own
+  last point/heading leaves the robot (computed the same way
+  `navigate`'s own entry logic does, from the two paths' point data
+  alone — no live robot needed) — skipping over any `pause`/`water`
+  steps in between, since those don't move the robot, so continuity is
+  really between the two nearest `run_path` steps, not literally
+  adjacent ones. (Found live 2026-08-10 on "Water kitchen bed": a
+  `pause` between two `run_path` steps let a genuine ~4.4m/143deg
+  discontinuity through unwarned at save time, only discovered when the
+  job aborted mid-run.) A failing pair is flagged to the operator as a
+  warning when saving the job (not blocked outright — a route the robot
+  doesn't naturally end facing correctly might still be intentionally
+  fixed by the operator jogging it between paths, see below).
 - **At run time**: `/control/load/<path>` then `/control/start` —
   `start` already runs the real entry-check internally against the
   robot's live position and returns `{"ok": false, "reason": ...}` on
@@ -163,6 +170,10 @@ robot, editing a path), the operator can retry just that step rather
 than rerunning the whole job from scratch. No automatic retry
 policy in v1 (`on_fail` is effectively always "stop") — the operator
 decides what "fixed" means before pressing Start again.
+
+**`GET /control/status`** (added for `missions`, see its own PRD):
+plain synchronous `runner.status()`, no push feed involved — `missions`
+polls this directly while a `run_job` step is in progress.
 
 **Timed steps** (`pause`/`water`/`fill`, added 2026-08-08): no external
 state to poll like `run_path` has, so completion is tracked against an

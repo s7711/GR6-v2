@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Hand-drawn wavy flag-on-a-pole glyph (this project's own artwork,
+     no external source traced directly), white-on-black-circle to
+     match the GR6-v2 icon style (see oxts-nav/icon.svg) — inspired by
+     the general shape at https://www.svgviewer.dev/s/501300/flag, but
+     inverted (white on black, not black-on-white) and with the pole
+     drawn in the same white as the flag, not a separate colour. -->
+<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+  <circle cx="50" cy="50" r="50" fill="#000000"/>
+  <g fill="none" stroke="#ffffff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="34" y1="18" x2="34" y2="82"/>
+    <path d="M34 22 C44 14 48 30 58 22 C68 14 72 30 82 22 L82 38 C72 46 68 30 58 38 C48 46 44 30 34 38 Z"/>
+  </g>
+</svg>

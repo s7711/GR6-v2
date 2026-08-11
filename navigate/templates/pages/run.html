@@ -82,6 +82,7 @@ document.getElementById("load-btn").addEventListener("click", () => {
     .then((result) => {
       const msg = document.getElementById("entry-message");
       if (result.ok) {
+        displayedPathName = name;
         loadPathForMap(name);
         msg.textContent = "";
       } else {
@@ -113,6 +114,8 @@ document.getElementById("stop-btn").addEventListener("click", () => {
 // --- Live status (navigate's own feed) ---
 
 const joystickEl = document.getElementById("joystick");
+const pathSelect = document.getElementById("path-select");
+let displayedPathName = null; // whichever path's points are currently drawn on the map
 
 connectWs("/ws/navigate", (msg) => {
   fillFields("stat-", msg);
@@ -123,6 +126,18 @@ connectWs("/ws/navigate", (msg) => {
   const running = msg.state === "running";
   joystickEl.style.pointerEvents = running ? "none" : "auto";
   joystickEl.style.opacity = running ? "0.4" : "1";
+
+  // Stay in sync with whatever navigate actually has loaded, however
+  // it got loaded - the Paths page's own Run button, or a job driving
+  // navigate directly, both load a path without this page's own Load
+  // button ever being clicked (see navigate-prd.md's "Path entry").
+  if (msg.path_name && msg.path_name !== displayedPathName) {
+    displayedPathName = msg.path_name;
+    if ([...pathSelect.options].some((o) => o.value === msg.path_name)) {
+      pathSelect.value = msg.path_name;
+    }
+    loadPathForMap(msg.path_name);
+  }
 });
 
 // --- Map: loaded path + driven trail + live position ---

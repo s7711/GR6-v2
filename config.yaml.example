@@ -34,6 +34,7 @@ services:
     nav_update_hz: 2
     nav_feed_socket: /tmp/gr6-oxts-nav-feed.sock  # Unix domain socket — see "Nav data feed" in oxts-nav-prd.md
     nav_feed_hz: 20
+    stale_after_s: 2.0  # blank nav/status/connection once nothing's been decoded for this long — see oxts-nav-prd.md's "Staleness"
     hpr_ib: [-90, 90, 0]  # IMU-to-body mounting (mobile.vat) — read by aruco too, for GAD lever-arm/alignment frames
 
   camera:
@@ -78,7 +79,7 @@ services:
     paths_dir: navigate/data          # per-path YAML files — this robot's real-world data, not source (see .gitignore)
     control_hz: 10                    # how often navigate recomputes and sends a velocity command to drive/command/auto
     entry_max_distance_m: 1.0         # path-entry scan threshold — from GR6-v1, unchanged
-    entry_max_heading_deg: 45         # path-entry scan threshold — from GR6-v1, unchanged
+    entry_max_heading_deg: 60         # path-entry scan threshold — raised from 45 (2026-08-11), see navigate-prd.md
     lookahead_distance_m: 0.4         # pure-pursuit lookahead distance — from GR6-v1, live-settable via a tuning page
     heading_gain: 0.8                 # pure-pursuit curvature gain (multiplies 2*sin(heading_error)/lookahead_distance_m, then forward speed — see geometry.py's turn_command) — field-tested 2026-07-23, tracks well
     cte_gain: 0.3                     # pure-pursuit cross-track-error gain, same rewrite/speed-scaling as heading_gain above — lowered from an untested 1.2 after a slow-decaying oscillation was seen live; the un-lookahead'd cte term has no phase lead, unlike the heading term, so it's the likely source of underdamping
@@ -104,6 +105,7 @@ services:
       scale: 1.0                     # fudge factor on top of drive's own m/s velocity; normally 1.0
     right_wheel:
       lever_arm_i: [0.0, 0.0, 0.0]  # IMU -> right wheel, IMU frame, metres — unmeasured placeholder, MEASURE AND SET
+      scale: 1.0                     # fudge factor on top of drive's own m/s velocity; normally 1.0
 
   waterbutt:
     unit: robot-waterbutt.service
@@ -112,6 +114,7 @@ services:
     web_ui: true
     hostname: waterbutt.local  # mDNS name the ESP8266 valve controller advertises — see waterbutt/waterbutt-prd.md
     qc_marker_file: waterbutt/data/qc-marker.yaml  # the single saved "ideal position" marker record — see waterbutt-prd.md's QC marker section
+    qc_default_threshold_m: 0.08  # used whenever /go's own caller doesn't pick a tolerance (e.g. jobs' `fill` step) — see waterbutt-prd.md's "QC gating on fill"
 
   jobs:
     unit: robot-jobs.service
@@ -121,4 +124,12 @@ services:
     jobs_dir: jobs/data
     job_status_hz: 2
     log_retention_days: 2
-      scale: 1.0
+
+  missions:
+    unit: robot-missions.service
+    host: 0.0.0.0
+    port: 8011
+    web_ui: true
+    missions_dir: missions/data
+    mission_status_hz: 2
+    log_retention_days: 2

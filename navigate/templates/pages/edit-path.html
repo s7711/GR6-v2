@@ -99,6 +99,16 @@
       </div>
     </div>
 
+    <div class="card mb-3">
+      <div class="card-body">
+        <label class="form-label mb-0">Reference path</label>
+        <div class="input-group">
+          <select id="ref-path-select" class="form-select"></select>
+          <button id="add-ref-path" class="btn btn-outline-secondary">Add</button>
+        </div>
+      </div>
+    </div>
+
     <div class="card">
       <div class="card-body">
         <button id="save-btn" class="btn btn-success w-100">Save&hellip;</button>
@@ -159,8 +169,45 @@ if (!pathName) {
 let points = []; // [{lat, lon, speed_mps, pump, clearance_m}, ...]
 let selectedIndex = 0;
 let dirty = false;
-let undoStack = [];
+// Tagged so the same stack covers both point edits and reference-path
+// additions - Undo pops whichever happened most recently, regardless
+// of which kind it was (see create-path.html's own version of this).
+let undoStack = []; // [{type: "points", snapshot} | {type: "refpath", name}]
 let existingNames = [];
+
+// --- Reference paths: other saved paths, shown faded for lining up
+// against (see navigate-prd.md) - display-only, never persisted.
+const REFERENCE_COLORS = ["#0d6efd99", "#fd7e1499", "#6f42c199", "#20c99799", "#d6336c99", "#0dcaf099"];
+let referencePaths = []; // [{name, color}], in add order
+
+function refreshRefPathSelect() {
+  const select = document.getElementById("ref-path-select");
+  const added = new Set(referencePaths.map((r) => r.name));
+  select.innerHTML = "";
+  existingNames.filter((name) => name !== pathName && !added.has(name)).forEach((name) => {
+    const opt = document.createElement("option");
+    opt.value = name;
+    opt.textContent = name;
+    select.appendChild(opt);
+  });
+}
+
+function addReferencePath(name) {
+  fetch(`/api/paths/${encodeURIComponent(name)}`).then((r) => (r.ok ? r.json() : [])).then((refPoints) => {
+    const color = REFERENCE_COLORS[referencePaths.length % REFERENCE_COLORS.length];
+    referencePaths.push({ name, color });
+    map.setLayer(`ref-${name}`, refPoints, { color, dots: true, dotRadius: 3 });
+    map.draw();
+    refreshRefPathSelect();
+  });
+}
+
+document.getElementById("add-ref-path").addEventListener("click", () => {
+  const name = document.getElementById("ref-path-select").value;
+  if (!name) return;
+  undoStack.push({ type: "refpath", name });
+  addReferencePath(name);
+});
 
 const map = createGeoMap(document.getElementById("map-canvas"), document.getElementById("map-wrapper"), ".zoom-btn");
 map.setZoom("auto");
@@ -177,7 +224,7 @@ function distanceMetres(lat1, lon1, lat2, lon2) {
 }
 
 function pushUndo() {
-  undoStack.push(JSON.parse(JSON.stringify(points)));
+  undoStack.push({ type: "points", snapshot: JSON.parse(JSON.stringify(points)) });
 }
 
 function redraw() {
@@ -366,7 +413,15 @@ document.getElementById("delete-point").addEventListener("click", () => {
 
 document.getElementById("undo").addEventListener("click", () => {
   if (undoStack.length === 0) return;
-  points = undoStack.pop();
+  const action = undoStack.pop();
+  if (action.type === "refpath") {
+    referencePaths.pop();
+    map.setLayer(`ref-${action.name}`, []);
+    map.draw();
+    refreshRefPathSelect();
+    return;
+  }
+  points = action.snapshot;
   selectedIndex = Math.min(selectedIndex, points.length - 1);
   markDirty();
   refresh();
@@ -427,6 +482,11 @@ window.addEventListener("beforeunload", (e) => {
 });
 
 // --- Load ---
+
+fetch("/api/paths").then((r) => r.json()).then((list) => {
+  existingNames = list.map((p) => p.name);
+  refreshRefPathSelect();
+});
 
 if (pathName) {
   fetch(`/api/paths/${encodeURIComponent(pathName)}`).then((r) => {

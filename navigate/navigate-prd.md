@@ -383,11 +383,40 @@ Reused from GR6-v1 almost as-is, with the one real fix:
 - Both thresholds start at v1's values (1.0m distance, 45° heading) —
   not re-derived from first principles, since v1's choices worked in
   practice and there's no evidence they need to change.
+- **`entry_max_heading_deg` raised to 60 (2026-08-11)**: heading drift
+  while the robot sits stationary between jobs (a few degrees observed
+  live, tied to the same poor-GNSS heading-drift behaviour discussed
+  for a future recovery mechanism) was enough on its own to tip an
+  otherwise-fine entry over the old 45° limit depending on the exact
+  moment Start was pressed — a major failure mode, close to guaranteed
+  on any mission with more than a few jobs. Still comfortably under
+  `max_heading_correction_deg`'s 70°, so a genuinely bad entry still
+  aborts once actually tracking, not just waved through here.
 - **Fixed from v1**: if no segment qualifies, this is surfaced to the
   operator (distance + angle to the nearest candidate segment shown on
   the run-path page), not silently ignored. The operator drives closer
   by hand and retries, rather than the robot starting to track a
   meaningless index.
+
+### Run page staying in sync with what's actually loaded (2026-08-11)
+
+The Run page's dropdown/map only ever updated in response to *its own*
+Load button being clicked — `PathRunner` itself only ever sees raw
+points, not a name (see control.py), and nothing tracked which saved
+path was actually loaded anywhere the page could see. So a path loaded
+a different way — the Paths page's own Run button (which loads
+server-side then just navigates to `/`, historically with a comment
+admitting the gap), or `jobs` driving navigate directly through a
+`run_path` step — left the page showing nothing useful despite
+navigate actually running something real, with no way to fix it by
+hand (`load_path()` refuses while a run is already in progress).
+
+Fixed by tracking `_current_path_name` in `app.py`, set whenever
+`/control/load/<name>` succeeds regardless of who called it, and
+publishing it in the existing `/ws/navigate` feed. The Run page already
+polls that feed continuously — its handler now just notices when
+`msg.path_name` differs from what's currently shown and syncs the
+dropdown + map then, no new polling mechanism needed.
 
 ## Config additions (shared config file) — proposed
 
@@ -399,7 +428,7 @@ navigate:
   paths_dir: navigate/data
   control_hz: 10
   entry_max_distance_m: 1.0
-  entry_max_heading_deg: 45
+  entry_max_heading_deg: 60
   lookahead_distance_m: 0.4
   heading_gain: 2.0
   cte_gain: 0.6

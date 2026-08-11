@@ -176,6 +176,32 @@ camera stays rotation-invariant too, not just the camera itself (see
 `test_coords.py`'s `test_zero_for_a_pure_rotation_with_a_real_offset_
 behind_the_camera`).
 
+### QC gating on fill
+
+Added 2026-08-11: everything above only ever *measured* the QC
+distance — nothing yet stopped a fill from actually happening when it
+was bad, or missing entirely. "No QC marker means no fill", not "no
+QC marker means skip the check": `POST /go` now refuses (`409`, with
+a specific `reason`) unless `qc_check.passes()` is true, which
+requires state `"ok"` *and* the live distance within a threshold —
+`"not_configured"`, `"not_visible"`, `"aruco_unreachable"`, or any
+other non-`"ok"` state all refuse the same as being too far away, none
+of them silently pass. This runs in `app.py`'s `/go` route (not
+`ValveController`, which stays timing-only and has no QC knowledge at
+all) — the same place `duration_s` is already validated against
+`DURATIONS_S`.
+
+The threshold is selectable, not fixed — `qc_threshold_m`, an
+allow-listed choice (`QC_THRESHOLD_OPTIONS_M`: 5/8/10cm, same
+"operator picks from a fixed set, server re-validates" reasoning as
+`DURATIONS_S`) on the Run page next to the duration slider. A `/go`
+call that doesn't specify one at all (`jobs`' own `fill` step, which
+has no threshold selector of its own yet — see jobs-prd.md) gets
+`QC_DEFAULT_THRESHOLD_M` (8cm). `jobs`' `waterbutt_go()` surfaces the
+refusal's actual `reason` (not a generic "waterbutt refused") so a
+`fill` step's abort reason says *why* — too far, not visible, or
+never configured — not just that it failed.
+
 ### Icon
 
 Per the ask: a bucket-with-water-drop glyph, white-on-black-circle,

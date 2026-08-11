@@ -69,6 +69,7 @@ nav_feed_server = nav_feed.NavFeedServer(
     nrxs=nrxs,
     xnav_ip=xnav_ip,
     hz=service_cfg["nav_feed_hz"],
+    stale_after_s=service_cfg["stale_after_s"],
 )
 
 
@@ -141,12 +142,7 @@ def xnav_config_file(filename):
 def ws_nav(ws):
     period = 1.0 / nav_update_hz
     while True:
-        with nrxs.lock:
-            decoder = nrxs.nrx.get(xnav_ip, {}).get("decoder")
-            nav = dict(decoder.nav) if decoder else {}
-            status = dict(decoder.status) if decoder else {}
-            connection = dict(decoder.connection) if decoder else {}
-        ws.send(json.dumps({"nav": nav, "status": status, "connection": connection}, default=str))
+        ws.send(json.dumps(nav_feed.snapshot(nrxs, xnav_ip, service_cfg["stale_after_s"]), default=str))
         time.sleep(period)
 
 

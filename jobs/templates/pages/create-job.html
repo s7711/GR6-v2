@@ -98,7 +98,7 @@ const STEP_LABELS = { pause: "Pause", water: "Water (stationary)", fill: "Fill w
 // DURATIONS_S allow-list) - 60s isn't one of the values it accepts, so
 // it gets its own shorter list rather than a duration that would always
 // be refused at run time. Pause/water have no such restriction.
-const DURATION_OPTIONS_S = { pause: [5, 10, 20, 60], water: [5, 10, 20, 60], fill: [5, 10, 20] };
+const DURATION_OPTIONS_S = { pause: [5, 10, 20, 60], water: [5, 10, 20, 60], fill: [5, 10, 20, 50] };
 
 let steps = []; // [{type: "run_path", path: "..."}, {type: "pause"|"water"|"fill", duration_s: N}]
 let dirty = false;

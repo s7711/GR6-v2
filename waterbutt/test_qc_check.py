@@ -78,5 +78,25 @@ class TestCompare(unittest.TestCase):
         self.assertAlmostEqual(result["distance_m"], 0.0, places=9)
 
 
+class TestPasses(unittest.TestCase):
+    def test_not_configured_never_passes(self):
+        self.assertFalse(qc_check.passes({"state": "not_configured"}, 0.08))
+
+    def test_not_visible_never_passes(self):
+        self.assertFalse(qc_check.passes({"state": "not_visible", "marker_id": 12}, 0.08))
+
+    def test_aruco_unreachable_never_passes(self):
+        self.assertFalse(qc_check.passes({"state": "aruco_unreachable"}, 0.08))
+
+    def test_ok_within_threshold_passes(self):
+        self.assertTrue(qc_check.passes({"state": "ok", "distance_m": 0.05}, 0.08))
+
+    def test_ok_exactly_at_threshold_passes(self):
+        self.assertTrue(qc_check.passes({"state": "ok", "distance_m": 0.08}, 0.08))
+
+    def test_ok_beyond_threshold_fails(self):
+        self.assertFalse(qc_check.passes({"state": "ok", "distance_m": 0.081}, 0.08))
+
+
 if __name__ == "__main__":
     unittest.main()

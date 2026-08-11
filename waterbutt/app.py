@@ -39,10 +39,21 @@ VALVE_TIMEOUT_S = 3.0  # the ESP8266's own /open,/close handler blocks for ~0.5s
 # for /go's duration_s, so a stray/malicious client can't request an
 # arbitrary duration.
 DURATIONS_S = [1, 2, 5, 10, 20, 50, 120]
+# QC threshold choices, and the server-side allow-list for /go's
+# qc_threshold_m - same "operator picks from a fixed set, server
+# re-validates" reasoning as DURATIONS_S above.
+QC_THRESHOLD_OPTIONS_M = [0.05, 0.08, 0.10]
 
 cfg = load_config()
 service_cfg = cfg["services"]["waterbutt"]
 aruco_cfg = cfg["services"]["aruco"]
+
+# Used for a /go call that doesn't pick a tolerance at all (e.g. jobs'
+# `fill` step, which has no threshold selector of its own yet) - a
+# config value, not a hardcoded constant, since this is exactly the
+# kind of thing worth tuning without a code change. See
+# waterbutt-prd.md's "QC gating on fill".
+QC_DEFAULT_THRESHOLD_M = service_cfg["qc_default_threshold_m"]
 
 VALVE_BASE_URL = f"http://{service_cfg['hostname']}"
 QC_MARKER_PATH = Path(__file__).resolve().parent.parent / service_cfg["qc_marker_file"]
@@ -153,12 +164,39 @@ def api_save_qc_marker():
     return jsonify(qc_marker.load(QC_MARKER_PATH))
 
 
+def _qc_refusal_reason(reading: dict, threshold_m: float) -> str:
+    state = reading.get("state")
+    if state == "not_configured":
+        return "no QC marker configured - see the QC Marker page"
+    if state == "not_visible":
+        return f"QC marker {reading.get('marker_id')} not visible"
+    if state == "aruco_unreachable":
+        return "can't reach aruco to check the QC marker"
+    if state == "ok":
+        return (
+            f"{reading['distance_m'] * 100:.1f}cm from ideal, "
+            f"exceeds the {threshold_m * 100:.0f}cm limit"
+        )
+    return f"QC marker check failed (unexpected state {state!r})"
+
+
 @app.route("/go", methods=["POST"])
 def go():
     payload = request.get_json(force=True)
     duration_s = payload["duration_s"]
     if duration_s not in DURATIONS_S:
         abort(400)
+    threshold_m = payload.get("qc_threshold_m", QC_DEFAULT_THRESHOLD_M)
+    if threshold_m not in QC_THRESHOLD_OPTIONS_M:
+        abort(400)
+
+    # No QC marker means no fill - a missing/unreachable/out-of-range
+    # check refuses the same as a too-far-away one, never silently
+    # skipped. See waterbutt-prd.md's "QC gating on fill".
+    reading = get_qc_reading()
+    if not qc_check.passes(reading, threshold_m):
+        return jsonify({"ok": False, "reason": _qc_refusal_reason(reading, threshold_m)}), 409
+
     valve.go(duration_s)
     return jsonify(valve.status())
 
@@ -178,7 +216,7 @@ def ws_waterbutt(ws):
 
 
 def run_context():
-    return {"durations_s": DURATIONS_S}
+    return {"durations_s": DURATIONS_S, "qc_threshold_options_m": QC_THRESHOLD_OPTIONS_M, "qc_default_threshold_m": QC_DEFAULT_THRESHOLD_M}
 
 
 register_pages(app, PAGES_DIR, index_slug="run", context_providers={"run": run_context})

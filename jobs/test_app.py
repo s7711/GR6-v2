@@ -109,6 +109,44 @@ class JobsAppTestCase(unittest.TestCase):
         self.assertEqual(warnings[0]["from_path"], "loop-a")
         self.assertEqual(warnings[0]["to_path"], "loop-b")
 
+    def test_save_warns_on_a_discontinuous_pair_separated_by_a_pause(self):
+        # A pause (or any non-run_path step) between two run_path steps
+        # doesn't move the robot, so continuity should still be checked
+        # across it - found live 2026-08-10 on "Water kitchen bed",
+        # where exactly this shape (run_path, pause, run_path) hid a
+        # real ~4.4m/143deg discontinuity until the job aborted live.
+        navigate_paths.save_path(app.NAVIGATE_PATHS_DIR, "loop-a", SAMPLE_PATH_POINTS)
+        far_points = [
+            {"lat": 10.0, "lon": 10.0, "speed_mps": 0.5, "pump": False, "clearance_m": 0.5},
+            {"lat": 10.001, "lon": 10.0, "speed_mps": 0.5, "pump": False, "clearance_m": 0.5},
+        ]
+        navigate_paths.save_path(app.NAVIGATE_PATHS_DIR, "loop-b", far_points)
+        steps = [
+            {"type": "run_path", "path": "loop-a"},
+            {"type": "pause", "duration_s": 20},
+            {"type": "run_path", "path": "loop-b"},
+        ]
+
+        resp = self.client.post("/api/jobs/front-beds", json={"steps": steps})
+        warnings = resp.get_json()["warnings"]
+        self.assertEqual(len(warnings), 1)
+        self.assertEqual(warnings[0]["after_step"], 0)
+        self.assertEqual(warnings[0]["before_step"], 2)
+        self.assertEqual(warnings[0]["from_path"], "loop-a")
+        self.assertEqual(warnings[0]["to_path"], "loop-b")
+
+    def test_save_does_not_warn_when_the_last_run_path_has_nothing_after_it(self):
+        # A trailing pause/water step after the final run_path step has
+        # no "next run_path" to check against - should be skipped, not
+        # crash on `j is None`.
+        navigate_paths.save_path(app.NAVIGATE_PATHS_DIR, "loop-a", SAMPLE_PATH_POINTS)
+        steps = [
+            {"type": "run_path", "path": "loop-a"},
+            {"type": "pause", "duration_s": 10},
+        ]
+        resp = self.client.post("/api/jobs/front-beds", json={"steps": steps})
+        self.assertEqual(resp.get_json(), {"warnings": []})
+
     def test_control_start_loads_and_starts_first_step(self):
         jobs_module.save_job(app.JOBS_DIR, "front-beds", SAMPLE_STEPS)
         resp = self.client.post("/control/start", json={"name": "front-beds"})
@@ -124,6 +162,14 @@ class JobsAppTestCase(unittest.TestCase):
     def test_control_start_missing_job_404(self):
         resp = self.client.post("/control/start", json={"name": "does-not-exist"})
         self.assertEqual(resp.status_code, 404)
+
+    def test_control_status(self):
+        # Plain synchronous status - see app.py's own comment: missions
+        # polls this directly rather than needing a push feed.
+        jobs_module.save_job(app.JOBS_DIR, "front-beds", SAMPLE_STEPS)
+        self.client.post("/control/start", json={"name": "front-beds"})
+        resp = self.client.get("/control/status")
+        self.assertEqual(resp.get_json()["state"], "running")
 
     def test_control_stop(self):
         jobs_module.save_job(app.JOBS_DIR, "front-beds", SAMPLE_STEPS)

@@ -88,6 +88,17 @@ runner = PathRunner(CONTROL_CONFIG, send_velocity, send_pump)
 _recording_lock = threading.Lock()
 _recording_points = []
 
+# Which saved path is currently loaded - PathRunner itself only ever
+# sees raw points, not a name (see control.py), so this is tracked
+# here instead, purely for display: the Run page's own dropdown/map
+# only updated in response to *that page's own* Load button being
+# clicked, so a path loaded a different way (the Paths page's own Run
+# button, or a job driving navigate directly) left the page showing
+# nothing useful despite navigate actually running something real.
+# Published in the feed below so any page watching it can stay in sync
+# regardless of how the path got loaded.
+_current_path_name = None
+
 
 def _current_position():
     """{"lat":, "lon":, "heading_deg":, "horizontal_accuracy_m":} from
@@ -276,6 +287,15 @@ def record_drop():
     return jsonify({"point_count": count, "point": point})
 
 
+@app.route("/record/undo", methods=["POST"])
+def record_undo():
+    with _recording_lock:
+        if _recording_points:
+            _recording_points.pop()
+        count = len(_recording_points)
+    return jsonify({"point_count": count})
+
+
 @app.route("/record/current")
 def record_current():
     with _recording_lock:
@@ -360,11 +380,15 @@ def record_forward():
 
 @app.route("/control/load/<name>", methods=["POST"])
 def control_load(name):
+    global _current_path_name
     try:
         points = paths.load_path(PATHS_DIR, name)
     except (FileNotFoundError, paths.InvalidPathName):
         abort(404)
-    return jsonify(runner.load_path(points))
+    result = runner.load_path(points)
+    if result["ok"]:
+        _current_path_name = name
+    return jsonify(result)
 
 
 @app.route("/pump/manual", methods=["POST"])
@@ -407,7 +431,7 @@ def control_stop():
 
 
 def _snapshot():
-    return runner.status()
+    return {**runner.status(), "path_name": _current_path_name}
 
 
 @sock.route("/ws/navigate")

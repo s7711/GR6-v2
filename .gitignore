@@ -23,6 +23,9 @@ navigate/data/
 # Saved jobs + run logs — this robot's real-world data, see jobs-prd.md
 jobs/data/
 
+# Saved missions + run logs — this robot's real-world data, see missions-prd.md
+missions/data/
+
 # Saved QC marker record — this robot's real-world calibration, see
 # waterbutt-prd.md's QC marker section
 waterbutt/data/

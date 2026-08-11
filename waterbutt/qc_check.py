@@ -39,3 +39,12 @@ def compare(saved: dict, live_debug_by_id: dict, hpr_cb, target_offset_c=(0.0, 0
         "down_m": float(delta[2]),
         "distance_m": float((delta[0] ** 2 + delta[1] ** 2 + delta[2] ** 2) ** 0.5),
     }
+
+
+def passes(reading: dict, threshold_m: float) -> bool:
+    """True only for a successful comparison within threshold_m - any
+    other state ("not_configured", "not_visible", "aruco_unreachable",
+    or anything else compare() might ever return) never passes. "No QC
+    marker" must mean "no fill", not "skip the check" - see
+    waterbutt-prd.md's "QC gating on fill"."""
+    return reading.get("state") == "ok" and reading["distance_m"] <= threshold_m

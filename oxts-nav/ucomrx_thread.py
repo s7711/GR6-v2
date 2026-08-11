@@ -87,6 +87,7 @@ class UcomRxThread(threading.Thread):
             if nb not in self.nrx[addr]['recentPackets']:
                 self.nrx[addr]['recentPackets'].append(nb)
                 with self.lock:
+                    self.nrx[addr]['last_packet_at'] = myTime  # for staleness detection - see nav_feed.py's snapshot()
                     self.nrx[addr]['decoder'].decode(nb, machineTime=myTime)
                     # And process all possible data
                     while self.nrx[addr]['decoder'].decode(b'', machineTime=myTime):

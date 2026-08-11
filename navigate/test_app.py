@@ -69,6 +69,7 @@ class NavigateAppTestCase(unittest.TestCase):
         app.DEBUG_LOG_PATH = app.PATHS_DIR / "last_run_debug.jsonl"
         self.recorder = Recorder()
         app.runner = PathRunner(app.CONTROL_CONFIG, self.recorder.send_velocity, self.recorder.send_pump)
+        app._current_path_name = None
         app.nav_client = FakeNavClient()
         self.client = app.app.test_client()
 
@@ -247,6 +248,26 @@ class NavigateAppTestCase(unittest.TestCase):
 
         resp = self.client.post("/control/load/other")
         self.assertEqual(resp.get_json(), {"ok": True})
+
+    def test_snapshot_reports_the_currently_loaded_path_name(self):
+        # So the Run page can stay in sync with a path loaded a
+        # different way - the Paths page's own Run button, or a job
+        # driving navigate directly - neither of which go through this
+        # page's own Load button. See navigate-prd.md's "Path entry".
+        paths_module.save_path(app.PATHS_DIR, "loop", SAMPLE_POINTS)
+        self.assertIsNone(app._snapshot()["path_name"])
+        self.client.post("/control/load/loop")
+        self.assertEqual(app._snapshot()["path_name"], "loop")
+
+    def test_snapshot_path_name_unchanged_by_a_refused_load(self):
+        paths_module.save_path(app.PATHS_DIR, "loop", SAMPLE_POINTS)
+        paths_module.save_path(app.PATHS_DIR, "other", SAMPLE_POINTS)
+        self.client.post("/control/load/loop")
+        self._set_position(52.2, -1.5, 0)
+        self.client.post("/control/start")
+
+        self.client.post("/control/load/other")  # refused - a path is already running
+        self.assertEqual(app._snapshot()["path_name"], "loop")
 
     def test_pump_manual_turns_pump_on_and_off(self):
         with patch.object(app, "send_pump", self.recorder.send_pump):

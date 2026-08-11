@@ -193,6 +193,46 @@ built once now rather than three times later.
   timestamps are directly comparable across processes on the same
   machine — no separate time-sync mechanism needed.
 
+### Staleness (added 2026-08-11)
+
+`ncomrx_thread.py`/`ucomrx_thread.py` just block on their UDP socket —
+if the xNAV stops sending entirely (a deliberate reset, e.g. changing
+the NTRIP mountpoint, or a real fault), nothing ever calls `decode()`
+again, and `decoder.nav`/`status`/`connection` sit frozen at their last
+real values forever. Both the websocket and this feed were publishing
+that frozen snapshot on their own fixed timer regardless — every page
+showing live nav data looked perfectly healthy, just frozen on
+old numbers, with nothing to say otherwise.
+
+Fixed by stamping `nrx[addr]['last_packet_at']` (`time.monotonic()`)
+each time a genuinely new packet is decoded — independent of anything
+inside the decoder itself, so it works identically for NCOM and UCOM
+and needs no GPS lock to have ever been achieved. `nav_feed.snapshot()`
+is now the one place both the websocket route and this feed read
+through: past `stale_after_s` (config, default 2.0s) since the last
+real packet, it publishes empty `nav`/`status`/`connection` dicts
+rather than the frozen ones.
+
+**Empty dicts, not `None`-valued keys** — every consumer (`navigate`'s
+`_current_position()`, `wheelspeed`'s `_forward_mps()`, `aruco`'s own
+`if nav:` guards) already treats a missing key or an empty dict as "no
+fix", so this is exactly the shape every consumer already expects.
+`nav["Lat"] = None` would have been a real, findable crash instead:
+`aruco/survey.py`'s `if nav:` guard is a truthiness check, which a
+non-empty dict full of `None`s sails straight through, then blows up
+on `math.degrees(None)`.
+
+**The web UI's own `fillFields()`/`translateNcomCodes()` helpers**
+(`shared/web/static/ws-utils.js`/`ncom-strings.js`) only ever filled in
+keys they were given — they had the exact same "frozen forever"
+problem one layer up, on the display side: a field's element just kept
+showing its last value once the key stopped arriving. `fillFields()`
+now remembers every element id it has ever set for a given prefix, and
+blanks any of them back to "—" once a subsequent call no longer
+includes that key — `translateNcomCodes()` needed no equivalent fix,
+since every caller already calls `fillFields()` on the same prefix/
+data immediately before it, which now blanks the shared element first.
+
 ## Config additions (shared config file)
 
 - `xnav_ip` — the xNAV650's IP address (top-level, since other future

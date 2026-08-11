@@ -1,0 +1,179 @@
+{# title: Create Mission #}
+{% extends "base.html" %}
+{% block title %}GR6 — Create Mission{% endblock %}
+
+{% block content %}
+<div class="card mb-3">
+  <div class="card-body">
+    <h5 id="page-heading">New mission</h5>
+
+    <table class="table align-middle">
+      <thead><tr><th>#</th><th>Job</th><th></th></tr></thead>
+      <tbody id="steps-body"></tbody>
+    </table>
+
+    <button id="add-job" class="btn btn-outline-primary btn-sm">Add job</button>
+    <button id="save-btn" class="btn btn-success ms-2">Save&hellip;</button>
+  </div>
+</div>
+
+<div class="modal" id="save-modal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Save mission</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <label class="form-label">Filename</label>
+        <input id="save-filename" type="text" class="form-control">
+        <div id="save-overwrite-note" class="text-warning small mt-2 d-none">
+          A mission with this name already exists — saving will overwrite it.
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="save-continue" type="button" class="btn btn-outline-success">Save and continue</button>
+        <button id="save-exit" type="button" class="btn btn-success">Save and exit</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const params = new URLSearchParams(window.location.search);
+const missionName = params.get("name");
+
+let steps = []; // [{type: "run_job", job: "..."}, ...]
+let dirty = false;
+let existingNames = [];
+let availableJobs = [];
+
+const stepsBody = document.getElementById("steps-body");
+
+function jobOptionsHtml(selected) {
+  return availableJobs.map((j) => {
+    const sel = j.name === selected ? "selected" : "";
+    return `<option value="${j.name}" ${sel}>${j.name}</option>`;
+  }).join("");
+}
+
+function renderSteps() {
+  stepsBody.innerHTML = "";
+  steps.forEach((step, i) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${i}</td>
+      <td><select class="form-select form-select-sm step-job">${jobOptionsHtml(step.job)}</select></td>
+      <td class="text-nowrap">
+        <button class="btn btn-sm btn-outline-secondary step-up" ${i === 0 ? "disabled" : ""}>&uarr;</button>
+        <button class="btn btn-sm btn-outline-secondary step-down" ${i === steps.length - 1 ? "disabled" : ""}>&darr;</button>
+        <button class="btn btn-sm btn-outline-danger step-remove">Remove</button>
+      </td>
+    `;
+    tr.querySelector(".step-job").addEventListener("change", (e) => {
+      steps[i].job = e.target.value;
+      dirty = true;
+    });
+    tr.querySelector(".step-up").addEventListener("click", () => {
+      [steps[i - 1], steps[i]] = [steps[i], steps[i - 1]];
+      dirty = true;
+      renderSteps();
+    });
+    tr.querySelector(".step-down").addEventListener("click", () => {
+      [steps[i], steps[i + 1]] = [steps[i + 1], steps[i]];
+      dirty = true;
+      renderSteps();
+    });
+    tr.querySelector(".step-remove").addEventListener("click", () => {
+      steps.splice(i, 1);
+      dirty = true;
+      renderSteps();
+    });
+    stepsBody.appendChild(tr);
+  });
+}
+
+document.getElementById("add-job").addEventListener("click", () => {
+  steps.push({ type: "run_job", job: availableJobs.length ? availableJobs[0].name : "" });
+  dirty = true;
+  renderSteps();
+});
+
+// --- Save dialog ---
+
+const saveModalEl = document.getElementById("save-modal");
+const saveModal = new bootstrap.Modal(saveModalEl);
+
+function updateOverwriteNote() {
+  const name = document.getElementById("save-filename").value.trim();
+  const overwriting = existingNames.includes(name);
+  document.getElementById("save-overwrite-note").classList.toggle("d-none", !overwriting);
+  const label = overwriting ? "Overwrite and " : "Save and ";
+  document.getElementById("save-continue").textContent = label + "continue";
+  document.getElementById("save-exit").textContent = label + "exit";
+}
+document.getElementById("save-filename").addEventListener("input", updateOverwriteNote);
+
+document.getElementById("save-btn").addEventListener("click", () => {
+  if (steps.length === 0) { alert("Add at least one job first."); return; }
+  fetch("/api/missions").then((r) => r.json()).then((list) => {
+    existingNames = list.map((m) => m.name);
+    document.getElementById("save-filename").value = missionName || "";
+    updateOverwriteNote();
+    saveModal.show();
+  });
+});
+
+function doSave(thenExit) {
+  const name = document.getElementById("save-filename").value.trim();
+  if (!name) { alert("Enter a filename."); return; }
+  fetch(`/api/missions/${encodeURIComponent(name)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ steps }),
+  }).then((r) => {
+    if (!r.ok) { alert("Couldn't save (invalid name)."); return null; }
+    return r.json();
+  }).then((result) => {
+    if (!result) return;
+    dirty = false;
+    saveModal.hide();
+    if (thenExit) {
+      window.location.href = "/pages/missions";
+    } else {
+      window.history.replaceState(null, "", `?name=${encodeURIComponent(name)}`);
+      document.getElementById("page-heading").textContent = `Editing: ${name}`;
+    }
+  });
+}
+document.getElementById("save-continue").addEventListener("click", () => doSave(false));
+document.getElementById("save-exit").addEventListener("click", () => doSave(true));
+
+window.addEventListener("beforeunload", (e) => {
+  if (!dirty) return;
+  e.preventDefault();
+  e.returnValue = "";
+});
+
+// --- Load ---
+
+fetch("/api/available-jobs").then((r) => r.json()).then((list) => {
+  availableJobs = list;
+
+  if (missionName) {
+    document.getElementById("page-heading").textContent = `Editing: ${missionName}`;
+    fetch(`/api/missions/${encodeURIComponent(missionName)}`).then((r) => {
+      if (!r.ok) return null;
+      return r.json();
+    }).then((mission) => {
+      if (mission) steps = mission.steps;
+      renderSteps();
+    });
+  } else {
+    renderSteps();
+  }
+});
+</script>
+{% endblock %}

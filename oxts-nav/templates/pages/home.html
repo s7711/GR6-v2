@@ -116,6 +116,11 @@ connectWs("/ws/nav", (msg) => {
   } else if (attName !== undefined) {
     gnssAtt.textContent = "x";
     gnssAtt.className = "badge text-bg-danger";
+  } else {
+    // No data (e.g. the xNAV has gone quiet - see nav_feed.py's
+    // "Staleness") - blank it, not frozen on whatever it last showed.
+    gnssAtt.textContent = "—";
+    gnssAtt.className = "badge text-bg-secondary";
   }
 
   let speed = "—";

@@ -94,11 +94,20 @@ def pump_on(on):
 def waterbutt_go(duration_s):
     """For `fill` steps - waterbutt is a peer service (like navigate),
     not something owned by another service, so jobs can call it
-    directly."""
+    directly. No qc_threshold_m is sent - a fill step has no threshold
+    selector of its own yet, so waterbutt's own default applies (see
+    waterbutt-prd.md's "QC gating on fill")."""
     try:
         resp = requests.post(f"{WATERBUTT_BASE_URL}/go", json={"duration_s": duration_s}, timeout=NAVIGATE_TIMEOUT_S)
         if resp.status_code != 200:
-            return {"ok": False, "reason": f"waterbutt refused duration_s={duration_s}"}
+            # e.g. the QC marker check refusing (409, with its own
+            # specific reason) - surface that, not a generic message,
+            # so the step log actually says why.
+            try:
+                reason = resp.json().get("reason")
+            except ValueError:
+                reason = None
+            return {"ok": False, "reason": reason or f"waterbutt refused duration_s={duration_s}"}
         return {"ok": True}
     except requests.exceptions.RequestException:
         return {"ok": False, "reason": "couldn't reach waterbutt"}
@@ -249,10 +258,21 @@ def api_save_job(name):
     steps = payload["steps"]
 
     warnings = []
-    for i in range(len(steps) - 1):
-        if steps[i]["type"] != "run_path" or steps[i + 1]["type"] != "run_path":
+    for i in range(len(steps)):
+        if steps[i].get("type", "run_path") != "run_path":
             continue
-        from_path, to_path = steps[i]["path"], steps[i + 1]["path"]
+        # The next run_path step, skipping over any pause/water steps in
+        # between - those don't move the robot, so continuity is really
+        # between the two nearest run_path steps, not literally adjacent
+        # ones. Found live 2026-08-10: a pause sitting between two
+        # run_path steps let a genuine ~4.4m/143deg discontinuity through
+        # unwarned at save time, only discovered when the job aborted.
+        j = next(
+            (k for k in range(i + 1, len(steps)) if steps[k].get("type", "run_path") == "run_path"), None
+        )
+        if j is None:
+            continue
+        from_path, to_path = steps[i]["path"], steps[j]["path"]
         try:
             points_a = navigate_paths.load_path(NAVIGATE_PATHS_DIR, from_path)
             points_b = navigate_paths.load_path(NAVIGATE_PATHS_DIR, to_path)
@@ -263,7 +283,7 @@ def api_save_job(name):
             navigate_cfg["lookahead_distance_m"],
         )
         if not result["ok"]:
-            warnings.append({"after_step": i, "from_path": from_path, "to_path": to_path, **result})
+            warnings.append({"after_step": i, "before_step": j, "from_path": from_path, "to_path": to_path, **result})
 
     try:
         jobs_module.save_job(JOBS_DIR, name, steps)
@@ -307,6 +327,16 @@ def control_stop():
     _append_log({"event": "operator_stop"})
     runner.stop()
     return "", 204
+
+
+@app.route("/control/status")
+def control_status():
+    """Plain synchronous status, for missions (see missions/control.py)
+    to poll while a run_job step is in progress — jobs has no push feed
+    of its own the way navigate does (nothing here needs one yet), so a
+    direct request/response is simplest, and always reflects the true
+    current state, not a cached snapshot."""
+    return jsonify(runner.status())
 
 
 @sock.route("/ws/jobs")

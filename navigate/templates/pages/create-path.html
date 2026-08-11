@@ -9,6 +9,14 @@
       <div class="col-auto">
         <div>Points recorded: <span id="point-count">0</span></div>
         <button id="new-path" class="btn btn-sm btn-outline-secondary mt-1">New (clear)</button>
+        <button id="undo" class="btn btn-sm btn-outline-secondary mt-1">Undo</button>
+      </div>
+      <div class="col-auto">
+        <label class="form-label mb-0">Reference path</label>
+        <div class="input-group">
+          <select id="ref-path-select" class="form-select"></select>
+          <button id="add-ref-path" class="btn btn-outline-secondary">Add</button>
+        </div>
       </div>
       <div class="col-auto">
         <label class="form-label mb-0">Speed for next segment (m/s)</label>
@@ -128,6 +136,52 @@ let recordedPoints = []; // [{lat, lon}], in drop order
 let currentPosition = null; // {lat, lon}, from oxts-nav's live feed
 const DUPLICATE_POINT_THRESHOLD_M = 0.3;
 
+// One combined undo stack for both point drops and reference-path
+// additions, tagged by type - Undo just pops whichever happened most
+// recently, regardless of which kind it was.
+let undoStack = []; // [{type: "point"} | {type: "refpath", name}]
+
+// --- Reference paths: other saved paths, shown faded for lining up
+// against (see navigate-prd.md) - display-only, never persisted, gone
+// on reload same as the recording itself resetting.
+const REFERENCE_COLORS = ["#0d6efd99", "#fd7e1499", "#6f42c199", "#20c99799", "#d6336c99", "#0dcaf099"];
+let referencePaths = []; // [{name, color}], in add order
+let availablePathNames = [];
+
+function refreshRefPathSelect() {
+  const select = document.getElementById("ref-path-select");
+  const added = new Set(referencePaths.map((r) => r.name));
+  select.innerHTML = "";
+  availablePathNames.filter((name) => !added.has(name)).forEach((name) => {
+    const opt = document.createElement("option");
+    opt.value = name;
+    opt.textContent = name;
+    select.appendChild(opt);
+  });
+}
+
+fetch("/api/paths").then((r) => r.json()).then((list) => {
+  availablePathNames = list.map((p) => p.name);
+  refreshRefPathSelect();
+});
+
+function addReferencePath(name) {
+  fetch(`/api/paths/${encodeURIComponent(name)}`).then((r) => (r.ok ? r.json() : [])).then((points) => {
+    const color = REFERENCE_COLORS[referencePaths.length % REFERENCE_COLORS.length];
+    referencePaths.push({ name, color });
+    map.setLayer(`ref-${name}`, points, { color, dots: true, dotRadius: 3 });
+    map.draw();
+    refreshRefPathSelect();
+  });
+}
+
+document.getElementById("add-ref-path").addEventListener("click", () => {
+  const name = document.getElementById("ref-path-select").value;
+  if (!name) return;
+  undoStack.push({ type: "refpath", name });
+  addReferencePath(name);
+});
+
 // Equirectangular approximation, fine at this scale — same approach
 // used elsewhere client-side (e.g. geomap.js), not a precise geodesy
 // calculation.
@@ -154,6 +208,10 @@ fetch("/record/current").then((r) => r.json()).then((points) => {
 document.getElementById("new-path").addEventListener("click", () => {
   fetch("/record/new", { method: "POST" }).then(() => {
     recordedPoints = [];
+    undoStack = [];
+    referencePaths.forEach((r) => map.setLayer(`ref-${r.name}`, []));
+    referencePaths = [];
+    refreshRefPathSelect();
     document.getElementById("point-count").textContent = "0";
     document.getElementById("save-message").textContent = "";
     redrawPoints();
@@ -173,11 +231,29 @@ function dropPoint() {
     return r.json();
   }).then((data) => {
     if (!data) return;
+    undoStack.push({ type: "point" });
     document.getElementById("point-count").textContent = data.point_count;
     recordedPoints.push(data.point);
     redrawPoints();
   });
 }
+
+document.getElementById("undo").addEventListener("click", () => {
+  if (undoStack.length === 0) return;
+  const action = undoStack.pop();
+  if (action.type === "refpath") {
+    referencePaths.pop();
+    map.setLayer(`ref-${action.name}`, []);
+    map.draw();
+    refreshRefPathSelect();
+  } else {
+    fetch("/record/undo", { method: "POST" }).then((r) => r.json()).then((data) => {
+      recordedPoints.pop();
+      document.getElementById("point-count").textContent = data.point_count;
+      redrawPoints();
+    });
+  }
+});
 
 document.getElementById("drop-point").addEventListener("click", () => {
   // Guard against a lost response leading to an accidental double-press

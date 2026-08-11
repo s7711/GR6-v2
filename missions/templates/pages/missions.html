@@ -1,0 +1,52 @@
+{# title: Missions #}
+{% extends "base.html" %}
+{% block title %}GR6 — Missions{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div class="card-body">
+    <table class="table align-middle">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Steps</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for m in missions %}
+        <tr data-name="{{ m.name }}">
+          <td>{{ m.name }}</td>
+          <td>{{ m.step_count }}</td>
+          <td>
+            <button class="btn btn-sm btn-outline-primary" data-action="run">Run</button>
+            <button class="btn btn-sm btn-outline-secondary" data-action="edit">Edit</button>
+            <button class="btn btn-sm btn-outline-danger" data-action="delete">Delete</button>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="3" class="text-body-secondary">No saved missions yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.querySelectorAll("button[data-action]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const name = btn.closest("tr").dataset.name;
+    if (btn.dataset.action === "run") {
+      window.location.href = `/pages/run?mission=${encodeURIComponent(name)}`;
+    } else if (btn.dataset.action === "edit") {
+      window.location.href = `/pages/create-mission?name=${encodeURIComponent(name)}`;
+    } else if (btn.dataset.action === "delete") {
+      if (!confirm(`Delete mission "${name}"? This can't be undone.`)) return;
+      fetch(`/api/missions/${encodeURIComponent(name)}`, { method: "DELETE" }).then(() => location.reload());
+    }
+  });
+});
+</script>
+{% endblock %}
