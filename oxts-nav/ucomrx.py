@@ -12,8 +12,9 @@ Decodes measurements into dictionaries, same shape as ncomrx.py:
 Unlike NCOM, UCOM's own byte layout isn't fixed by the protocol itself -
 it's whatever *we* configure in mobile.dbu (kept at
 oxts-nav/xnav-config/mobile.dbu.txt - auto-downloaded from the xNAV650
-alongside its other config files, see app.py's XNAV_CONFIG_FILES; edit
-that file directly and upload it back to change what's configured. See
+alongside its other mobile.* config files (see app.py's
+download_xnav_config); edit it via the xNAV Config page and upload it
+back to change what's configured. See
 documentation/ncom-to-ucom-mapping.md, "Configuring UCOM output by
 hand", for how that's built). What's fixed, and what this file relies
 on, is that every UCOM header states its own MessageID and MessageVersion

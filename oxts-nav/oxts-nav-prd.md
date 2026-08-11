@@ -137,12 +137,13 @@ than being surprised commands stop working plainly one day.
   handled many subsystems from one input box; this service only ever
   talks to the xNAV650, so there's nothing to route between). No
   automatic sequence at startup — see "xNAV650 commands" above.
-- **xNAV config file download:** reuse `xnav.py`'s FTP download logic
-  (list of `mobile.*` files, pulled to a local folder) at startup, and
-  serve that folder as static files from this service's web UI —
-  essentially the same "just view it in a browser" approach GR6-v1 used
-  via its `static/xnav-config/` folder. No editing capability yet —
-  see Out of Scope.
+- **xNAV config file download:** FTP `NLST` the xNAV's root directory at
+  startup and pull down every `mobile.*` file except `mobile.rd` (the
+  raw-data recording, not a config file — see "xNAV config editing and
+  reset" below), rather than a hardcoded filename list, so a config file
+  OXTS adds later is picked up automatically. Any non-`mobile.*` file
+  found (e.g. a stray `.ptp` file) is logged but left alone — not
+  understood well enough to manage here.
 - **GAD aiding data:** still deferred — carried over conceptually from
   `xnav.py`/`gad_aruco.py` but not designed here. Revisit once
   path-following or vision needs to send aiding data back to the
@@ -233,6 +234,34 @@ includes that key — `translateNcomCodes()` needed no equivalent fix,
 since every caller already calls `fillFields()` on the same prefix/
 data immediately before it, which now blanks the shared element first.
 
+## xNAV config editing and reset (added 2026-08-11)
+
+The "download and view only" config page now supports editing and
+uploading `mobile.*` files, and resetting the xNAV — the operator flow
+this exists for is: edit one or more files, then hit reset once so
+they all take effect together (config files are only read at power-on/
+reset, never live — see "xNAV650 commands" above).
+
+- **File discovery is now dynamic**, not a hardcoded list (see the
+  "xNAV config file download" bullet above) — `mobile.rd` (raw data
+  recording) is explicitly excluded, and any non-`mobile.*` file found
+  is logged but not touched.
+- **Edit/upload** (`GET`/`POST /xnav-config/<filename>.txt`): the page's
+  "Edit" button opens a modal with the file's current text in a
+  `<textarea>` (fetched from the same route the "view" link already
+  used); "Upload" `POST`s the edited text straight back to this route,
+  which FTP-`STOR`s it to the xNAV *and* overwrites the local mirror on
+  success, so the page immediately reflects what's now on the device.
+  "Cancel" just closes the modal — no request sent. No parsing/
+  validation of the content — an operator who uploads something the
+  xNAV can't parse will find out when it doesn't come up correctly
+  after reset, same as if they'd edited it by hand over FTP.
+- **Reset** (`POST /xnav-config/reset`): sends `!reset` over the same
+  UDP command path the manual command box already uses (see "xNAV650
+  commands" above) — not a new mechanism. Gated behind a confirmation
+  modal warning that anything currently driving will lose its position
+  feed, since a reset takes the xNAV offline for a while to reboot.
+
 ## Config additions (shared config file)
 
 - `xnav_ip` — the xNAV650's IP address (top-level, since other future
@@ -269,9 +298,9 @@ section is just the summary.
   what's actually consumed today — nav PVA, accuracies, GNSS status, GAD
   statuses/innovations, INS status, SDN time offset, plus one custom
   message — see below), lives at `xnav-config/mobile.dbu.txt` instead —
-  auto-downloaded alongside the NCOM config files (see `app.py`'s
-  `XNAV_CONFIG_FILES`), not documentation, since it's the live deployed
-  artifact rather than reference material.
+  auto-downloaded alongside the other `mobile.*` config files (see
+  `app.py`'s `download_xnav_config`), not documentation, since it's the
+  live deployed artifact rather than reference material.
 - Custom UCOM messages (IDs 64512–65535) are confirmed to work on this
   firmware even though OXTS's own NAVconfig tool has no way to create
   one — several fields exist in `oxts.dbs` but aren't packaged into any
@@ -304,10 +333,8 @@ section is just the summary.
 - Multi-INS NCOM viewer with stream selection — a future idea; not
   designed here, but not precluded either, since `ncomrx_thread.py`
   stays multi-IP-capable underneath.
-- Editing xNAV650 config files (upload/write-back over FTP) — download
-  and view only for now; an editor is a real future want (OxTS's own
-  NAVconfig tool being Windows-only and painful is the motivation) but
-  explicitly not now.
+- ~~Editing xNAV650 config files (upload/write-back over FTP)~~ — **done,
+  see "xNAV config editing and reset (added 2026-08-11)" below.**
 - GAD aiding data sent to the xNAV650 — carried over conceptually from
   `xnav.py`/`gad_aruco.py`, not designed here.
 - Command encryption — OXTS are adding cyber-security features that will

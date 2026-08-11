@@ -3,17 +3,104 @@
 {% block title %}GR6 — xNAV Config{% endblock %}
 {% block content %}
 <p class="text-body-secondary">
-  Downloaded from the xNAV650 over FTP at service startup. View-only for now.
+  Mirrored from the xNAV650 over FTP at service startup. Uploading a change here writes it
+  straight to the xNAV over FTP — but the xNAV only reads these files at power-on, so a
+  change has no effect until you hit "Reset xNAV now" below (or power-cycle it).
 </p>
+
+<button id="reset-btn" type="button" class="btn btn-outline-danger mb-3">Reset xNAV now</button>
+
 {% if files %}
 <ul class="list-group">
   {% for f in files %}
-  <li class="list-group-item">
+  <li class="list-group-item d-flex justify-content-between align-items-center">
     <a href="/xnav-config/{{ f }}">{{ f }}</a>
+    <button type="button" class="btn btn-sm btn-outline-secondary edit-btn" data-filename="{{ f }}">Edit</button>
   </li>
   {% endfor %}
 </ul>
 {% else %}
 <p>No config files downloaded yet (or the xNAV650 wasn't reachable at startup).</p>
 {% endif %}
+
+<div class="modal" id="edit-modal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="edit-modal-title">Edit</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <textarea id="edit-textarea" class="form-control font-monospace" rows="20"></textarea>
+        <div id="edit-error" class="text-danger small mt-2 d-none"></div>
+      </div>
+      <div class="modal-footer">
+        <button id="edit-cancel" type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button id="edit-upload" type="button" class="btn btn-primary">Upload</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="reset-modal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Reset xNAV650</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        Resetting drops navigation for a while as the xNAV reboots — anything driving right
+        now will lose its position feed. Continue?
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button id="reset-confirm" type="button" class="btn btn-danger">Reset now</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const editModal = new bootstrap.Modal(document.getElementById("edit-modal"));
+const resetModal = new bootstrap.Modal(document.getElementById("reset-modal"));
+let editingFilename = null;
+
+document.querySelectorAll(".edit-btn").forEach((btn) => {
+  btn.addEventListener("click", async () => {
+    editingFilename = btn.dataset.filename;
+    document.getElementById("edit-modal-title").textContent = "Edit " + editingFilename;
+    document.getElementById("edit-error").classList.add("d-none");
+    const textarea = document.getElementById("edit-textarea");
+    textarea.value = "Loading...";
+    editModal.show();
+    const resp = await fetch("/xnav-config/" + editingFilename);
+    textarea.value = resp.ok ? await resp.text() : "";
+  });
+});
+
+document.getElementById("edit-upload").addEventListener("click", async () => {
+  const errorDiv = document.getElementById("edit-error");
+  errorDiv.classList.add("d-none");
+  const resp = await fetch("/xnav-config/" + editingFilename, {
+    method: "POST",
+    body: document.getElementById("edit-textarea").value,
+  });
+  const result = await resp.json().catch(() => ({ok: false, reason: "Bad response from server"}));
+  if (!result.ok) {
+    errorDiv.textContent = result.reason || "Upload failed";
+    errorDiv.classList.remove("d-none");
+    return;
+  }
+  editModal.hide();
+});
+
+document.getElementById("reset-btn").addEventListener("click", () => resetModal.show());
+document.getElementById("reset-confirm").addEventListener("click", () => {
+  fetch("/xnav-config/reset", {method: "POST"});
+  resetModal.hide();
+});
+</script>
 {% endblock %}

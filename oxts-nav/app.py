@@ -13,6 +13,7 @@ configuration" decision).
 """
 
 import ftplib
+import io
 import json
 import logging
 import socket
@@ -21,7 +22,7 @@ import threading
 import time
 from pathlib import Path
 
-from flask import Flask, request, send_from_directory
+from flask import Flask, abort, jsonify, request, send_from_directory
 from flask_sock import Sock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -33,16 +34,10 @@ import ucomrx_thread  # noqa: E402
 import nav_feed  # noqa: E402
 
 XNAV_COMMAND_PORT = 3001
-XNAV_CONFIG_FILES = [
-    "mobile.cfg",  # main configuration file
-    "mobile.gap",  # GNSS antenna position
-    "mobile.gpa",  # GNSS antenna position accuracy
-    "mobile.vat",  # Vehicle attitude
-    "mobile.vaa",  # Vehicle attitude accuracy
-    "mobile.att",  # (GNSS) antenna attitude
-    "mobile.ata",  # (GNSS) antenna attitude accuracy
-    "mobile.dbu",  # UCOM stream configuration - see ncom-to-ucom-mapping.md
-]
+# mobile.rd is the xNAV's raw data recording, not a config file — it's
+# renamed to a timestamped .rd file once time is available, so it should
+# never be synced/edited here even though it matches "mobile.*".
+XNAV_CONFIG_EXCLUDE = {"mobile.rd"}
 XNAV_CONFIG_DIR = Path(__file__).resolve().parent / "xnav-config"
 PAGES_DIR = Path(__file__).resolve().parent / "templates" / "pages"
 
@@ -86,7 +81,19 @@ def download_xnav_config() -> None:
     try:
         with ftplib.FTP(xnav_ip, timeout=10) as ftp:
             ftp.login()
-            for filename in XNAV_CONFIG_FILES:
+            try:
+                names = ftp.nlst()
+            except ftplib.all_errors as e:
+                logging.info("Cannot list xNAV650 FTP directory: %s", e)
+                return
+            filenames = sorted(
+                n for n in names if n.startswith("mobile.") and n not in XNAV_CONFIG_EXCLUDE
+            )
+            others = sorted(n for n in names if not n.startswith("mobile."))
+            if others:
+                # e.g. a stray .ptp file — seen but not managed here.
+                logging.info("xNAV650 FTP also has non-config files, left alone: %s", others)
+            for filename in filenames:
                 dest = XNAV_CONFIG_DIR / f"{filename}.txt"
                 try:
                     with open(dest, "wb") as f:
@@ -95,6 +102,18 @@ def download_xnav_config() -> None:
                     logging.info("Cannot download %s: %s", filename, e)
     except OSError as e:
         logging.info("Cannot connect to xNAV650 FTP: %s", e)
+
+
+def upload_xnav_config_file(filename: str, content: bytes) -> tuple[bool, str | None]:
+    ftp_name = filename[: -len(".txt")]
+    try:
+        with ftplib.FTP(xnav_ip, timeout=10) as ftp:
+            ftp.login()
+            ftp.storbinary(f"STOR {ftp_name}", io.BytesIO(content))
+    except ftplib.all_errors as e:
+        return False, str(e)
+    (XNAV_CONFIG_DIR / filename).write_bytes(content)
+    return True, None
 
 
 @app.context_processor
@@ -133,9 +152,26 @@ register_pages(
 )
 
 
-@app.route("/xnav-config/<filename>")
+@app.route("/xnav-config/<filename>", methods=["GET", "POST"])
 def xnav_config_file(filename):
-    return send_from_directory(XNAV_CONFIG_DIR, filename)
+    if request.method == "GET":
+        return send_from_directory(XNAV_CONFIG_DIR, filename)
+
+    if not filename.endswith(".txt") or filename not in {p.name for p in XNAV_CONFIG_DIR.glob("*.txt")}:
+        abort(404)
+    ok, reason = upload_xnav_config_file(filename, request.get_data())
+    if not ok:
+        return jsonify(ok=False, reason=reason), 502
+    return jsonify(ok=True)
+
+
+@app.route("/xnav-config/reset", methods=["POST"])
+def xnav_config_reset():
+    # Config file changes only take effect on power-on/reset — see
+    # oxts-nav-prd.md ("xNAV650 commands"). This is the button an
+    # operator hits after editing/uploading files.
+    send_xnav_command("!reset")
+    return "", 204
 
 
 @sock.route("/ws/nav")
