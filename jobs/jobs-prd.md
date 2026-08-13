@@ -222,11 +222,10 @@ Every job run writes a fresh JSONL log — `jobs/data/logs/
 <job_name>_<yymmdd_hhmmss>.jsonl` — one line per step transition
 (step index, path name, start/end time, outcome, abort reason if any),
 plus periodic position snapshots while a step is running (same shape as
-`navigate`'s own `last_run_debug.jsonl`, reused rather than
-reinvented). Unlike that file (overwritten each run, "last run only"),
-job logs accumulate — a job run isn't watched live the way a
-single path run is, so there's nothing to compare a fresh log against
-after the fact. Retained for a configurable number of days
+`navigate`'s own per-run debug log under `navigate/data/logs/`, reused
+rather than reinvented — that log was itself later changed from a
+single overwritten file to one retained file per run, 2026-08-12, same
+convention this already used). Retained for a configurable number of days
 (`log_retention_days`, default a couple of days per disk space being
 cheap), swept on service startup. A log *viewer* page is out of scope
 for this first version — raised in planning as a real future need

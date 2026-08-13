@@ -11,6 +11,10 @@
 //   map.setLayer("path", pointsArray, { color: "#6c757d", dots: false });
 //   map.setCurrent(lat, lon);
 //   map.resize(); // call once on load, and whenever a layer changes
+//   map.onHover((hit) => { ... }); // added 2026-08-12 for navigate's Log
+//     Viewer page - hit is {layer, point} for whatever's nearest the
+//     mouse, or null; point is the exact object passed into setLayer,
+//     so it carries whatever extra fields the caller's points had
 
 function createGeoMap(canvasEl, wrapperEl, zoomButtonsSelector) {
   const ctx = canvasEl.getContext("2d");
@@ -18,6 +22,14 @@ function createGeoMap(canvasEl, wrapperEl, zoomButtonsSelector) {
   let current = null; // {lat, lon}
   let center = null; // {lat, lon} - explicit override for referencePoint(), draws no marker of its own (see setCurrent for that) - used by the path editor to recentre on the selected point
   const layers = {}; // name -> {points: [{lat, lon, ...}], style: {...}}
+  // Snapshot of the projection actually used by the last successful
+  // draw() - set at the end of draw(), read by findNearestPoint/onHover
+  // below (added 2026-08-12, for the Log Viewer's chart<->map cursor
+  // linking) so a caller can invert a mouse pixel back to "which
+  // plotted point is this nearest to" without redoing draw()'s own
+  // projection math itself. null until the first successful draw
+  // (i.e. once a reference point exists - see referencePoint()).
+  let lastProjection = null;
 
   // Local tangent-plane offset (metres), recomputed fresh every draw
   // from whatever the current reference point is — simple
@@ -189,9 +201,44 @@ function createGeoMap(canvasEl, wrapperEl, zoomButtonsSelector) {
     ctx.fillStyle = "#212529";
     ctx.font = "12px sans-serif";
     ctx.fillText(`${barMetres} m`, bx, by - 8);
+
+    lastProjection = { ref, metresPerPx, cx, cy };
+  }
+
+  // Nearest plotted point (across every layer) to a canvas-pixel
+  // position, or null if nothing plotted is within maxPixelDist.
+  // canvasEl isn't HiDPI-scaled here (see resize() - width/height are
+  // set straight from clientWidth/clientHeight), so a caller can pass
+  // plain CSS-pixel mouse coordinates straight through unconverted.
+  function findNearestPoint(canvasX, canvasY, maxPixelDist = 20) {
+    if (!lastProjection) return null;
+    const { ref, metresPerPx, cx, cy } = lastProjection;
+    let best = null;
+    let bestDistPx = maxPixelDist;
+    for (const name in layers) {
+      for (const p of layers[name].points) {
+        const off = offsetMetres(p.lat, p.lon, ref);
+        const px = cx + off.east / metresPerPx;
+        const py = cy - off.north / metresPerPx;
+        const d = Math.hypot(px - canvasX, py - canvasY);
+        if (d < bestDistPx) { bestDistPx = d; best = { layer: name, point: p }; }
+      }
+    }
+    return best;
+  }
+
+  // callback receives {layer, point} for the nearest plotted point
+  // within range of the mouse, or null when the mouse isn't near
+  // anything plotted (including on mouseleave).
+  function onHover(callback) {
+    canvasEl.addEventListener("mousemove", (e) => {
+      const rect = canvasEl.getBoundingClientRect();
+      callback(findNearestPoint(e.clientX - rect.left, e.clientY - rect.top));
+    });
+    canvasEl.addEventListener("mouseleave", () => callback(null));
   }
 
   window.addEventListener("resize", resize);
 
-  return { setLayer, setCurrent, setCenter, setZoom, resize, draw };
+  return { setLayer, setCurrent, setCenter, setZoom, resize, draw, onHover };
 }

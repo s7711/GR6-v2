@@ -4,6 +4,7 @@ following against `drive`'s /command/auto, live position from
 global). See navigate-prd.md for the requirements this implements.
 """
 
+import datetime
 import json
 import logging
 import math
@@ -13,7 +14,7 @@ import time
 from pathlib import Path
 
 import requests
-from flask import Flask, abort, jsonify, request
+from flask import Flask, abort, jsonify, request, send_from_directory
 from flask_sock import Sock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -31,7 +32,6 @@ NAVIGATE_STATUS_HZ = 5
 DRIVE_TIMEOUT_S = 0.5
 MOVE_FORWARD_CLEARANCE_M = 0.5  # generous fixed clearance for this one internal segment — not authored into a saved path, so no need to prompt for it
 MOVE_FORWARD_TIMEOUT_S = 20.0  # safety cap — should never actually take this long for a 2m nudge
-DEBUG_LOG_INTERVAL_S = 1.0  # quiet background record of the most recent run, for debugging aborts after the fact — see navigate-prd.md
 
 # The run/create-path pages poll /control/entry-check while the operator
 # is lining the robot up — same journal-flooding concern as drive's jog
@@ -50,7 +50,14 @@ oxtsnav_cfg = cfg["services"]["oxts-nav"]
 
 PATHS_DIR = Path(__file__).resolve().parent.parent / service_cfg["paths_dir"]
 DRIVE_BASE_URL = f"http://localhost:{drive_cfg['port']}"  # server-to-server, same machine — not a browser-facing URL, see shared/web.py's service_url for that case
-DEBUG_LOG_PATH = PATHS_DIR / "last_run_debug.jsonl"  # overwritten fresh at the start of each run — the *last* run only, not a growing history
+LOGS_DIR = PATHS_DIR / "logs"  # one retained file per run — see jobs'/missions' identical convention
+# The Log Viewer page (added 2026-08-12) reads waterbutt's QC logs
+# straight off disk alongside navigate's own — a read-only historical
+# join for offline analysis, not a live control dependency, so this
+# doesn't go through waterbutt's own API (see navigate-prd.md's "Log
+# Viewer" for why that's a different kind of coupling to the
+# jobs->navigate control calls elsewhere in this project).
+WATERBUTT_LOGS_DIR = Path(__file__).resolve().parent.parent / "waterbutt" / "data" / "logs"
 
 CONTROL_CONFIG = {
     "entry_max_distance_m": service_cfg["entry_max_distance_m"],
@@ -123,23 +130,59 @@ def _current_position():
     }
 
 
-def _reset_debug_log():
-    """Called when a run starts — the log covers only the most recent
-    run, not an ever-growing history (see navigate-prd.md)."""
-    DEBUG_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    DEBUG_LOG_PATH.write_text("")
+_debug_log_path = None
+
+
+def _start_new_debug_log():
+    """Called when a run starts — a fresh, retained file per run (see
+    jobs'/missions' identical convention), not a single overwritten
+    file, so past runs can be compared afterward. Filename is a
+    yymmdd_hhmmss timestamp plus the path name (path names are already
+    validated slash/dot-free on save — see paths.py's _validate_name —
+    so no extra sanitising is needed here), so a plain `ls` already
+    says what each file was without opening it. The path name is also
+    written on every line below — that's the one an actual viewer
+    should key off, since a filename could in principle collide or get
+    truncated; the name in the filename is just a convenience mirror
+    of it."""
+    global _debug_log_path
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.datetime.now().strftime("%y%m%d_%H%M%S")
+    stem = f"{timestamp}_{_current_path_name}" if _current_path_name else timestamp
+    candidate = LOGS_DIR / f"{stem}.jsonl"
+    suffix = 1
+    while candidate.exists():
+        # Two starts within the same second (e.g. a quick real Start,
+        # Stop, Start again, or two tests running fast) — never
+        # silently overwrite an existing run's log.
+        candidate = LOGS_DIR / f"{stem}_{suffix}.jsonl"
+        suffix += 1
+    _debug_log_path = candidate
+    _debug_log_path.write_text("")
 
 
 def _append_debug_log(position):
-    entry = {"t": time.time(), **position, **runner.status()}
-    with open(DEBUG_LOG_PATH, "a") as f:
+    if _debug_log_path is None:
+        return
+    entry = {"t": time.time(), "path_name": _current_path_name, **position, **runner.status()}
+    with open(_debug_log_path, "a") as f:
         f.write(json.dumps(entry, default=str) + "\n")
+
+
+def _sweep_old_debug_logs():
+    """Run once at startup, same as jobs'/missions' own sweep — logs
+    accumulate now (one retained file per run), so old ones need
+    actual cleanup."""
+    if not LOGS_DIR.exists():
+        return
+    cutoff = time.time() - service_cfg["log_retention_days"] * 86400
+    for file in LOGS_DIR.glob("*.jsonl"):
+        if file.stat().st_mtime < cutoff:
+            file.unlink()
 
 
 def _control_loop():
     period = 1.0 / service_cfg["control_hz"]
-    last_logged_state = None
-    last_log_time = 0.0
     while True:
         position = _current_position()
         if position is not None:
@@ -148,18 +191,12 @@ def _control_loop():
             )
             runner.preview(position["lat"], position["lon"], position["heading_deg"])
             state = runner.status()["state"]
-            now = time.monotonic()
-            # Quiet ~1Hz snapshot while running, for debugging aborts
-            # after the fact — plus always log the exact instant the
-            # state changes (e.g. the step that triggered an abort),
-            # regardless of the 1Hz gate, since that's the one line that
-            # actually matters.
-            if state != "idle" and (
-                state != last_logged_state or now - last_log_time >= DEBUG_LOG_INTERVAL_S
-            ):
+            # Every control tick while running, not a throttled ~1Hz
+            # snapshot — this is now the data an analysis tool compares
+            # runs with, so it needs the same resolution the control
+            # loop itself acts at (see navigate-prd.md's "Debug log").
+            if state != "idle":
                 _append_debug_log(position)
-                last_log_time = now
-            last_logged_state = state
         time.sleep(period)
 
 
@@ -420,7 +457,7 @@ def control_start():
         return jsonify({"ok": False, "reason": "no position fix yet"})
     result = runner.start(position["lat"], position["lon"], position["heading_deg"])
     if result["ok"]:
-        _reset_debug_log()
+        _start_new_debug_log()
     return jsonify(result)
 
 
@@ -440,6 +477,44 @@ def ws_navigate(ws):
     while True:
         ws.send(json.dumps(_snapshot()))
         time.sleep(period)
+
+
+# --- Log Viewer (added 2026-08-12 - see navigate-prd.md) ---
+
+
+def _log_file_summary(path):
+    lines = path.read_text().splitlines()
+    if not lines:
+        return {"filename": path.name, "start_t": None, "end_t": None, "line_count": 0, "path_name": None}
+    first = json.loads(lines[0])
+    last = json.loads(lines[-1])
+    return {
+        "filename": path.name,
+        "start_t": first.get("t"),
+        "end_t": last.get("t"),
+        "line_count": len(lines),
+        "path_name": first.get("path_name"),  # None for waterbutt's own logs, or a navigate log from before this field existed
+    }
+
+
+def _log_summaries(logs_dir):
+    if not logs_dir.exists():
+        return []
+    summaries = [_log_file_summary(p) for p in logs_dir.glob("*.jsonl")]
+    return sorted(summaries, key=lambda s: s["start_t"] or 0, reverse=True)
+
+
+@app.route("/api/logs")
+def api_logs():
+    return jsonify({"navigate": _log_summaries(LOGS_DIR), "waterbutt": _log_summaries(WATERBUTT_LOGS_DIR)})
+
+
+@app.route("/api/logs/<source>/<filename>")
+def api_log_file(source, filename):
+    logs_dir = {"navigate": LOGS_DIR, "waterbutt": WATERBUTT_LOGS_DIR}.get(source)
+    if logs_dir is None or filename not in {p.name for p in logs_dir.glob("*.jsonl")}:
+        abort(404)
+    return send_from_directory(logs_dir, filename)
 
 
 # --- Pages ---
@@ -481,6 +556,7 @@ register_pages(
 
 
 if __name__ == "__main__":
+    _sweep_old_debug_logs()
     nav_client.start()
     threading.Thread(target=_control_loop, daemon=True).start()
 

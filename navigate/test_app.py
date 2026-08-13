@@ -9,7 +9,9 @@ so tests never touch this robot's real recorded paths.
 
 import json
 import math
+import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -63,10 +65,12 @@ class Recorder:
 class NavigateAppTestCase(unittest.TestCase):
     def setUp(self):
         app.PATHS_DIR = Path(tempfile.mkdtemp())
-        # DEBUG_LOG_PATH is computed once from PATHS_DIR at import time,
-        # not re-derived when PATHS_DIR is reassigned above — redirect it
-        # too, so tests never touch this robot's real debug log.
-        app.DEBUG_LOG_PATH = app.PATHS_DIR / "last_run_debug.jsonl"
+        # LOGS_DIR is computed once from PATHS_DIR at import time, not
+        # re-derived when PATHS_DIR is reassigned above — redirect it too,
+        # so tests never touch this robot's real debug logs.
+        app.LOGS_DIR = app.PATHS_DIR / "logs"
+        app.WATERBUTT_LOGS_DIR = app.PATHS_DIR / "waterbutt-logs"
+        app._debug_log_path = None
         self.recorder = Recorder()
         app.runner = PathRunner(app.CONTROL_CONFIG, self.recorder.send_velocity, self.recorder.send_pump)
         app._current_path_name = None
@@ -291,31 +295,73 @@ class NavigateAppTestCase(unittest.TestCase):
         self.assertEqual(resp.get_json(), {"ok": False, "reason": "a path is already running"})
         self.assertEqual(self.recorder.pump_calls, [])
 
-    def test_successful_start_resets_the_debug_log(self):
-        app.DEBUG_LOG_PATH.write_text('{"stale": "entry from a previous run"}\n')
+    def test_successful_start_creates_a_fresh_debug_log(self):
         paths_module.save_path(app.PATHS_DIR, "loop", SAMPLE_POINTS)
         self.client.post("/control/load/loop")
         self._set_position(52.2, -1.5, 0)
         self.client.post("/control/start")
-        self.assertEqual(app.DEBUG_LOG_PATH.read_text(), "")
+        self.assertIsNotNone(app._debug_log_path)
+        self.assertEqual(app._debug_log_path.read_text(), "")
 
-    def test_failed_start_does_not_touch_the_debug_log(self):
-        app.DEBUG_LOG_PATH.write_text('{"kept": true}\n')
+    def test_failed_start_does_not_create_a_debug_log(self):
         # No path loaded -> entry_check fails -> start() returns ok: False
         self.client.post("/control/start", json={})
         self._set_position(52.2, -1.5, 0)
         self.client.post("/control/start")
-        self.assertIn("kept", app.DEBUG_LOG_PATH.read_text())
+        self.assertIsNone(app._debug_log_path)
+
+    def test_two_successful_starts_leave_both_logs_on_disk(self):
+        # Each run gets its own retained file, unlike the old
+        # single-overwritten-file behaviour — see navigate-prd.md.
+        paths_module.save_path(app.PATHS_DIR, "loop", SAMPLE_POINTS)
+        self.client.post("/control/load/loop")
+        self._set_position(52.2, -1.5, 0)
+        self.client.post("/control/start")
+        first_log_path = app._debug_log_path
+        self.client.post("/control/stop")
+        self.client.post("/control/start")
+        second_log_path = app._debug_log_path
+        self.assertNotEqual(first_log_path, second_log_path)
+        self.assertTrue(first_log_path.exists())
+        self.assertTrue(second_log_path.exists())
 
     def test_append_debug_log_writes_one_json_line_with_position_and_status(self):
-        app._reset_debug_log()
+        app._start_new_debug_log()
         app._append_debug_log({"lat": 52.2, "lon": -1.5, "heading_deg": 0, "horizontal_accuracy_m": 0.1})
-        lines = app.DEBUG_LOG_PATH.read_text().splitlines()
+        lines = app._debug_log_path.read_text().splitlines()
         self.assertEqual(len(lines), 1)
         entry = json.loads(lines[0])
         self.assertEqual(entry["lat"], 52.2)
         self.assertIn("state", entry)  # from runner.status()
         self.assertIn("t", entry)
+
+    def test_debug_log_filename_and_lines_include_the_loaded_path_name(self):
+        paths_module.save_path(app.PATHS_DIR, "loop", SAMPLE_POINTS)
+        self.client.post("/control/load/loop")
+        self._set_position(52.2, -1.5, 0)
+        self.client.post("/control/start")
+        self.assertIn("loop", app._debug_log_path.name)
+        app._append_debug_log({"lat": 52.2, "lon": -1.5, "heading_deg": 0, "horizontal_accuracy_m": 0.1})
+        entry = json.loads(app._debug_log_path.read_text().splitlines()[-1])
+        self.assertEqual(entry["path_name"], "loop")
+
+    def test_append_debug_log_before_any_run_is_a_no_op(self):
+        app._append_debug_log({"lat": 52.2, "lon": -1.5, "heading_deg": 0, "horizontal_accuracy_m": 0.1})
+        self.assertFalse(app.LOGS_DIR.exists())
+
+    def test_sweep_old_debug_logs_deletes_only_files_past_retention(self):
+        app.LOGS_DIR.mkdir(parents=True)
+        old_file = app.LOGS_DIR / "250101_000000.jsonl"
+        new_file = app.LOGS_DIR / "260101_000000.jsonl"
+        old_file.write_text("{}\n")
+        new_file.write_text("{}\n")
+        old_time = time.time() - (app.service_cfg["log_retention_days"] + 1) * 86400
+        os.utime(old_file, (old_time, old_time))
+
+        app._sweep_old_debug_logs()
+
+        self.assertFalse(old_file.exists())
+        self.assertTrue(new_file.exists())
 
     def test_control_start_without_position_fix(self):
         resp = self.client.post("/control/start")
@@ -347,9 +393,71 @@ class NavigateAppTestCase(unittest.TestCase):
         self.assertEqual(resp.status_code, 502)
 
     def test_pages_render(self):
-        for path in ["/", "/pages/create-path", "/pages/paths", "/pages/config", "/pages/edit-path"]:
+        for path in ["/", "/pages/create-path", "/pages/paths", "/pages/config", "/pages/edit-path", "/pages/logs"]:
             resp = self.client.get(path)
             self.assertEqual(resp.status_code, 200, path)
+
+    def test_api_logs_empty_when_no_logs_dirs_exist(self):
+        resp = self.client.get("/api/logs")
+        self.assertEqual(resp.get_json(), {"navigate": [], "waterbutt": []})
+
+    def test_api_logs_summarises_navigate_and_waterbutt_logs(self):
+        app.LOGS_DIR.mkdir(parents=True)
+        (app.LOGS_DIR / "260812_100000_loop.jsonl").write_text(
+            '{"t": 100.0, "path_name": "loop"}\n{"t": 101.0, "path_name": "loop"}\n'
+        )
+        app.WATERBUTT_LOGS_DIR.mkdir(parents=True)
+        (app.WATERBUTT_LOGS_DIR / "260812_090000.jsonl").write_text(
+            '{"t": 90.0, "state": "not_visible"}\n'
+        )
+
+        resp = self.client.get("/api/logs").get_json()
+
+        self.assertEqual(len(resp["navigate"]), 1)
+        nav_entry = resp["navigate"][0]
+        self.assertEqual(nav_entry["path_name"], "loop")
+        self.assertEqual(nav_entry["start_t"], 100.0)
+        self.assertEqual(nav_entry["end_t"], 101.0)
+        self.assertEqual(nav_entry["line_count"], 2)
+
+        self.assertEqual(len(resp["waterbutt"]), 1)
+        self.assertEqual(resp["waterbutt"][0]["start_t"], 90.0)
+        self.assertIsNone(resp["waterbutt"][0]["path_name"])
+
+    def test_api_logs_ignores_an_empty_just_started_file(self):
+        app.LOGS_DIR.mkdir(parents=True)
+        (app.LOGS_DIR / "260812_100000_loop.jsonl").write_text("")
+
+        resp = self.client.get("/api/logs").get_json()
+
+        self.assertEqual(resp["navigate"], [{
+            "filename": "260812_100000_loop.jsonl", "start_t": None, "end_t": None,
+            "line_count": 0, "path_name": None,
+        }])
+
+    def test_api_log_file_serves_raw_content(self):
+        app.LOGS_DIR.mkdir(parents=True)
+        (app.LOGS_DIR / "260812_100000_loop.jsonl").write_text('{"t": 100.0}\n')
+
+        resp = self.client.get("/api/logs/navigate/260812_100000_loop.jsonl")
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.get_data(as_text=True), '{"t": 100.0}\n')
+
+    def test_api_log_file_404s_for_an_unknown_filename(self):
+        app.LOGS_DIR.mkdir(parents=True)
+        resp = self.client.get("/api/logs/navigate/does-not-exist.jsonl")
+        self.assertEqual(resp.status_code, 404)
+
+    def test_api_log_file_404s_for_path_traversal(self):
+        resp = self.client.get("/api/logs/navigate/..%2F..%2Fetc%2Fpasswd")
+        self.assertEqual(resp.status_code, 404)
+
+    def test_api_log_file_404s_for_an_unknown_source(self):
+        app.LOGS_DIR.mkdir(parents=True)
+        (app.LOGS_DIR / "260812_100000_loop.jsonl").write_text('{"t": 100.0}\n')
+        resp = self.client.get("/api/logs/oxts-nav/260812_100000_loop.jsonl")
+        self.assertEqual(resp.status_code, 404)
 
 
 if __name__ == "__main__":

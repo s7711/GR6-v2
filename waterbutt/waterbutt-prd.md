@@ -202,6 +202,46 @@ refusal's actual `reason` (not a generic "waterbutt refused") so a
 `fill` step's abort reason says *why* — too far, not visible, or
 never configured — not just that it failed.
 
+### QC reading log (added 2026-08-12)
+
+Built to separate navigation error (xNAV accuracy) from control error
+(tracking what xNAV reports) during autonomous water-butt approaches —
+see `navigate-prd.md`'s "Debug log", which this is the other half of:
+navigate logs its own position/tracking-error per run, but had nothing
+to compare against the marker's own ground truth. Every QC reading
+`_qc_loop` produces (not just `"ok"` ones — `"not_visible"` matters
+too, since "parked so it couldn't see the marker" is itself a real
+failure mode) is now appended to `waterbutt/data/logs/
+<yymmdd_hhmmss>.jsonl`, same filename notation as navigate's per-run
+log, so the two can be lined up afterward by timestamp.
+
+Unlike navigate's log, this isn't one file per run — waterbutt has no
+equivalent "Start" button, the QC reading just streams continuously
+whenever aruco is reachable — so it's one file per rotation window
+instead of per run. Old files are swept on startup (`_sweep_old_qc_logs`,
+mirroring navigate/jobs/missions' identical pattern) past
+`log_retention_days` (config, default 2, same value as those services).
+Not surfaced in the UI — like navigate's, a debugging/analysis input,
+not an end-user feature.
+
+**Periodic rotation (added 2026-08-12)**: originally opened once at
+process startup and appended to for as long as the service stayed up —
+noticed live growing with no fill attempt anywhere near in progress,
+since aruco keeps publishing (and the QC loop keeps logging every
+reading, "ok" or not) regardless of whether anything's actually
+happening at the water butt. A long-uninterrupted service run would
+have grown one file forever, and `log_retention_days`' sweep only runs
+at startup, so it would never get a chance to reclaim any of it either.
+Fixed by checking, on every logged reading (piggybacking the existing
+write rather than adding a timer thread), whether the current file has
+been open longer than `qc_log_rotate_s` (config, default 3600 = 1
+hour) — if so, sweep old files and start a fresh one. This also keeps
+individual files a sane size for the Log Viewer page (see
+`navigate-prd.md`) to load into a browser tab, which matters
+independently of disk space: that page reads a whole file's contents
+into JS, and multiple days of continuous 2Hz readings in one file
+would make it slow before disk space was ever a concern.
+
 ### Icon
 
 Per the ask: a bucket-with-water-drop glyph, white-on-black-circle,
@@ -222,6 +262,9 @@ waterbutt:
   web_ui: true
   hostname: waterbutt.local   # mDNS name the ESP8266 advertises (WiFi.hostname("waterbutt") + MDNS.begin("waterbutt")) — per the ask, this is the one thing about "which network device to talk to" that's config, not hardcoded
   qc_marker_file: waterbutt/data/qc-marker.yaml  # the single saved "ideal position" record — see "QC marker" above
+  qc_default_threshold_m: 0.08   # see "QC gating on fill" above
+  log_retention_days: 2          # see "QC reading log" above
+  qc_log_rotate_s: 3600          # see "QC reading log" above
 ```
 
 `hostname` (not the wifi SSID/password — those live only on the

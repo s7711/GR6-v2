@@ -446,6 +446,8 @@ navigate:
                         # data; unrelated to oxts-nav's own feed rate,
                         # which already runs faster (nav_feed_hz: 20)
                         # than this control loop needs
+  log_retention_days: 2  # per-run debug logs (navigate/data/logs/) —
+                         # same convention/value as jobs and missions
 
 drive:
   # ...existing drive config...
@@ -477,30 +479,141 @@ check than opening the debug log file below, which stays useful for the
 surrounding detail (exact position/error trend) once the journal has
 told you *that* something aborted and roughly why.
 
-## Debug log (last run only)
+## Debug log (per run, added 2026-08-12)
 
 A real-hardware run aborted on a heading-error breach that looked
 suspicious, but with no record of the run afterward there was nothing
 to actually check it against. Added a quiet background log rather than
-guessing further:
+guessing further. Originally a single file overwritten each run ("the
+last run only"); changed to one retained file per run once the actual
+need became comparing runs against each other — separating whether a
+water-butt approach failing is a navigation problem (xNAV accuracy) or
+a control problem (tracking what xNAV reports) needs multiple runs'
+history, not just the latest one.
 
-- `navigate/data/last_run_debug.jsonl` (gitignored alongside saved
-  paths — this robot's own runtime data, not source) — one JSON line
-  per snapshot: timestamp, position/heading/accuracy, and the full
-  `PathRunner.status()` (state, tracked index, cross-track/heading
-  error, clearance headroom, distance travelled).
-- Logged at ~1Hz while a run is `running` — frequent enough to
-  reconstruct what happened, far too infrequent to matter for disk/
-  performance. Also logged immediately on any state *transition*
-  (e.g. the exact step that triggered an abort), regardless of the
-  1Hz gate, since that's the one line that actually matters most.
-- Reset (truncated) at the start of each successful `Start` — this is
-  "the last run," not a growing history. A failed start (no path
-  loaded, no position fix, too far to enter) leaves the previous run's
-  log untouched, since nothing new actually happened.
-- Deliberately not surfaced in the UI (no page, no download button) —
-  it's a debugging aid, read by hand (or by a future Claude session)
-  when something looks wrong, not a feature end users need.
+- `navigate/data/logs/<yymmdd_hhmmss>_<path_name>.jsonl` (gitignored
+  alongside saved paths — this robot's own runtime data, not source),
+  one file per run, named by the run's start time — same
+  `%y%m%d_%H%M%S` notation used throughout this project (`jobs`/
+  `missions`' own log filenames, the xNAV650's own `.rd`
+  recording-rename convention) — plus the loaded path's name (added
+  2026-08-12, once a session with several different paths run back to
+  back made it clear a timestamp alone doesn't say which file is
+  which; path names are already validated slash/dot-free on save —
+  see `paths.py`'s `_validate_name` — so no extra sanitising is
+  needed). If somehow no path name is set the file is just
+  `<yymmdd_hhmmss>.jsonl` (shouldn't happen in practice — `start()`
+  requires a loaded path — but the log write must never be the thing
+  that breaks a run). Swept on startup (`_sweep_old_debug_logs`,
+  mirroring `jobs`'/`missions`' identical pattern) for anything older
+  than `log_retention_days` (config, default 2) — a plain startup
+  sweep, not a background thread, since a directory scan over a
+  couple of days' worth of files is instant and this is exactly when
+  jobs/missions already do it.
+- One JSON line per control-loop tick while a run is `running` (10Hz,
+  matching `control_hz`) — not throttled to ~1Hz as originally built.
+  The throttle made sense when this was a human reading the file by
+  eye after an abort; it doesn't once the point is plotting a chart of
+  cross-track/heading error through a close-in manoeuvre like a
+  water-butt approach, where the interesting detail is in the last
+  couple of metres.
+- Each line: timestamp, **path name** (same one in the filename — this
+  is the field an actual viewer should key off; the filename is just
+  a convenience mirror of it for a plain `ls`), position/heading/
+  accuracy, and the full `PathRunner.status()` (state, tracked index,
+  cross-track/heading error, clearance headroom, distance travelled).
+- A fresh file is opened at the start of each successful `Start`. A
+  failed start (no path loaded, no position fix, too far to enter)
+  creates nothing, since nothing new actually happened.
+- Surfaced in the UI as of the Log Viewer page below.
+
+## Log Viewer (added 2026-08-12)
+
+Built to actually use the debug log above and `waterbutt`'s equivalent
+QC-reading log (see `waterbutt-prd.md`'s "QC reading log") — separating
+whether a water-butt approach failing is a navigation problem (xNAV
+accuracy) or a control problem (tracking what xNAV reports) needs
+looking at several runs side by side, not reading one file by eye.
+
+- `GET /api/logs` lists every `.jsonl` file in both `navigate`'s own
+  `LOGS_DIR` and `waterbutt`'s `WATERBUTT_LOGS_DIR` (a plain sibling
+  path on the same filesystem — `waterbutt/data/logs/`, computed from
+  `navigate/app.py`'s own location, same way `PATHS_DIR` etc. are
+  computed elsewhere in this file). This reads waterbutt's log files
+  directly off disk rather than calling into waterbutt's own API — a
+  read-only, offline join over historical data, not a live control
+  call, so it doesn't need to respect the jobs→navigate-style "never
+  skip a layer" convention that governs *control* calls elsewhere in
+  this project; there's no control relationship being bypassed here at
+  all, just a file read.
+- Each summary is `{filename, start_t, end_t, line_count, path_name}`
+  — `start_t`/`end_t` from the first/last line's own `t`, `path_name`
+  read from the first line's `path_name` field (`None` for waterbutt's
+  logs, or for an old navigate log from before that field existed —
+  the filename itself still carries it for those).
+- `GET /api/logs/<source>/<filename>` serves one file's raw content
+  (`source` is `navigate` or `waterbutt`; `filename` is checked against
+  that directory's actual `*.jsonl` listing before serving, same
+  traversal-safe pattern as `oxts-nav`'s xNAV config file route).
+- The page (`templates/pages/logs.html`) is a plain checkbox picker —
+  tick any number of files from either list, tick which numeric
+  quantities to plot (the list is generated from whatever keys are
+  actually numeric across the loaded files, not a hardcoded list — a
+  new field logged in the future just shows up here for free), Load.
+  A uPlot chart gets one series per (file, quantity) pair actually
+  present, coloured from a fixed palette and legend-labelled `file —
+  quantity` so many series stay distinguishable; a `geomap.js` map
+  gets one layer per loaded *navigate* file (waterbutt's own readings
+  have no lat/lon of their own — see "Deferred" below).
+- **x-axis is seconds since a common zero**, not wall-clock time — the
+  zero is the *earliest* first-line `t` across every currently loaded
+  file (navigate and waterbutt alike), computed once per Load and held
+  fixed until the next one. First built per-file (each file normalised
+  to its own start) for overlaying separate runs' *shapes*; changed to
+  one shared zero (2026-08-12, live feedback) once it became clear that
+  broke comparing a navigate run against the waterbutt log covering the
+  same real event — two files that actually happened simultaneously
+  were being plotted as if both started at the same relative moment,
+  which is only true when they really are unrelated separate runs. A
+  fixed shared zero still supports shape-overlay of separate runs from
+  the same session reasonably well (they land at nearby, not identical,
+  offsets) while staying correct for the simultaneous-files case, and
+  — per the same feedback — must never shift underneath an
+  already-open chart just because a different quantity got toggled.
+- **Cursor linking (added 2026-08-12)**: hovering the chart highlights
+  the nearest point in time on the map (one dot per loaded navigate
+  file, coloured to match that file's own track); hovering the map
+  moves the chart's cursor to that point's time. Chart→map reuses
+  `geomap.js`'s existing layer mechanism (each highlight is just
+  another named layer, `<file label>__cursor`) — no new drawing code
+  needed. Map→chart needed `geomap.js` itself extended with a small
+  `onHover(callback)` (nearest plotted point to the mouse, or `null`),
+  since it had no way to report "what's near the pointer" before this;
+  see `geomap.js`'s own header comment. Both directions go through
+  uPlot's/geomap's own public APIs (`setCursor`/`valToPos`/`cursor.idx`
+  on the uPlot side, cross-checked directly against the vendored
+  `uPlot.iife.min.js` source since this couldn't be tried in a real
+  browser here — no headless browser tooling in this environment: not
+  interactively verified, worth an early look once you're using it.
+- Deferred: plotting the waterbutt QC reading as a ground-truth point
+  on the map. Doing that properly means transforming a QC reading's
+  marker-relative `forward_m`/`right_m`/`down_m` (anchored to the
+  *ideal* saved reading's own orientation — see `qc_check.compare()`)
+  into an absolute lat/lon via the marker's own surveyed pose in
+  `aruco/data/marker-map.yaml`, the same rotate-then-`ned_to_lla` math
+  `aruco/survey.py` already uses to survey a marker in the first
+  place — real, doable geometry, but new, unverified code that risks
+  quietly misleading whoever's reading the map if it's subtly wrong.
+  Shipped without it for now; the QC reading's numeric quantities
+  (`distance_m`/`forward_m`/`right_m`/`down_m`/`state`) are still fully
+  available on the chart, which needs no frame conversion at all.
+- Not (yet) a generic analysis tool for anything logged anywhere in
+  this project — scoped to exactly `navigate`'s and `waterbutt`'s two
+  logs, which is what today's actual question needs. A fully generic
+  version (any service, any log, a shared log-format convention) was
+  discussed and deliberately deferred in favour of solving the one
+  question actually in front of us; worth revisiting once more
+  services have their own logs worth comparing.
 
 ## Open question: heading-error aborts on jagged paths
 

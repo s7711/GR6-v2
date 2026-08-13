@@ -87,6 +87,7 @@ services:
     max_heading_correction_deg: 70    # abort if heading error to the lookahead point exceeds this — from GR6-v1, unchanged
     navigate_feed_socket: /tmp/gr6-navigate-feed.sock  # Unix domain socket — see navigate-prd.md
     navigate_feed_hz: 10               # matches control_hz — see navigate-prd.md's "Config additions"
+    log_retention_days: 2              # per-run debug logs (navigate/data/logs/) — same convention/value as jobs and missions
 
   network:
     unit: robot-network.service
@@ -115,6 +116,8 @@ services:
     hostname: waterbutt.local  # mDNS name the ESP8266 valve controller advertises — see waterbutt/waterbutt-prd.md
     qc_marker_file: waterbutt/data/qc-marker.yaml  # the single saved "ideal position" marker record — see waterbutt-prd.md's QC marker section
     qc_default_threshold_m: 0.08  # used whenever /go's own caller doesn't pick a tolerance (e.g. jobs' `fill` step) — see waterbutt-prd.md's "QC gating on fill"
+    log_retention_days: 2  # QC reading logs (waterbutt/data/logs/) — same convention/value as navigate/jobs/missions
+    qc_log_rotate_s: 3600  # rotate to a fresh QC log file this often while the service keeps running — see app.py's _start_new_qc_log
 
   jobs:
     unit: robot-jobs.service

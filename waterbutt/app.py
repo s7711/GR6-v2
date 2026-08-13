@@ -7,6 +7,7 @@ plus the page. See waterbutt-prd.md for the requirements this
 implements.
 """
 
+import datetime
 import json
 import sys
 import threading
@@ -57,6 +58,7 @@ QC_DEFAULT_THRESHOLD_M = service_cfg["qc_default_threshold_m"]
 
 VALVE_BASE_URL = f"http://{service_cfg['hostname']}"
 QC_MARKER_PATH = Path(__file__).resolve().parent.parent / service_cfg["qc_marker_file"]
+LOGS_DIR = Path(__file__).resolve().parent / "data" / "logs"
 QC_HPR_CB = tuple(aruco_cfg["camera_extrinsics"]["hpr_cb"])
 QC_DXC_B = tuple(aruco_cfg["camera_extrinsics"]["d_xc_b"])
 QC_FUNNEL_OFFSET_C = tuple(cfg["waterbutt_funnel_offset_c"])  # camera -> funnel, in c - see config.yaml's comment
@@ -88,16 +90,73 @@ valve = ValveController(send_open, send_close)
 _qc_lock = threading.Lock()
 _qc_reading = {"state": "not_configured"}
 
+_qc_log_lock = threading.Lock()
+_qc_log_path = None
+_qc_log_opened_at = None  # time.monotonic() - drives the periodic rotation below
+
 
 def _set_qc_reading(reading):
     global _qc_reading
     with _qc_lock:
         _qc_reading = reading
+    _append_qc_log(reading)
 
 
 def get_qc_reading():
     with _qc_lock:
         return dict(_qc_reading)
+
+
+def _start_new_qc_log():
+    """One file per service run (this service has no discrete "run"
+    the way navigate/jobs/missions do — the QC reading just streams
+    continuously whenever aruco is reachable), named the same
+    yymmdd_hhmmss way as navigate's per-run debug log, so the two can
+    be lined up afterward by timestamp. Also rotated periodically while
+    the service keeps running (see _append_qc_log) - a continuous
+    stream has no other natural end, so without this a long-
+    uninterrupted service run would grow one file forever and
+    log_retention_days' startup-only sweep would never get a chance to
+    reclaim any of it. Found live 2026-08-12 - noticed growing with no
+    fill attempt in progress."""
+    global _qc_log_path, _qc_log_opened_at
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.datetime.now().strftime("%y%m%d_%H%M%S")
+    candidate = LOGS_DIR / f"{timestamp}.jsonl"
+    suffix = 1
+    while candidate.exists():
+        # A rotation landing in the same second as the file it's
+        # replacing (e.g. two tests running fast) - never silently
+        # overwrite an existing file.
+        candidate = LOGS_DIR / f"{timestamp}_{suffix}.jsonl"
+        suffix += 1
+    _qc_log_path = candidate
+    _qc_log_opened_at = time.monotonic()
+
+
+def _append_qc_log(reading):
+    if _qc_log_path is None:
+        return
+    if time.monotonic() - _qc_log_opened_at > service_cfg["qc_log_rotate_s"]:
+        # Piggyback the rotation check on the natural write cadence
+        # (every reading, up to a few Hz whenever aruco is reachable)
+        # rather than a separate timer thread - see _start_new_qc_log's
+        # docstring for why this exists at all.
+        _sweep_old_qc_logs()
+        _start_new_qc_log()
+    with _qc_log_lock:
+        with open(_qc_log_path, "a") as f:
+            f.write(json.dumps({"t": time.time(), **reading}, default=str) + "\n")
+
+
+def _sweep_old_qc_logs():
+    """Run once at startup, same pattern as navigate/jobs/missions."""
+    if not LOGS_DIR.exists():
+        return
+    cutoff = time.time() - service_cfg["log_retention_days"] * 86400
+    for file in LOGS_DIR.glob("*.jsonl"):
+        if file.stat().st_mtime < cutoff:
+            file.unlink()
 
 
 def _qc_loop():
@@ -223,6 +282,8 @@ register_pages(app, PAGES_DIR, index_slug="run", context_providers={"run": run_c
 
 
 if __name__ == "__main__":
+    _sweep_old_qc_logs()
+    _start_new_qc_log()
     threading.Thread(target=_tick_loop, daemon=True).start()
     threading.Thread(target=_qc_loop, daemon=True).start()
     app.run(host=service_cfg["host"], port=service_cfg["port"], threaded=True)

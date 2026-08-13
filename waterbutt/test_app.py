@@ -5,7 +5,12 @@ stub, and app._set_qc_reading() drives the QC state directly rather
 than needing a real aruco feed.
 """
 
+import json
+import os
+import tempfile
+import time
 import unittest
+from pathlib import Path
 
 import app
 
@@ -25,6 +30,11 @@ class WaterbuttAppTestCase(unittest.TestCase):
     def setUp(self):
         self.valve_stub = ValveStub()
         app.valve = self.valve_stub
+        # LOGS_DIR/_qc_log_path are computed/set once at import/startup,
+        # not re-derived here - redirect both so tests never touch this
+        # robot's real QC logs.
+        app.LOGS_DIR = Path(tempfile.mkdtemp()) / "logs"
+        app._qc_log_path = None
         app._set_qc_reading({"state": "not_configured"})
         self.client = app.app.test_client()
 
@@ -86,6 +96,55 @@ class WaterbuttAppTestCase(unittest.TestCase):
         resp = self.client.post("/go", json={"duration_s": 7})
         self.assertEqual(resp.status_code, 400)
         self.assertEqual(self.valve_stub.go_calls, [])
+
+    def test_set_qc_reading_before_a_log_started_is_a_no_op(self):
+        app._set_qc_reading({"state": "ok", "marker_id": 12, "distance_m": 0.01})
+        self.assertFalse(app.LOGS_DIR.exists())
+
+    def test_set_qc_reading_appends_to_the_current_log(self):
+        app._start_new_qc_log()
+        app._set_qc_reading({"state": "not_visible", "marker_id": 12})
+        app._set_qc_reading({"state": "ok", "marker_id": 12, "distance_m": 0.03})
+        lines = app._qc_log_path.read_text().splitlines()
+        self.assertEqual(len(lines), 2)
+        first, second = (json.loads(line) for line in lines)
+        self.assertEqual(first["state"], "not_visible")
+        self.assertIn("t", first)
+        self.assertEqual(second["distance_m"], 0.03)
+
+    def test_set_qc_reading_rotates_to_a_new_file_past_the_rotate_interval(self):
+        app._start_new_qc_log()
+        first_path = app._qc_log_path
+        first_path.write_text('{"state": "not_visible"}\n')  # as if a reading had already been logged to it
+        app._qc_log_opened_at = time.monotonic() - (app.service_cfg["qc_log_rotate_s"] + 1)
+
+        app._set_qc_reading({"state": "not_visible", "marker_id": 12})
+
+        self.assertNotEqual(app._qc_log_path, first_path)
+        self.assertTrue(first_path.exists())  # rotation doesn't delete the old file, only starts a new one
+        self.assertEqual(len(app._qc_log_path.read_text().splitlines()), 1)
+
+    def test_set_qc_reading_does_not_rotate_before_the_interval_elapses(self):
+        app._start_new_qc_log()
+        first_path = app._qc_log_path
+
+        app._set_qc_reading({"state": "not_visible", "marker_id": 12})
+
+        self.assertEqual(app._qc_log_path, first_path)
+
+    def test_sweep_old_qc_logs_deletes_only_files_past_retention(self):
+        app.LOGS_DIR.mkdir(parents=True)
+        old_file = app.LOGS_DIR / "250101_000000.jsonl"
+        new_file = app.LOGS_DIR / "260101_000000.jsonl"
+        old_file.write_text("{}\n")
+        new_file.write_text("{}\n")
+        old_time = time.time() - (app.service_cfg["log_retention_days"] + 1) * 86400
+        os.utime(old_file, (old_time, old_time))
+
+        app._sweep_old_qc_logs()
+
+        self.assertFalse(old_file.exists())
+        self.assertTrue(new_file.exists())
 
 
 if __name__ == "__main__":
