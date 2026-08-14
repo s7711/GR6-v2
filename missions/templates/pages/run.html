@@ -42,15 +42,6 @@
   </div>
 </div>
 
-<div class="card mb-3">
-  <div class="card-body">
-    <div class="text-body-secondary small mb-2">
-      Jobs in this mission (faded on the map below: whichever job will run next, to line up against)
-    </div>
-    <ol id="job-list" class="mb-0"></ol>
-  </div>
-</div>
-
 <div class="card">
   <div class="card-body">
     <div id="map-wrapper" style="position: relative; width: 100%;">
@@ -113,11 +104,6 @@ function fillStartSteps() {
   }
 }
 
-function renderJobList() {
-  const list = document.getElementById("job-list");
-  list.innerHTML = currentSteps.map((s) => `<li>${s.job}</li>`).join("");
-}
-
 // Previews whichever job will actually run next (start-step, not
 // necessarily step 0) - that's the one the robot needs to be lined up
 // against, not the mission's own first job.
@@ -154,26 +140,25 @@ function updateUpcomingJobPreview() {
   });
 }
 
-function updateJobList() {
+function refreshUpcomingJob() {
   const name = missionSelect.value;
-  if (!name) { currentSteps = []; renderJobList(); updateUpcomingJobPreview(); return; }
+  if (!name) { currentSteps = []; updateUpcomingJobPreview(); return; }
   fetch(`/api/missions/${encodeURIComponent(name)}`).then((r) => (r.ok ? r.json() : null)).then((mission) => {
     currentSteps = mission ? mission.steps : [];
-    renderJobList();
     updateUpcomingJobPreview();
   });
 }
 
 missionSelect.addEventListener("change", () => {
   fillStartSteps();
-  updateJobList();
+  refreshUpcomingJob();
 });
 startStepSelect.addEventListener("change", updateUpcomingJobPreview);
 
 const preselect = new URLSearchParams(window.location.search).get("mission");
 if (preselect) missionSelect.value = preselect;
 fillStartSteps();
-updateJobList();
+refreshUpcomingJob();
 map.resize();
 
 document.getElementById("start-btn").addEventListener("click", () => {

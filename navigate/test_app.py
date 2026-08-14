@@ -62,6 +62,21 @@ class Recorder:
         self.pump_calls.append(on)
 
 
+class RecordingPost:
+    """Stand-in for requests.post that just records every call (url,
+    kwargs) and returns a fake 204 response - for asserting on calls to
+    oxts-nav's /gnss/... routes without a real oxts-nav to hit."""
+
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        resp = requests.Response()
+        resp.status_code = 204
+        return resp
+
+
 class NavigateAppTestCase(unittest.TestCase):
     def setUp(self):
         app.PATHS_DIR = Path(tempfile.mkdtemp())
@@ -74,6 +89,8 @@ class NavigateAppTestCase(unittest.TestCase):
         self.recorder = Recorder()
         app.runner = PathRunner(app.CONTROL_CONFIG, self.recorder.send_velocity, self.recorder.send_pump)
         app._current_path_name = None
+        app._aruco_priority_active_for_run = False
+        app._control_loop_last_state = "idle"
         app.nav_client = FakeNavClient()
         self.client = app.app.test_client()
 
@@ -309,6 +326,95 @@ class NavigateAppTestCase(unittest.TestCase):
         self._set_position(52.2, -1.5, 0)
         self.client.post("/control/start")
         self.assertIsNone(app._debug_log_path)
+
+    # --- Aruco priority (path flags + GNSS mode calls) ---
+
+    def test_path_flags_default_to_aruco_priority_false(self):
+        paths_module.save_path(app.PATHS_DIR, "loop", SAMPLE_POINTS)
+        resp = self.client.get("/api/paths/loop/flags")
+        self.assertEqual(resp.get_json(), {"aruco_priority": False})
+
+    def test_path_flags_save_and_load_round_trip(self):
+        paths_module.save_path(app.PATHS_DIR, "loop", SAMPLE_POINTS)
+        self.client.post("/api/paths/loop/flags", json={"aruco_priority": True})
+        resp = self.client.get("/api/paths/loop/flags")
+        self.assertEqual(resp.get_json(), {"aruco_priority": True})
+
+    def test_starting_an_aruco_priority_path_enters_aruco_priority_mode(self):
+        paths_module.save_path(app.PATHS_DIR, "loop", SAMPLE_POINTS)
+        paths_module.save_flags(app.PATHS_DIR, "loop", {"aruco_priority": True})
+        self.client.post("/control/load/loop")
+        self._set_position(52.2, -1.5, 0)
+        post = RecordingPost()
+        with patch.object(app.requests, "post", post):
+            self.client.post("/control/start")
+        urls = [url for url, kwargs in post.calls]
+        self.assertIn(f"{app.OXTSNAV_BASE_URL}/gnss/aruco-priority", urls)
+        self.assertTrue(app._aruco_priority_active_for_run)
+
+    def test_starting_an_ordinary_path_does_not_touch_gnss_mode(self):
+        paths_module.save_path(app.PATHS_DIR, "loop", SAMPLE_POINTS)
+        self.client.post("/control/load/loop")
+        self._set_position(52.2, -1.5, 0)
+        post = RecordingPost()
+        with patch.object(app.requests, "post", post):
+            self.client.post("/control/start")
+        urls = [url for url, kwargs in post.calls]
+        self.assertNotIn(f"{app.OXTSNAV_BASE_URL}/gnss/aruco-priority", urls)
+        self.assertFalse(app._aruco_priority_active_for_run)
+
+    def test_stopping_an_aruco_priority_run_restores_normal_gnss(self):
+        paths_module.save_path(app.PATHS_DIR, "loop", SAMPLE_POINTS)
+        paths_module.save_flags(app.PATHS_DIR, "loop", {"aruco_priority": True})
+        self.client.post("/control/load/loop")
+        self._set_position(52.2, -1.5, 0)
+        with patch.object(app.requests, "post", RecordingPost()):
+            self.client.post("/control/start")
+        post = RecordingPost()
+        with patch.object(app.requests, "post", post):
+            self.client.post("/control/stop")
+        urls = [url for url, kwargs in post.calls]
+        self.assertIn(f"{app.OXTSNAV_BASE_URL}/gnss/normal", urls)
+        self.assertFalse(app._aruco_priority_active_for_run)
+
+    def test_stopping_an_ordinary_run_does_not_call_gnss_normal(self):
+        paths_module.save_path(app.PATHS_DIR, "loop", SAMPLE_POINTS)
+        self.client.post("/control/load/loop")
+        self._set_position(52.2, -1.5, 0)
+        self.client.post("/control/start")
+        post = RecordingPost()
+        with patch.object(app.requests, "post", post):
+            self.client.post("/control/stop")
+        self.assertEqual(post.calls, [])
+
+    def test_control_tick_restores_gnss_when_run_aborts_on_its_own(self):
+        # No /control/stop call at all - runner.step() aborts internally
+        # (heading error breach), which _control_tick's own edge
+        # detection must catch since there's no HTTP call marking the
+        # moment otherwise.
+        paths_module.save_path(app.PATHS_DIR, "loop", SAMPLE_POINTS)
+        paths_module.save_flags(app.PATHS_DIR, "loop", {"aruco_priority": True})
+        self.client.post("/control/load/loop")
+        self._set_position(52.2, -1.5, 0)
+        with patch.object(app.requests, "post", RecordingPost()):
+            self.client.post("/control/start")
+        self.assertTrue(app._aruco_priority_active_for_run)
+        # The real control loop always ticks at least once while state
+        # is genuinely "running" before anything else can happen to it
+        # (that's how _control_loop_last_state gets to "running" in the
+        # first place) - one clean tick first, matching that, rather
+        # than jumping straight from start() to an abort on tick one.
+        app._control_tick()
+        self.assertEqual(app._control_loop_last_state, "running")
+
+        self._set_position(52.2, -1.5, 170)  # a huge heading error -> abort
+        post = RecordingPost()
+        with patch.object(app.requests, "post", post):
+            app._control_tick()
+        urls = [url for url, kwargs in post.calls]
+        self.assertIn(f"{app.OXTSNAV_BASE_URL}/gnss/normal", urls)
+        self.assertFalse(app._aruco_priority_active_for_run)
+        self.assertEqual(app.runner.status()["state"], "aborted")
 
     def test_two_successful_starts_leave_both_logs_on_disk(self):
         # Each run gets its own retained file, unlike the old

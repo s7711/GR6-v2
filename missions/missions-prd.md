@@ -177,6 +177,16 @@ missions:
   log_retention_days: 2
 ```
 
+### Run page: job list dropped (2026-08-14)
+
+The Run page originally listed every job in the mission above the map
+("Jobs in this mission"), alongside the map's own faded preview of
+whichever job runs next. Live feedback: it just took up space above
+the one thing actually wanted while a mission runs — the map. Removed;
+the upcoming-job preview logic (`updateUpcomingJobPreview`, keyed off
+`start-step`) is unchanged, only the separate list rendering
+(`renderJobList`) is gone.
+
 ## Deferred
 
 - **Cross-job continuity checking.** `jobs`' own save-time continuity

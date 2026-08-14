@@ -36,6 +36,7 @@ services:
     nav_feed_hz: 20
     stale_after_s: 2.0  # blank nav/status/connection once nothing's been decoded for this long — see oxts-nav-prd.md's "Staleness"
     hpr_ib: [-90, 90, 0]  # IMU-to-body mounting (mobile.vat) — read by aruco too, for GAD lever-arm/alignment frames
+    aruco_priority_timeout_s: 3.0  # "Aruco priority" mode falls back to GNSS if no marker's been seen for this long — see navigate-prd.md
 
   camera:
     unit: robot-camera.service

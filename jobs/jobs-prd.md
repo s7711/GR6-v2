@@ -312,6 +312,19 @@ jobs:
   log_retention_days: 2
 ```
 
+### Run page staying in sync with the job actually running (added 2026-08-14)
+
+Same gap `navigate`'s own Run page had, for the same reason: a mission
+driving this job's `/control/start` directly loads it without this
+page's own dropdown ever being touched, so the dropdown/map preview
+could show something stale next to a status table correctly reporting
+what's actually running. `JobRunner.status()` already published
+`job_name`; the fix is entirely client-side — `run.html`'s
+`/ws/jobs` handler now tracks whichever job name it last displayed and,
+when the feed reports a different one, updates the dropdown and
+re-fetches the step/map preview to match, same pattern as `navigate`'s
+own fix (see `navigate-prd.md`'s "Path entry").
+
 ## Out of Scope (v1 of this service)
 
 - Any step type beyond `run_path`/`pause`/`water`/`fill` (turn-in-place,

@@ -73,6 +73,30 @@ class TestPathStorage(unittest.TestCase):
         paths.save_path(self.paths_dir, "  Waterstablebed  ", SAMPLE_POINTS)
         self.assertEqual(paths.load_path(self.paths_dir, "Waterstablebed"), SAMPLE_POINTS)
 
+    def test_load_flags_defaults_when_never_saved(self):
+        paths.save_path(self.paths_dir, "garden-loop", SAMPLE_POINTS)
+        self.assertEqual(paths.load_flags(self.paths_dir, "garden-loop"), {"aruco_priority": False})
+
+    def test_save_and_load_flags_round_trip(self):
+        paths.save_flags(self.paths_dir, "garden-loop", {"aruco_priority": True})
+        self.assertEqual(paths.load_flags(self.paths_dir, "garden-loop"), {"aruco_priority": True})
+
+    def test_flags_file_is_not_picked_up_by_list_paths(self):
+        paths.save_path(self.paths_dir, "garden-loop", SAMPLE_POINTS)
+        paths.save_flags(self.paths_dir, "garden-loop", {"aruco_priority": True})
+        rows = paths.list_paths(self.paths_dir)
+        self.assertEqual([r["name"] for r in rows], ["garden-loop"])
+
+    def test_delete_path_also_removes_its_flags_file(self):
+        paths.save_path(self.paths_dir, "garden-loop", SAMPLE_POINTS)
+        paths.save_flags(self.paths_dir, "garden-loop", {"aruco_priority": True})
+        paths.delete_path(self.paths_dir, "garden-loop")
+        self.assertEqual(paths.load_flags(self.paths_dir, "garden-loop"), {"aruco_priority": False})
+
+    def test_delete_path_is_fine_if_no_flags_were_ever_saved(self):
+        paths.save_path(self.paths_dir, "garden-loop", SAMPLE_POINTS)
+        paths.delete_path(self.paths_dir, "garden-loop")  # must not raise
+
 
 if __name__ == "__main__":
     unittest.main()

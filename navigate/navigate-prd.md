@@ -615,6 +615,79 @@ looking at several runs side by side, not reading one file by eye.
   question actually in front of us; worth revisiting once more
   services have their own logs worth comparing.
 
+## Aruco priority (added 2026-08-14)
+
+Live testing (2026-08-13/14) found that GNSS accuracy noticeably
+degrades close to the water butt (plausible multipath from the butt
+itself and nearby structures), and — more surprisingly — that
+running GNSS *and* the aruco marker together produced a worse, more
+variable approach than either alone: a consistent, repeatable push
+towards believing the vehicle was further east than it really was on
+a southward approach, suspected (not proven) to be the still-
+uncalibrated camera/IMU bore-sight rather than a timing issue, given
+how repeatable the direction of the error was run to run. With GNSS
+disabled and the marker used for the whole approach, results were
+reliably consistent. Chasing the actual GNSS/aruco fusion interaction
+down properly is a real, separate task (see the bore-sight
+calibration discussion elsewhere in this project's history) — this
+feature exists so that decision doesn't block getting a reliable
+water-butt approach *now*.
+
+**Design considered and rejected**: an explicit job/mission step
+("swap to aruco only" / "swap to all aiding") that an operator inserts
+around the relevant path(s). Rejected because it's a property of the
+*path* (specific real-world geometry: GNSS is bad here, the marker is
+reliable here), not of any particular job — a per-job-step flag would
+need re-adding correctly to every job that ever touches that path,
+exactly the kind of duplication-across-jobs problem `clearance_m`
+already avoids by living on the path instead of being set per job.
+
+**What was built instead**: a per-path flag, "Aruco priority",
+checked in `create-path`/`edit-path` (a small sidecar file per path —
+see `paths.py`'s `load_flags`/`save_flags` below — not folded into the
+points file itself, since that bare-list-of-points shape is read
+directly in a dozen other places — jobs' continuity check, the
+reference-path overlay, `run.html`'s map, ... — that have no reason to
+know about path-level flags at all).
+
+- `navigate/paths.py`: `load_flags(paths_dir, name)` /
+  `save_flags(paths_dir, name, flags)`, stored as `<name>.flags.json`
+  (deliberately not `.yaml` — `list_paths()`'s `glob("*.yaml")` must
+  never pick this up as if it were a path in its own right). Missing
+  file (every path saved before this existed) defaults to
+  `{"aruco_priority": False}`, so nothing needed migrating.
+  `delete_path` also removes the sidecar if present.
+- `GET`/`POST /api/paths/<name>/flags` — separate from the existing
+  `GET`/`POST /api/paths/<name>` (which stays exactly as it was, still
+  returning/accepting a bare points list, so none of its existing
+  callers needed to change). `create-path.html`/`edit-path.html` call
+  this as a second request right after their existing save succeeds.
+- **Ownership split**: `navigate` only *asks* — it reads the flag off
+  whichever path is about to run and calls `oxts-nav` to enter/exit
+  aruco-priority mode at the right moments. `oxts-nav` owns the actual
+  xNAV command (`!disable gnss` / `!enable gnss`) and, critically, the
+  safety fallback: it becomes a client of `aruco`'s own `/ws/aruco`
+  feed (same always-connected, reconnect-on-failure pattern
+  `waterbutt`'s QC loop already uses for that same feed) and
+  automatically re-enables GNSS if no marker has been detected for
+  `aruco_priority_timeout_s` (config, default 3.0s) — regardless of
+  what `navigate` does or doesn't tell it next. Watches for *any*
+  marker, not specifically the water-butt one, so `oxts-nav` doesn't
+  need to know "the water-butt marker" is special — see
+  `oxts-nav/gnss_mode.py`.
+- **Three ways a run can end, one guarantee**: finished, aborted, or an
+  operator-requested Stop. `/control/stop` covers the last case
+  directly; the other two happen *inside* `runner.step()` with no HTTP
+  call marking the moment, so `_control_tick()` (the per-tick body
+  `_control_loop` calls, factored out for exactly this kind of testing)
+  detects the running→not-running edge itself. All three paths call
+  the same `_end_aruco_priority_if_active()`, so GNSS is restored
+  however the run actually ended — per the explicit ask: "at the end
+  of the path, remember to turn GNSS back on again."
+- **Not done**: the same flag for standalone `Pause` steps in `jobs`'
+  own editor (e.g. wanting aruco priority to continue through a fill).
+  Deliberately deferred — "let's do the path, then see if it works."
+
 ## Open question: heading-error aborts on jagged paths
 
 A real run aborted on a heading-error breach, suspected by the

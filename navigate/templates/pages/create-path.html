@@ -11,6 +11,13 @@
         <button id="new-path" class="btn btn-sm btn-outline-secondary mt-1">New (clear)</button>
         <button id="undo" class="btn btn-sm btn-outline-secondary mt-1">Undo</button>
       </div>
+      <div class="col-auto form-check mb-2">
+        <input id="aruco-priority-checkbox" class="form-check-input" type="checkbox">
+        <label class="form-check-label" for="aruco-priority-checkbox"
+               title="Disables GNSS while driving this path, using the aruco marker only. Falls back to GNSS automatically if no marker is seen for 3s, and GNSS is always restored at the end of the path.">
+          Aruco priority
+        </label>
+      </div>
       <div class="col-auto">
         <label class="form-label mb-0">Reference path</label>
         <div class="input-group">
@@ -288,6 +295,12 @@ document.getElementById("save-path").addEventListener("click", () => {
   }).then((r) => {
     document.getElementById("save-message").textContent =
       r.ok ? "Saved." : "Couldn't save (need at least 2 points, or an invalid name).";
+    if (!r.ok) return;
+    fetch(`/api/paths/${encodeURIComponent(name)}/flags`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ aruco_priority: document.getElementById("aruco-priority-checkbox").checked }),
+    });
   });
 });
 

@@ -4,6 +4,7 @@ storage" for the per-point schema (lat/lon/speed_mps/pump/clearance_m)
 and why lat/lon (not local XY) is what's persisted.
 """
 
+import json
 import math
 import re
 from pathlib import Path
@@ -11,6 +12,8 @@ from pathlib import Path
 import yaml
 
 import geometry
+
+DEFAULT_FLAGS = {"aruco_priority": False}
 
 # Only real path-traversal characters are excluded (no slashes, no
 # leading dot) — anything else, including spaces, is a normal filename
@@ -40,6 +43,12 @@ def _validate_name(name: str) -> str:
 
 def _file_for(paths_dir, name: str) -> Path:
     return Path(paths_dir) / f"{_validate_name(name)}.yaml"
+
+
+def _flags_file_for(paths_dir, name: str) -> Path:
+    # .flags.json, not .yaml - list_paths()'s glob("*.yaml") must never
+    # pick this up as if it were a path in its own right.
+    return Path(paths_dir) / f"{_validate_name(name)}.flags.json"
 
 
 def path_length_m(points: list) -> float:
@@ -87,3 +96,28 @@ def save_path(paths_dir, name: str, points: list) -> None:
 def delete_path(paths_dir, name: str) -> None:
     """Raises FileNotFoundError if the path doesn't exist."""
     _file_for(paths_dir, name).unlink()
+    _flags_file_for(paths_dir, name).unlink(missing_ok=True)
+
+
+def load_flags(paths_dir, name: str) -> dict:
+    """Per-path behavioural flags (currently just aruco_priority - see
+    navigate-prd.md's "Aruco priority") - a small sidecar file, kept
+    deliberately separate from the points file rather than folded into
+    it, since the points file's bare-list-of-points shape is read
+    directly in a dozen places (jobs' continuity check, the reference-
+    path overlay, run.html's map, ...) that have no reason to know
+    about path-level flags at all. Missing file (every path saved
+    before this existed) or missing keys default to DEFAULT_FLAGS, so
+    no path needs migrating."""
+    file = _flags_file_for(paths_dir, name)
+    if not file.exists():
+        return dict(DEFAULT_FLAGS)
+    saved = json.loads(file.read_text())
+    return {**DEFAULT_FLAGS, **saved}
+
+
+def save_flags(paths_dir, name: str, flags: dict) -> None:
+    paths_dir = Path(paths_dir)
+    paths_dir.mkdir(parents=True, exist_ok=True)
+    merged = {**DEFAULT_FLAGS, **flags}
+    _flags_file_for(paths_dir, name).write_text(json.dumps(merged))

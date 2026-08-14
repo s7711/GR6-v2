@@ -174,6 +174,7 @@ function stepDescription(index) {
 }
 
 const joystickEl = document.getElementById("joystick");
+let displayedJobName = null; // whichever job's steps are currently drawn on the map
 
 connectWs("/ws/jobs", (msg) => {
   fillFields("stat-", msg);
@@ -184,6 +185,19 @@ connectWs("/ws/jobs", (msg) => {
   const running = msg.state === "running";
   joystickEl.style.pointerEvents = running ? "none" : "auto";
   joystickEl.style.opacity = running ? "0.4" : "1";
+
+  // Stay in sync with whatever job is actually running, however it got
+  // started - a mission driving this job directly loads it without
+  // this page's own dropdown ever being touched, same gap navigate's
+  // own Run page had (see navigate-prd.md's "Path entry").
+  if (msg.job_name && msg.job_name !== displayedJobName) {
+    displayedJobName = msg.job_name;
+    if ([...jobSelect.options].some((o) => o.value === msg.job_name)) {
+      jobSelect.value = msg.job_name;
+    }
+    fillStartSteps();
+    updateMap();
+  }
 });
 
 // --- Live trail: where the robot has actually been, same mechanism as

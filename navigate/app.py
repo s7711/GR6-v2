@@ -30,6 +30,7 @@ from feed import NavigateFeedServer  # noqa: E402
 PAGES_DIR = Path(__file__).resolve().parent / "templates" / "pages"
 NAVIGATE_STATUS_HZ = 5
 DRIVE_TIMEOUT_S = 0.5
+OXTSNAV_TIMEOUT_S = 0.5
 MOVE_FORWARD_CLEARANCE_M = 0.5  # generous fixed clearance for this one internal segment — not authored into a saved path, so no need to prompt for it
 MOVE_FORWARD_TIMEOUT_S = 20.0  # safety cap — should never actually take this long for a 2m nudge
 
@@ -50,6 +51,7 @@ oxtsnav_cfg = cfg["services"]["oxts-nav"]
 
 PATHS_DIR = Path(__file__).resolve().parent.parent / service_cfg["paths_dir"]
 DRIVE_BASE_URL = f"http://localhost:{drive_cfg['port']}"  # server-to-server, same machine — not a browser-facing URL, see shared/web.py's service_url for that case
+OXTSNAV_BASE_URL = f"http://localhost:{oxtsnav_cfg['port']}"  # same — see "Aruco priority" in navigate-prd.md
 LOGS_DIR = PATHS_DIR / "logs"  # one retained file per run — see jobs'/missions' identical convention
 # The Log Viewer page (added 2026-08-12) reads waterbutt's QC logs
 # straight off disk alongside navigate's own — a read-only historical
@@ -87,6 +89,43 @@ def send_pump(on):
         requests.post(f"{DRIVE_BASE_URL}/pump", json={"on": on}, timeout=DRIVE_TIMEOUT_S)
     except requests.exceptions.RequestException:
         logging.warning("[navigate] Couldn't reach drive to send a pump command")
+
+
+# --- Aruco priority (added 2026-08-14) — see navigate-prd.md ---
+#
+# oxts-nav owns the actual GNSS toggle and the 3s no-marker fallback
+# (see its gnss_mode.py) - navigate's job is only to ask for it at the
+# right moments: entering when a flagged path's run actually starts,
+# leaving whenever that run ends, by whatever means (finished, aborted,
+# or an operator Stop). _aruco_priority_active_for_run tracks whether
+# *this* run is the one that asked, so an ordinary run never sends a
+# spurious "back to normal" - though that call is harmless/idempotent
+# either way (see gnss_mode.py's exit_aruco_priority).
+_aruco_priority_active_for_run = False
+
+
+def _maybe_enter_aruco_priority():
+    global _aruco_priority_active_for_run
+    if _current_path_name is None:
+        return
+    if not paths.load_flags(PATHS_DIR, _current_path_name).get("aruco_priority"):
+        return
+    _aruco_priority_active_for_run = True
+    try:
+        requests.post(f"{OXTSNAV_BASE_URL}/gnss/aruco-priority", timeout=OXTSNAV_TIMEOUT_S)
+    except requests.exceptions.RequestException:
+        logging.warning("[navigate] Couldn't reach oxts-nav to enter aruco-priority mode")
+
+
+def _end_aruco_priority_if_active():
+    global _aruco_priority_active_for_run
+    if not _aruco_priority_active_for_run:
+        return
+    _aruco_priority_active_for_run = False
+    try:
+        requests.post(f"{OXTSNAV_BASE_URL}/gnss/normal", timeout=OXTSNAV_TIMEOUT_S)
+    except requests.exceptions.RequestException:
+        logging.warning("[navigate] Couldn't reach oxts-nav to restore normal GNSS")
 
 
 nav_client = FeedClient(oxtsnav_cfg["nav_feed_socket"], default={"nav": {}, "status": {}, "connection": {}})
@@ -181,22 +220,39 @@ def _sweep_old_debug_logs():
             file.unlink()
 
 
+_control_loop_last_state = "idle"
+
+
+def _control_tick():
+    """One control-loop iteration, factored out of _control_loop so it
+    can be called directly in tests without the thread/sleep."""
+    global _control_loop_last_state
+    position = _current_position()
+    if position is None:
+        return
+    runner.step(position["lat"], position["lon"], position["heading_deg"], position["horizontal_accuracy_m"])
+    runner.preview(position["lat"], position["lon"], position["heading_deg"])
+    state = runner.status()["state"]
+    # Every control tick while running, not a throttled ~1Hz snapshot —
+    # this is now the data an analysis tool compares runs with, so it
+    # needs the same resolution the control loop itself acts at (see
+    # navigate-prd.md's "Debug log").
+    if state != "idle":
+        _append_debug_log(position)
+    # A path can end by finishing or aborting entirely inside
+    # runner.step() above, with no HTTP call marking the moment -
+    # /control/stop covers the operator-Stop case, this edge detection
+    # covers the other two, so aruco priority always gets switched off
+    # however the run actually ended.
+    if _control_loop_last_state == "running" and state != "running":
+        _end_aruco_priority_if_active()
+    _control_loop_last_state = state
+
+
 def _control_loop():
     period = 1.0 / service_cfg["control_hz"]
     while True:
-        position = _current_position()
-        if position is not None:
-            runner.step(
-                position["lat"], position["lon"], position["heading_deg"], position["horizontal_accuracy_m"]
-            )
-            runner.preview(position["lat"], position["lon"], position["heading_deg"])
-            state = runner.status()["state"]
-            # Every control tick while running, not a throttled ~1Hz
-            # snapshot — this is now the data an analysis tool compares
-            # runs with, so it needs the same resolution the control
-            # loop itself acts at (see navigate-prd.md's "Debug log").
-            if state != "idle":
-                _append_debug_log(position)
+        _control_tick()
         time.sleep(period)
 
 
@@ -251,6 +307,24 @@ def api_get_path(name):
         return jsonify(paths.load_path(PATHS_DIR, name))
     except (FileNotFoundError, paths.InvalidPathName):
         abort(404)
+
+
+@app.route("/api/paths/<name>/flags")
+def api_get_path_flags(name):
+    try:
+        return jsonify(paths.load_flags(PATHS_DIR, name))
+    except paths.InvalidPathName:
+        abort(404)
+
+
+@app.route("/api/paths/<name>/flags", methods=["POST"])
+def api_save_path_flags(name):
+    payload = request.get_json(force=True)
+    try:
+        paths.save_flags(PATHS_DIR, name, payload)
+    except paths.InvalidPathName:
+        abort(400)
+    return "", 204
 
 
 @app.route("/api/paths/<name>", methods=["DELETE"])
@@ -458,12 +532,14 @@ def control_start():
     result = runner.start(position["lat"], position["lon"], position["heading_deg"])
     if result["ok"]:
         _start_new_debug_log()
+        _maybe_enter_aruco_priority()
     return jsonify(result)
 
 
 @app.route("/control/stop", methods=["POST"])
 def control_stop():
     runner.stop()
+    _end_aruco_priority_if_active()
     return "", 204
 
 

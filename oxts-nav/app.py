@@ -32,6 +32,7 @@ from shared.web import manager_url, register_pages, service_url, use_shared_stat
 import ncomrx_thread  # noqa: E402
 import ucomrx_thread  # noqa: E402
 import nav_feed  # noqa: E402
+import gnss_mode  # noqa: E402
 
 XNAV_COMMAND_PORT = 3001
 # mobile.rd is the xNAV's raw data recording, not a config file — it's
@@ -70,10 +71,21 @@ nav_feed_server = nav_feed.NavFeedServer(
 
 def send_xnav_command(message: str) -> None:
     # No automatic sequence — this is only ever called for a manual,
-    # occasional command typed by the operator. See oxts-nav-prd.md
-    # ("xNAV650 commands") for why.
+    # occasional command typed by the operator, or (see gnss_mode.py)
+    # navigate asking for aruco-priority mode. See oxts-nav-prd.md
+    # ("xNAV650 commands") for why there's no dispatch logic here.
     udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     udp.sendto((message + "\n").encode("utf-8"), (xnav_ip, XNAV_COMMAND_PORT))
+
+
+aruco_cfg = cfg["services"]["aruco"]
+# 127.0.0.1, not localhost: simple_websocket's raw client, unlike
+# requests/curl, doesn't fall back from IPv6 ::1 to IPv4 on refusal -
+# see waterbutt/app.py's identical comment on its own aruco feed client.
+ARUCO_WS_URL = f"ws://127.0.0.1:{aruco_cfg['port']}/ws/aruco"
+gnss_controller = gnss_mode.GnssModeController(
+    send_xnav_command, ARUCO_WS_URL, service_cfg["aruco_priority_timeout_s"]
+)
 
 
 def download_xnav_config() -> None:
@@ -174,6 +186,23 @@ def xnav_config_reset():
     return "", 204
 
 
+@app.route("/gnss/aruco-priority", methods=["POST"])
+def gnss_aruco_priority():
+    gnss_controller.enter_aruco_priority()
+    return "", 204
+
+
+@app.route("/gnss/normal", methods=["POST"])
+def gnss_normal():
+    gnss_controller.exit_aruco_priority()
+    return "", 204
+
+
+@app.route("/gnss/status")
+def gnss_status():
+    return jsonify(gnss_controller.status())
+
+
 @sock.route("/ws/nav")
 def ws_nav(ws):
     period = 1.0 / nav_update_hz
@@ -185,6 +214,7 @@ def ws_nav(ws):
 if __name__ == "__main__":
     threading.Thread(target=download_xnav_config, daemon=True).start()
     nav_feed_server.start()
+    gnss_controller.start()
     # threaded=True: without it, Flask's dev server handles one connection
     # at a time, and /ws/nav's handler never returns (infinite loop) — so
     # a second simultaneous connection just hangs forever. Every page now

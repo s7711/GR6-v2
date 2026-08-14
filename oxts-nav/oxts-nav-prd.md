@@ -262,6 +262,40 @@ reset, never live — see "xNAV650 commands" above).
   modal warning that anything currently driving will lose its position
   feed, since a reset takes the xNAV offline for a while to reboot.
 
+## Aruco-priority GNSS mode (added 2026-08-14)
+
+`navigate` can ask this service (via `POST /gnss/aruco-priority` /
+`POST /gnss/normal`) to disable GNSS in favour of the aruco marker
+alone for specific paths — see `navigate-prd.md`'s "Aruco priority"
+for the full reasoning (live testing found GNSS+aruco together
+producing a worse, more variable water-butt approach than aruco alone
+with GNSS disabled). `navigate` only asks; this service owns the
+actual xNAV command and the safety net:
+
+- `gnss_mode.GnssModeController` sends `!disable gnss`/`!enable gnss`
+  (the exact xNAV650 command strings, confirmed live — not documented
+  anywhere else in this codebase before now) and becomes a client of
+  `aruco`'s own `/ws/aruco` feed the whole time it runs (not just
+  while in aruco-priority mode) — same always-connected,
+  reconnect-on-failure pattern `waterbutt`'s QC loop already uses for
+  that identical feed.
+- If no marker has been detected for `aruco_priority_timeout_s`
+  (config, default 3.0s) while in aruco-priority mode, GNSS is
+  re-enabled automatically — regardless of whether `navigate` ever
+  calls `/gnss/normal` itself. `navigate` asking for aruco priority is
+  a request; this timeout is the guarantee that a lost marker (camera
+  fault, marker knocked over, `aruco` itself down) can't leave the
+  robot on dead reckoning alone indefinitely.
+- Watches for *any* marker detection, not specifically a named one —
+  keeps this service from needing to know "the water-butt marker" is
+  special; the actual question this timeout answers is just "do we
+  currently have a trustworthy vision fix at all."
+- `GET /gnss/status` for visibility (`{"mode":, "last_marker_seen_at":}`).
+- The watchdog check itself is factored out as `_watchdog_tick()`
+  (called directly in tests) rather than only living inside its
+  `while True` loop — same reason `navigate`'s `_control_tick()` was
+  split out the same way.
+
 ## Config additions (shared config file)
 
 - `xnav_ip` — the xNAV650's IP address (top-level, since other future
@@ -270,8 +304,10 @@ reset, never live — see "xNAV650 commands" above).
   decoder/port `app.py` uses, read once at startup; see "NCOM/UCOM
   protocol switch" below), `nav_update_hz` (websocket publish rate),
   `nav_feed_socket`/`nav_feed_hz` (the cross-process nav feed, see
+  above), `aruco_priority_timeout_s` (see "Aruco-priority GNSS mode"
   above), plus the usual `unit`/`host`/`port`/`web_ui` fields every
-  service has. No command-related config — see "xNAV650 commands" above.
+  service has. No other command-related config — see "xNAV650
+  commands" above.
 
 ## NCOM/UCOM protocol switch
 
