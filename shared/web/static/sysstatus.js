@@ -1,34 +1,34 @@
-// Header status badges (brown-out, wifi, CPU, GPS position mode, Aruco
-// marker status) — every service's shared header watches the manager's
-// /ws/system, oxts-nav's /ws/nav, and aruco's /ws/aruco directly,
-// cross-port, via connectWsUrl (same pattern as aruco's own Map page
-// reading oxts-nav's /ws/nav). See shared/sysstats.py for what the
-// manager is reading. The oxts-nav/aruco connections are separate,
-// independently-retrying websockets (see ws-utils.js) — if either
-// service isn't running, its badge just stays at its initial "—"
-// default (set in base.html) rather than anything more elaborate.
+// Header status badges (map-manager logging, temp, wifi, CPU, GPS
+// position mode, Aruco marker status) — every service's shared header
+// watches the manager's /ws/system, oxts-nav's /ws/nav, aruco's
+// /ws/aruco, and map-manager's /ws/map-manager directly, cross-port,
+// via connectWsUrl (same pattern as aruco's own Map page reading
+// oxts-nav's /ws/nav). See shared/sysstats.py for what the manager is
+// reading. Each of these is a separate, independently-retrying
+// websocket (see ws-utils.js) — if the owning service isn't running,
+// its badge just stays at its initial "—" default (set in base.html)
+// rather than anything more elaborate.
 
 (function () {
   const wsUrl = MANAGER_URL.replace(/^http/, "ws") + "ws/system";
 
-  // Thresholds for the "Vs" (supply voltage) badge: red if an under-
-  // voltage event happened within the last 20s (or is happening now),
-  // amber within 60s, green otherwise — colour only, text stays "Vs".
-  const BROWNOUT_RED_SECONDS = 20;
-  const BROWNOUT_AMBER_SECONDS = 60;
+  // Logging on/off badge (added 2026-08-18, replacing the previous
+  // brown-out "Vs" badge — see map-manager-prd.md's "Accuracy/logging
+  // gating"): green while map-manager is actively updating the
+  // occupancy grid, red while it's off (either the manual switch, or
+  // accuracy/no-fix — same red either way, since from a glance-at-the-
+  // header point of view "not currently recording" is the only thing
+  // that matters; the home page's own eligibility message has the
+  // detail). Icon stays at its neutral default grey if map-manager
+  // itself isn't running.
+  if (MAP_MANAGER_WS_URL) {
+    connectWsUrl(MAP_MANAGER_WS_URL, (msg) => {
+      const logging = document.getElementById("sys-logging");
+      logging.className = "badge " + (msg.logging_enabled && !msg.eligibility_reason ? "text-bg-success" : "text-bg-danger");
+    });
+  }
 
   connectWsUrl(wsUrl, (msg) => {
-    const brownout = document.getElementById("sys-brownout");
-    brownout.textContent = "Vs";
-    const age = msg.brownout.age_seconds;
-    if (age !== null && age < BROWNOUT_RED_SECONDS) {
-      brownout.className = "badge text-bg-danger";
-    } else if (age !== null && age < BROWNOUT_AMBER_SECONDS) {
-      brownout.className = "badge text-bg-warning";
-    } else {
-      brownout.className = "badge text-bg-success";
-    }
-
     // Thresholds for the temperature badge (°C): red whenever vcgencmd's
     // own "currently throttled" bit is set (the SoC is actually running
     // slower right now, whatever the exact reading), or at/above 80°C —

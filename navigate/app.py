@@ -302,6 +302,7 @@ def inject_urls():
         # For the shared header's Aruco status badge — see
         # shared/web/static/sysstatus.js.
         "aruco_ws_url": service_url(browser_host, "aruco", scheme="ws") + "/ws/aruco",
+        "map_manager_ws_url": service_url(browser_host, "map-manager", scheme="ws") + "/ws/map-manager",
     }
 
 

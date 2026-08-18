@@ -34,6 +34,10 @@ waterbutt/data/
 # network/network-prd.md
 network/recovery.json
 
+# Persisted occupancy grid — this robot's real garden data, see
+# map-manager-prd.md
+map-manager/data/
+
 # Compiled firmware artifacts — a build output, not source; the .ino is
 # the source of truth, see drive-prd.md
 drive/firmware/*.hex

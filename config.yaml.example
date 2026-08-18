@@ -144,3 +144,35 @@ services:
     missions_dir: missions/data
     mission_status_hz: 2
     log_retention_days: 2
+
+  map-manager:
+    unit: robot-map-manager.service
+    host: 0.0.0.0
+    port: 8012
+    web_ui: true
+    map_dir: map-manager/data          # persisted grid.json — this robot's real garden data, not source (see .gitignore)
+    control_hz: 5                       # how often the tick loop reads the nav/drive feeds and updates the grid
+    save_interval_s: 30                 # autosave the grid to disk if anything changed since the last save
+    cell_size_m: 0.10
+    max_range_m: 1.2                    # ultrasonics aren't trusted beyond this — see map-manager-prd.md
+    beam_half_angle_deg: 7.5            # half of the ultrasonics' ~15 degree cone
+    forget_after_days: 30               # a cell with no fresh hit/miss in this long reads back as "unknown" — see grid.py's cell_value
+    min_observations: 2                 # a cell needs at least this many hit+miss readings before it's trusted at all
+    accuracy_h_max_m: 0.03              # only update the grid while oxts-nav's horizontal accuracy is at least this good
+    accuracy_v_max_m: 0.05              # same, vertical
+    map_origin_lat: 0.0                 # placeholder — SET to the waterbutt QC marker's own surveyed lat (aruco marker id 12, aruco/data/marker-map.yaml) — fixed reference point the whole persistent grid is built relative to (see map-manager-prd.md "Reference frame"). Real value deliberately not committed here - it's this robot's real-world location (see config.yaml, gitignored)
+    map_origin_lon: 0.0                 # see map_origin_lat
+    # One entry per ultrasonic sensor (5 on this robot), body frame (x
+    # forward, y right, z down, metres, from the nav system's own
+    # reference point) same lever-arm convention as wheelspeed's
+    # lever_arm_i/aruco's d_xc_b/waterbutt's funnel offset. `tag` matches
+    # drive's own ultrasonic_<tag>_mm feed field (0-indexed - see
+    # drive/firmware's ultrasonicPins array) and drive/templates/pages/
+    # ultrasonics.html's own position/facing diagram, which is where
+    # heading_deg below comes from - x/y/z are placeholders — MEASURE AND SET.
+    sensors:
+      - {tag: 0, x: 0.0, y: 0.0, z: 0.0, heading_deg: 0.0}    # front-right, facing forward
+      - {tag: 1, x: 0.0, y: 0.0, z: 0.0, heading_deg: 90.0}   # back-right, facing right
+      - {tag: 2, x: 0.0, y: 0.0, z: 0.0, heading_deg: 180.0}  # back-centre, facing backward
+      - {tag: 3, x: 0.0, y: 0.0, z: 0.0, heading_deg: 270.0}  # back-left, facing left
+      - {tag: 4, x: 0.0, y: 0.0, z: 0.0, heading_deg: 0.0}    # front-left, facing forward

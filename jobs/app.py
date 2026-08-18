@@ -202,7 +202,11 @@ def inject_urls():
     browser_host = request.host.split(":")[0]
     return {
         "manager_url": service_url(browser_host, "manager") + "/",
+        # For the shared header's GNSS/Aruco/logging status badges — see
+        # shared/web/static/sysstatus.js.
         "oxtsnav_ws_url": service_url(browser_host, "oxts-nav", scheme="ws") + "/ws/nav",
+        "aruco_ws_url": service_url(browser_host, "aruco", scheme="ws") + "/ws/aruco",
+        "map_manager_ws_url": service_url(browser_host, "map-manager", scheme="ws") + "/ws/map-manager",
     }
 
 

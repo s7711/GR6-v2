@@ -32,7 +32,16 @@
       </div>
       <div class="navbar-nav ms-auto flex-row gap-2 align-items-center">
         {% block statusbadges %}
-        <span id="sys-brownout" class="badge text-bg-secondary" title="Power / brown-out">&mdash;</span>
+        <span id="sys-logging" class="badge text-bg-secondary" title="map-manager logging">
+          <!-- License: CC Attribution. Made by salesforce: https://lightningdesignsystem.com/
+               (via https://www.svgviewer.dev/s/475083/save) -->
+          <svg viewBox="0 0 52 52" width="0.9em" height="0.9em" fill="currentColor" style="vertical-align:-0.05em">
+            <path d="M37.1,4v13.6c0,1-0.8,1.9-1.9,1.9H13.9c-1,0-1.9-0.8-1.9-1.9V4H8C5.8,4,4,5.8,4,8v36c0,2.2,1.8,4,4,4h36
+              c2.2,0,4-1.8,4-4V11.2L40.8,4H37.1z M44.1,42.1c0,1-0.8,1.9-1.9,1.9H9.9c-1,0-1.9-0.8-1.9-1.9V25.4c0-1,0.8-1.9,1.9-1.9h32.3
+              c1,0,1.9,0.8,1.9,1.9V42.1z"/>
+            <path d="M24.8,13.6c0,1,0.8,1.9,1.9,1.9h4.6c1,0,1.9-0.8,1.9-1.9V4h-8.3L24.8,13.6L24.8,13.6z"/>
+          </svg>
+        </span>
         <span id="sys-temp" class="badge text-bg-secondary" title="CPU temperature">&mdash;</span>
         <span id="sys-wifi" class="badge text-bg-secondary" title="Wifi signal">&mdash;</span>
         <span id="sys-cpu" class="badge text-bg-secondary" title="CPU load">&mdash;</span>
@@ -53,6 +62,7 @@
     // pattern as MANAGER_URL above — see sysstatus.js.
     const OXTSNAV_WS_URL = "{{ oxtsnav_ws_url|default('') }}";
     const ARUCO_WS_URL = "{{ aruco_ws_url|default('') }}";
+    const MAP_MANAGER_WS_URL = "{{ map_manager_ws_url|default('') }}";
   </script>
   <script src="/static/ncom-strings.js"></script>
   <script src="/static/sysstatus.js"></script>

@@ -1,0 +1,61 @@
+{# title: Home #}
+{% extends "base.html" %}
+{% block title %}GR6 — Map manager{% endblock %}
+
+{% block content %}
+<div class="row g-3">
+  <div class="col-12 col-md-6">
+    <div class="card">
+      <div class="card-body">
+        <div class="mb-2">
+          Logging: <strong id="stat-logging_enabled">—</strong>
+        </div>
+        <button id="enable-btn" class="btn btn-success me-2">Enable</button>
+        <button id="disable-btn" class="btn btn-danger">Disable</button>
+        <div id="eligibility-message" class="text-body-secondary small mt-2"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-md-6">
+    <div class="card">
+      <div class="card-body">
+        <table class="table table-sm mb-0">
+          <tbody>
+            <tr><th scope="row">Horizontal accuracy</th><td><span id="stat-horizontal_accuracy_m">—</span> m</td></tr>
+            <tr><th scope="row">Vertical accuracy</th><td><span id="stat-vertical_accuracy_m">—</span> m</td></tr>
+            <tr><th scope="row">Cells</th><td><span id="stat-cells">—</span></td></tr>
+            <tr><th scope="row">Overrides</th><td><span id="stat-overrides">—</span></td></tr>
+            <tr><th scope="row">Total hit / miss</th><td><span id="stat-total_hit">—</span> / <span id="stat-total_miss">—</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="text-body-secondary small mt-3">
+  No map view or human-edit UI yet — see map-manager-prd.md's "Not yet built".
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function setLogging(enabled) {
+  fetch("/logging", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
+  });
+}
+document.getElementById("enable-btn").addEventListener("click", () => setLogging(true));
+document.getElementById("disable-btn").addEventListener("click", () => setLogging(false));
+
+connectWs("/ws/map-manager", (msg) => {
+  fillFields("stat-", msg);
+  document.getElementById("stat-logging_enabled").textContent = msg.logging_enabled ? "on" : "off";
+  const el = document.getElementById("eligibility-message");
+  el.textContent = msg.eligibility_reason ? `Not updating the map: ${msg.eligibility_reason}` : "Updating the map.";
+});
+</script>
+{% endblock %}

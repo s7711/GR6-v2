@@ -101,6 +101,7 @@ def inject_urls():
         # shared/web/static/sysstatus.js. Loops back to this same
         # service, same as any other service's — harmless.
         "aruco_ws_url": service_url(browser_host, "aruco", scheme="ws") + "/ws/aruco",
+        "map_manager_ws_url": service_url(browser_host, "map-manager", scheme="ws") + "/ws/map-manager",
     }
 
 
