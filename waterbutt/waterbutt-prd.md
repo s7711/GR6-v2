@@ -268,6 +268,54 @@ independently of disk space: that page reads a whole file's contents
 into JS, and multiple days of continuous 2Hz readings in one file
 would make it slow before disk space was ever a concern.
 
+### Tank level estimate (added 2026-08-18)
+
+This robot's current electronics have no actual level sensor for the
+water butt (newer electronics being planned do, but that's a separate,
+later change). The recurring real problem this solves: if a job/
+mission fails partway and Ben has to recover the robot by hand, there
+was no way to tell whether the tank was full, empty, or partway without
+physically going and looking - and, worse, no way for a job to safely
+auto-refill at the start of a run, since it had no idea what state the
+tank was already in.
+
+**The estimate**: `level.py`'s `LevelEstimate` accumulates seconds the
+pump has been *observed* running (via `drive`'s own `pump` telemetry,
+read over the same `FeedClient`/`drive_feed_socket` mechanism
+`map-manager` uses for ultrasonics - not just whether this service
+itself commanded it, so a manually-jogged pump run from `drive`'s own
+page counts too) since the tank was last considered full. Once that
+reaches `drain_confirm_s` (config, default 60 - draining takes ~60s,
+filling ~50s, per field measurement), the tank is `believed_empty`.
+
+**Gating `/go`**: a second, independent check alongside the existing QC
+gate (see "QC gating on fill" above) - refuses (`409`, its own reason)
+unless `believed_empty()`. A successful `/go` immediately calls
+`level.mark_full()` (the "reset" side of things), since starting a fill
+means the tank will be full again. This reuses `jobs`' existing skip-
+not-abort mechanism for free: `jobs/app.py`'s `waterbutt_go()` already
+treats *any* `409` from `/go` as "skip this fill, keep the job/mission
+going" (generalised from QC-only to either refusal in the same change -
+see jobs-prd.md's "Fill step refusal") - exactly Ben's ask, that a job
+should move on rather than abort if the tank isn't confirmed empty yet.
+
+**Starts "believed full" on every process start, deliberately** - no
+persistence across a restart. Ben's own call: on service start, assume
+full even though it's usually actually empty at that point, since a
+wrong "full" only costs one skipped fill (annoying, safe) while a wrong
+"empty" risks actually overflowing (not safe). This also means the
+estimate doesn't need a saved-state file at all - simpler than initially
+planned, once this default was chosen.
+
+**Manual correction**: `POST /level/mark-full` / `POST /level/mark-
+empty` (Ben's own ask, "I may as well have a mark full") - for the
+exact recovery case this is meant to help with: go and look, then
+resync the estimate without waiting out a fake `drain_confirm_s`.
+Surfaced on the Run page next to the QC display, alongside the current
+"Ns / drain_confirm_s seen" progress. Nothing enforces or validates a
+manual mark against reality - it's a direct correction, same trust
+level as an operator's own QC marker survey.
+
 ### Icon
 
 Per the ask: a bucket-with-water-drop glyph, white-on-black-circle,
@@ -291,6 +339,7 @@ waterbutt:
   qc_default_threshold_m: 0.08   # see "QC gating on fill" above
   log_retention_days: 2          # see "QC reading log" above
   qc_log_rotate_s: 3600          # see "QC reading log" above
+  drain_confirm_s: 60            # see "Tank level estimate" above
 ```
 
 `hostname` (not the wifi SSID/password — those live only on the

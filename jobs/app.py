@@ -117,11 +117,12 @@ def waterbutt_go(duration_s):
     try:
         resp = requests.post(f"{WATERBUTT_BASE_URL}/go", json={"duration_s": duration_s}, timeout=NAVIGATE_TIMEOUT_S)
         if resp.status_code != 200:
-            # e.g. the QC marker check refusing (409, with its own
-            # specific reason) - surface that, not a generic message,
-            # so the step log actually says why. qc_refused (409
+            # e.g. the QC marker check refusing, or (added 2026-08-18)
+            # the tank-level estimate saying it isn't confident the
+            # butt is empty - surface that, not a generic message, so
+            # the step log actually says why. `refused` (409
             # specifically, never any other status) lets JobRunner tell
-            # "marker not visible" apart from a genuine failure (bad
+            # either of those apart from a genuine failure (bad
             # request, waterbutt unreachable) - see control.py's fill
             # step handling.
             try:
@@ -131,7 +132,7 @@ def waterbutt_go(duration_s):
             return {
                 "ok": False,
                 "reason": reason or f"waterbutt refused duration_s={duration_s}",
-                "qc_refused": resp.status_code == 409,
+                "refused": resp.status_code == 409,
             }
         return {"ok": True}
     except requests.exceptions.RequestException:

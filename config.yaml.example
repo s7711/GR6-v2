@@ -126,6 +126,7 @@ services:
     qc_default_threshold_m: 0.08  # used whenever /go's own caller doesn't pick a tolerance (e.g. jobs' `fill` step) — see waterbutt-prd.md's "QC gating on fill"
     log_retention_days: 2  # QC reading logs (waterbutt/data/logs/) — same convention/value as navigate/jobs/missions
     qc_log_rotate_s: 3600  # rotate to a fresh QC log file this often while the service keeps running — see app.py's _start_new_qc_log
+    drain_confirm_s: 60    # /go refuses a fill until the pump's been observed running at least this long since the tank was last full — see waterbutt-prd.md's "Tank level estimate"
 
   jobs:
     unit: robot-jobs.service

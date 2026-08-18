@@ -12,7 +12,7 @@
           <select id="mission-select" class="form-select">
             <option value="">-- choose a mission --</option>
             {% for m in missions %}
-            <option value="{{ m.name }}" data-step-count="{{ m.step_count }}">{{ m.name }} ({{ m.step_count }} jobs)</option>
+            <option value="{{ m.name }}">{{ m.name }} ({{ m.step_count }} jobs)</option>
             {% endfor %}
           </select>
         </div>
@@ -92,15 +92,20 @@ const startStepSelect = document.getElementById("start-step");
 const map = createGeoMap(document.getElementById("map-canvas"), document.getElementById("map-wrapper"), ".zoom-btn");
 map.setZoom("auto");
 
+// Rebuilds the "Start from job" dropdown from currentSteps (already
+// fetched by refreshUpcomingJob) so each entry reads e.g. "2 (water-the-tomatoes)"
+// - same idea as jobs' own Run page (2026-08-18).
 function fillStartSteps() {
-  const opt = missionSelect.selectedOptions[0];
-  const stepCount = opt ? parseInt(opt.dataset.stepCount || "0", 10) : 0;
+  const selected = startStepSelect.value;
   startStepSelect.innerHTML = "";
-  for (let i = 0; i < stepCount; i++) {
+  currentSteps.forEach((step, i) => {
     const o = document.createElement("option");
     o.value = i;
-    o.textContent = `${i}`;
+    o.textContent = `${i} (${stepDescription(i)})`;
     startStepSelect.appendChild(o);
+  });
+  if (selected && [...startStepSelect.options].some((o) => o.value === selected)) {
+    startStepSelect.value = selected;
   }
 }
 
@@ -142,22 +147,19 @@ function updateUpcomingJobPreview() {
 
 function refreshUpcomingJob() {
   const name = missionSelect.value;
-  if (!name) { currentSteps = []; updateUpcomingJobPreview(); return; }
+  if (!name) { currentSteps = []; fillStartSteps(); updateUpcomingJobPreview(); return; }
   fetch(`/api/missions/${encodeURIComponent(name)}`).then((r) => (r.ok ? r.json() : null)).then((mission) => {
     currentSteps = mission ? mission.steps : [];
+    fillStartSteps();
     updateUpcomingJobPreview();
   });
 }
 
-missionSelect.addEventListener("change", () => {
-  fillStartSteps();
-  refreshUpcomingJob();
-});
+missionSelect.addEventListener("change", refreshUpcomingJob);
 startStepSelect.addEventListener("change", updateUpcomingJobPreview);
 
 const preselect = new URLSearchParams(window.location.search).get("mission");
 if (preselect) missionSelect.value = preselect;
-fillStartSteps();
 refreshUpcomingJob();
 map.resize();
 

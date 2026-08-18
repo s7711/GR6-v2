@@ -238,6 +238,15 @@ class NcomRx:
         self.status['InsNavMode'] = int(self.ncomBytes[21])
         
         if self.nav['InsNavMode'] in [0,5,6,7]:
+            # All quantities are invalid - self.nav/self.status are
+            # single long-lived dicts for this process's whole life
+            # (see __init__), so without clearing them here a value
+            # from before whatever caused this mode (e.g. the xNAV
+            # being reset) would otherwise just sit there forever,
+            # unchanged, and get reported as current - found live
+            # 2026-08-18, a stale Heading (among others) surviving an
+            # xNAV reset until oxts-nav itself was restarted.
+            self.nav = {'InsNavMode': self.nav['InsNavMode']}
             self.status = {}
             # Remove this packet
             self.ncomBytes = self.ncomBytes[NOUTPUT_PACKET_LENGTH:]
@@ -311,6 +320,15 @@ class NcomRx:
             self.nav['Heading'] = h if h >= 0.0 else h + 360.0
             self.nav['Pitch']   = int.from_bytes(self.ncomBytes[55:58], byteorder = 'little', signed=True) * ANG2RAD * RAD2DEG
             self.nav['Roll']    = int.from_bytes(self.ncomBytes[58:61], byteorder = 'little', signed=True) * ANG2RAD * RAD2DEG
+        else:
+            # Reacquiring (e.g. modes 1/2, IMU-only, just after a reset)
+            # is a valid mode - doesn't hit the InsNavMode in [0,5,6,7]
+            # branch above - but still has no real position/heading yet.
+            # Clear rather than leave whatever was last decoded before
+            # this mode started sitting there, same reasoning as that
+            # branch's own comment.
+            for key in ('Lat', 'Lon', 'Alt', 'Vn', 'Ve', 'Vd', 'Heading', 'Pitch', 'Roll'):
+                self.nav.pop(key, None)
 
         if self.nav['InsNavMode'] in [1,2,3,4,10,20,21,22]:
             # Decode Batch S

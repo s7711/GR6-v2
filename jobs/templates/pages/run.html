@@ -12,7 +12,7 @@
           <select id="job-select" class="form-select">
             <option value="">-- choose a job --</option>
             {% for m in jobs %}
-            <option value="{{ m.name }}" data-step-count="{{ m.step_count }}">{{ m.name }} ({{ m.step_count }} steps)</option>
+            <option value="{{ m.name }}">{{ m.name }} ({{ m.step_count }} steps)</option>
             {% endfor %}
           </select>
         </div>
@@ -95,26 +95,32 @@ const startStepSelect = document.getElementById("start-step");
 const map = createGeoMap(document.getElementById("map-canvas"), document.getElementById("map-wrapper"), ".zoom-btn");
 map.setZoom("auto");
 
+// Rebuilds the "Start from step" dropdown from currentJobSteps (already
+// fetched by updateMap) so each entry reads e.g. "2 (Waterbutt8)" -
+// Ben's own idea (2026-08-18): the plain index was fine until jobs got
+// longer, at which point knowing *which* path/step you're picking
+// without cross-checking the table below it matters a lot more.
 function fillStartSteps() {
-  const opt = jobSelect.selectedOptions[0];
-  const stepCount = opt ? parseInt(opt.dataset.stepCount || "0", 10) : 0;
+  const selected = startStepSelect.value;
   startStepSelect.innerHTML = "";
-  for (let i = 0; i < stepCount; i++) {
+  currentJobSteps.forEach((step, i) => {
     const o = document.createElement("option");
     o.value = i;
-    o.textContent = `${i}`;
+    o.textContent = `${i} (${stepDescription(i)})`;
     startStepSelect.appendChild(o);
+  });
+  if (selected && [...startStepSelect.options].some((o) => o.value === selected)) {
+    startStepSelect.value = selected;
   }
 }
-jobSelect.addEventListener("change", () => {
-  fillStartSteps();
-  updateMap();
-});
+jobSelect.addEventListener("change", updateMap);
 
 let lastRenderedStepCount = 0;
 function updateMap() {
   const name = jobSelect.value;
   if (!name) {
+    currentJobSteps = [];
+    fillStartSteps();
     for (let i = 0; i < lastRenderedStepCount; i++) map.setLayer(`step-${i}`, []);
     lastRenderedStepCount = 0;
     map.resize();
@@ -124,6 +130,7 @@ function updateMap() {
     if (!job) return;
     const steps = job.steps;
     currentJobSteps = steps;
+    fillStartSteps();
     const names = [...new Set(steps.map((s) => s.path).filter(Boolean))];
     const toFetch = names.filter((n) => !(n in pathPointsCache));
     Promise.all(toFetch.map((pathName) =>
@@ -146,7 +153,6 @@ function updateMap() {
 
 const preselect = new URLSearchParams(window.location.search).get("job");
 if (preselect) jobSelect.value = preselect;
-fillStartSteps();
 updateMap();
 map.resize();
 
@@ -197,7 +203,6 @@ connectWs("/ws/jobs", (msg) => {
     if ([...jobSelect.options].some((o) => o.value === msg.job_name)) {
       jobSelect.value = msg.job_name;
     }
-    fillStartSteps();
     updateMap();
   }
 });

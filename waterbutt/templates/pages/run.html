@@ -34,6 +34,24 @@
     </div>
   </div>
 </div>
+
+<div class="row g-3 justify-content-center">
+  <div class="col-12 col-md-6">
+    <div class="card">
+      <div class="card-body">
+        <div class="text-body-secondary small">
+          Tank level (estimated — this robot has no level sensor, see
+          waterbutt-prd.md's "Tank level estimate")
+        </div>
+        <div class="mt-1">
+          <span id="level-message">—</span>
+        </div>
+        <button id="mark-full-btn" class="btn btn-outline-secondary btn-sm mt-2 me-2">Mark full</button>
+        <button id="mark-empty-btn" class="btn btn-outline-secondary btn-sm mt-2">Mark empty</button>
+      </div>
+    </div>
+  </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -84,6 +102,28 @@ connectWs("/ws/waterbutt", (msg) => {
   stopBtn.disabled = !watering;
   document.getElementById("remaining-wrap").classList.toggle("d-none", !watering);
   renderQcMarker(msg.qc_marker);
+  renderLevel(msg.level);
+});
+
+// --- Tank level: no real sensor on this robot's current electronics -
+// see level.py/waterbutt-prd.md's "Tank level estimate". believed_empty
+// gates /go itself (server-side, refusing with 409 same as the QC
+// check) - this is just the display plus the two manual corrections.
+
+const levelMessage = document.getElementById("level-message");
+
+function renderLevel(level) {
+  if (!level) { levelMessage.textContent = "—"; return; }
+  levelMessage.textContent = level.believed_empty
+    ? "Believed empty — ready to fill"
+    : `Not yet confirmed empty (${level.pump_seconds_since_full.toFixed(0)}s / ${level.drain_confirm_s}s pump time seen)`;
+}
+
+document.getElementById("mark-full-btn").addEventListener("click", () => {
+  fetch("/level/mark-full", { method: "POST" });
+});
+document.getElementById("mark-empty-btn").addEventListener("click", () => {
+  fetch("/level/mark-empty", { method: "POST" });
 });
 
 // --- QC marker: a GNSS-independent "is the robot where it should be"

@@ -23,6 +23,7 @@ from simple_websocket import Client as WsClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from shared.config import load_config  # noqa: E402
+from shared.feed_client import FeedClient  # noqa: E402
 from shared.web import register_pages, service_url, use_shared_static, use_shared_templates  # noqa: E402
 
 sys.path.append(str(Path(__file__).resolve().parent.parent / "aruco"))  # append, not insert(0) - see jobs/continuity.py's comment: insert(0) here risked shadowing this directory's own same-named modules in a same-process test run
@@ -31,6 +32,7 @@ import coords  # noqa: E402
 import qc_check  # noqa: E402
 import qc_marker  # noqa: E402
 from control import ValveController  # noqa: E402
+from level import LevelEstimate  # noqa: E402
 
 PAGES_DIR = Path(__file__).resolve().parent / "templates" / "pages"
 WATERBUTT_STATUS_HZ = 2
@@ -49,6 +51,7 @@ QC_THRESHOLD_OPTIONS_M = [0.05, 0.08, 0.10]
 cfg = load_config()
 service_cfg = cfg["services"]["waterbutt"]
 aruco_cfg = cfg["services"]["aruco"]
+drive_cfg = cfg["services"]["drive"]
 
 # Used for a /go call that doesn't pick a tolerance at all (e.g. jobs'
 # `fill` step, which has no threshold selector of its own yet) - a
@@ -65,6 +68,12 @@ QC_DXC_B = tuple(aruco_cfg["camera_extrinsics"]["d_xc_b"])
 QC_FUNNEL_OFFSET_C = tuple(cfg["waterbutt_funnel_offset_c"])  # camera -> funnel, in c - see config.yaml's comment
 ARUCO_WS_URL = f"ws://127.0.0.1:{aruco_cfg['port']}/ws/aruco"  # server-to-server, same machine — 127.0.0.1 not localhost: simple_websocket's raw client, unlike requests/curl, doesn't fall back from IPv6 ::1 to IPv4 on refusal
 QC_RECONNECT_DELAY_S = 2.0
+
+# See level.py/waterbutt-prd.md's "Tank level estimate" - drive's own
+# `pump` telemetry (not just whether *this* service commanded it), so a
+# manually-jogged pump run from drive's own page counts too.
+drive_client = FeedClient(drive_cfg["drive_feed_socket"], default={})
+level = LevelEstimate(service_cfg["drain_confirm_s"])
 
 app = Flask(__name__)
 use_shared_templates(app)
@@ -230,6 +239,7 @@ def _tick_loop():
     period = 1.0 / TICK_HZ
     while True:
         valve.tick()
+        level.set_pump_on(bool(drive_client.latest().get("pump")))
         time.sleep(period)
 
 
@@ -305,8 +315,27 @@ def go():
     if not qc_check.passes(reading, threshold_m):
         return jsonify({"ok": False, "reason": _qc_refusal_reason(reading, threshold_m)}), 409
 
+    # Not confident the butt is actually empty - refuse rather than
+    # risk overflowing. See waterbutt-prd.md's "Tank level estimate".
+    if not level.believed_empty():
+        remaining_s = service_cfg["drain_confirm_s"] - level.status()["pump_seconds_since_full"]
+        return jsonify({"ok": False, "reason": f"not confident the butt is empty yet ({remaining_s:.0f}s more pump time needed, or Mark empty)"}), 409
+
     valve.go(duration_s)
+    level.mark_full()  # a fill starting means it's (about to be) full again - see level.py's "reset"
     return jsonify(valve.status())
+
+
+@app.route("/level/mark-full", methods=["POST"])
+def level_mark_full():
+    level.mark_full()
+    return jsonify(level.status())
+
+
+@app.route("/level/mark-empty", methods=["POST"])
+def level_mark_empty():
+    level.mark_empty()
+    return jsonify(level.status())
 
 
 @app.route("/stop", methods=["POST"])
@@ -319,7 +348,7 @@ def stop():
 def ws_waterbutt(ws):
     period = 1.0 / WATERBUTT_STATUS_HZ
     while True:
-        ws.send(json.dumps({**valve.status(), "qc_marker": get_qc_reading()}))
+        ws.send(json.dumps({**valve.status(), "qc_marker": get_qc_reading(), "level": level.status()}))
         time.sleep(period)
 
 
@@ -333,6 +362,7 @@ register_pages(app, PAGES_DIR, index_slug="run", context_providers={"run": run_c
 if __name__ == "__main__":
     _sweep_old_qc_logs()
     _start_new_qc_log()
+    drive_client.start()
     threading.Thread(target=_tick_loop, daemon=True).start()
     threading.Thread(target=_qc_loop, daemon=True).start()
     app.run(host=service_cfg["host"], port=service_cfg["port"], threaded=True)

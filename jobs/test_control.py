@@ -450,7 +450,7 @@ class TestFillStep(unittest.TestCase):
         # obscured QC marker.
         clock = FakeClock()
         runner, stub, hw = make_runner(clock)
-        hw.waterbutt_go_result = {"ok": False, "reason": "QC marker 7 not visible", "qc_refused": True}
+        hw.waterbutt_go_result = {"ok": False, "reason": "QC marker 7 not visible", "refused": True}
         runner.go("m", [{"type": "fill", "duration_s": 20}, {"type": "pause", "duration_s": 1}])
         status = runner.status()
         self.assertEqual(status["state"], "running")
@@ -461,7 +461,7 @@ class TestFillStep(unittest.TestCase):
     def test_fill_step_qc_refusal_on_last_step_finishes_the_job_ok(self):
         clock = FakeClock()
         runner, stub, hw = make_runner(clock)
-        hw.waterbutt_go_result = {"ok": False, "reason": "QC marker 7 not visible", "qc_refused": True}
+        hw.waterbutt_go_result = {"ok": False, "reason": "QC marker 7 not visible", "refused": True}
         runner.go("m", [{"type": "fill", "duration_s": 20}])
         status = runner.status()
         self.assertEqual(status["state"], "stopped_ok")

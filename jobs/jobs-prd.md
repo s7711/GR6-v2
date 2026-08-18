@@ -199,21 +199,24 @@ button. `fill`'s duration options are drawn from `waterbutt`'s own
 same fixed set offered for `pause`/`water` — a duration `waterbutt`
 would just reject isn't offered as a choice in the first place.
 
-**Fill step QC refusal (added 2026-08-15):** if `waterbutt`'s own QC
-gating refuses the fill (its check marker isn't visible, unconfigured,
-unreachable, or too far from ideal — see `waterbutt-prd.md`'s "QC
-gating on fill"), the step is **skipped, not failed** — logged with
-outcome `"skipped_no_water"` and the refusal reason, then the job moves
-on to its next step as if the fill had completed. Originally this
+**Fill step refusal (added 2026-08-15, generalised 2026-08-18):** if
+`waterbutt` itself refuses the fill — its QC check marker isn't
+visible, unconfigured, unreachable, or too far from ideal (see
+`waterbutt-prd.md`'s "QC gating on fill"), or its tank-level estimate
+isn't confident the butt is actually empty (see waterbutt-prd.md's
+"Tank level estimate") — the step is **skipped, not failed** — logged
+with outcome `"skipped_no_water"` and the refusal reason, then the job
+moves on to its next step as if the fill had completed. Originally this
 aborted the whole job (and, via `missions`' own abort-propagation, the
 entire mission) the same as any other failed step; live use showed that
-one obscured marker on one bed shouldn't cancel an entire watering
-round when the alternative — one dry bed — is comfortably the lesser
-problem. Distinguished from a genuine failure (bad request, `waterbutt`
-unreachable entirely) by `waterbutt`'s `/go` returning `409`
-specifically for a QC refusal (`jobs/app.py`'s `waterbutt_go` sets
-`qc_refused: True` only for that status code) — those other failures
-still abort the job as before.
+one obscured marker (or an unconfirmed-empty tank) on one bed shouldn't
+cancel an entire watering round when the alternative — one dry bed — is
+comfortably the lesser problem. Distinguished from a genuine failure
+(bad request, `waterbutt` unreachable entirely) by `waterbutt`'s `/go`
+returning `409` specifically for either of its own refusals
+(`jobs/app.py`'s `waterbutt_go` sets `refused: True` only for that
+status code, regardless of which check inside waterbutt triggered it)
+— those other failures still abort the job as before.
 
 **Turn to heading (added 2026-08-18):** a fifth step type, `turn_to_
 heading` (`heading_deg`, optional `tolerance_deg`) — some plants are

@@ -234,6 +234,30 @@ includes that key — `translateNcomCodes()` needed no equivalent fix,
 since every caller already calls `fillFields()` on the same prefix/
 data immediately before it, which now blanks the shared element first.
 
+**A second, narrower version of the same bug (found 2026-08-18):**
+`stale_after_s` only covers packets stopping *entirely*. Resetting the
+xNAV stops packets for a while (triggering the blanking above), but
+once it reboots and starts sending again — before it's re-acquired a
+real position/heading — packets are flowing, so nothing's stale by the
+above definition, yet `ncomrx.py`'s `decoder.nav`/`status` are single
+long-lived dicts for the whole process's life, and several fields
+(`Lat`/`Lon`/`Heading`/etc.) were only ever *set* when `InsNavMode`
+indicated they were valid, never *cleared* when it didn't. A value from
+before the reset just sat there, now looking current since real packets
+were arriving again — e.g. Heading showing a stale reading with no
+actual fix yet, only fixed by restarting oxts-nav itself (which starts
+both dicts fresh). Fixed in `ncomrx.py`'s `decode()`: the
+`InsNavMode in [0,5,6,7]` ("all quantities invalid") branch now clears
+`self.nav`/`self.status` instead of only `self.status`, and the
+position/velocity/attitude fields are now explicitly popped whenever
+`InsNavMode` isn't one of the modes that decodes them (e.g. an
+IMU-only reacquisition mode right after a reset — valid enough to skip
+the branch above, but still with no real position/heading yet). No
+dedicated test added — `ncomrx.py`'s `decode()` has no unit tests at
+all today (it works on raw byte-level NCOM packets with sync/checksum
+framing), consistent with the rest of this file, not a gap introduced
+by this fix.
+
 ## xNAV config editing and reset (added 2026-08-11)
 
 The "download and view only" config page now supports editing and

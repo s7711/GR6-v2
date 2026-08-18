@@ -36,6 +36,11 @@ class WaterbuttAppTestCase(unittest.TestCase):
         app.LOGS_DIR = Path(tempfile.mkdtemp()) / "logs"
         app._qc_log_path = None
         app._set_qc_reading({"state": "not_configured"})
+        # These tests are about QC gating specifically - start each one
+        # already past the separate tank-level gate (see
+        # TestTankLevelGating below for that gate's own tests) so it
+        # doesn't interfere.
+        app.level.mark_empty()
         self.client = app.app.test_client()
 
     def test_go_refused_when_no_qc_marker_configured(self):
@@ -145,6 +150,48 @@ class WaterbuttAppTestCase(unittest.TestCase):
 
         self.assertFalse(old_file.exists())
         self.assertTrue(new_file.exists())
+
+
+class TestTankLevelGating(unittest.TestCase):
+    """/go's second gate (added 2026-08-18) - see level.py/waterbutt-
+    prd.md's "Tank level estimate". QC is set to always pass here so
+    only the level gate is under test."""
+
+    def setUp(self):
+        self.valve_stub = ValveStub()
+        app.valve = self.valve_stub
+        app.LOGS_DIR = Path(tempfile.mkdtemp()) / "logs"
+        app._qc_log_path = None
+        app._set_qc_reading({"state": "ok", "distance_m": 0.0})
+        self.client = app.app.test_client()
+
+    def test_go_refused_when_not_believed_empty(self):
+        resp = self.client.post("/go", json={"duration_s": 5})
+        self.assertEqual(resp.status_code, 409)
+        self.assertIn("not confident the butt is empty", resp.get_json()["reason"])
+        self.assertEqual(self.valve_stub.go_calls, [])
+
+    def test_go_allowed_once_believed_empty(self):
+        app.level.mark_empty()
+        resp = self.client.post("/go", json={"duration_s": 5})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(self.valve_stub.go_calls, [5])
+
+    def test_successful_go_marks_full_again(self):
+        app.level.mark_empty()
+        self.client.post("/go", json={"duration_s": 5})
+        self.assertFalse(app.level.believed_empty())
+
+    def test_mark_empty_endpoint_allows_a_subsequent_go(self):
+        self.client.post("/level/mark-empty")
+        resp = self.client.post("/go", json={"duration_s": 5})
+        self.assertEqual(resp.status_code, 200)
+
+    def test_mark_full_endpoint_refuses_a_subsequent_go(self):
+        app.level.mark_empty()
+        self.client.post("/level/mark-full")
+        resp = self.client.post("/go", json={"duration_s": 5})
+        self.assertEqual(resp.status_code, 409)
 
 
 if __name__ == "__main__":

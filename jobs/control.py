@@ -120,8 +120,8 @@ class JobRunner:
         elif step_type == "fill":
             result = self.waterbutt_go(step["duration_s"])
             if not result.get("ok"):
-                if result.get("qc_refused"):
-                    self._skip_qc_refused_fill(step_index, result.get("reason"))
+                if result.get("refused"):
+                    self._skip_refused_fill(step_index, result.get("reason"))
                 else:
                     self._fail_step(step_index, "failed_to_start", result.get("reason", "couldn't start filling"))
                 return
@@ -179,12 +179,14 @@ class JobRunner:
             self.abort_reason = reason
             self.step_log.append({"index": step_index, **self._step_summary(step_index), "outcome": outcome, "reason": reason})
 
-    def _skip_qc_refused_fill(self, step_index: int, reason: str):
-        """A fill refused purely because the QC marker wasn't visible
-        (2026-08-15) - keep the job (and, via missions, the whole round)
-        going without water rather than aborting over one obscured
-        marker. Distinct from _fail_step: still logged (so a dry bed
-        shows up in the step log/history), just doesn't stop anything."""
+    def _skip_refused_fill(self, step_index: int, reason: str):
+        """A fill refused by waterbutt itself - the QC marker wasn't
+        visible (2026-08-15), or (2026-08-18) the tank-level estimate
+        isn't confident the butt is actually empty - keep the job (and,
+        via missions, the whole round) going without water rather than
+        aborting over it. Distinct from _fail_step: still logged (so a
+        dry bed shows up in the step log/history), just doesn't stop
+        anything."""
         next_step_index = None
         with self.lock:
             if self.state != "running" or self.current_step_index != step_index:
