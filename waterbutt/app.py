@@ -9,6 +9,7 @@ implements.
 
 import datetime
 import json
+import socket
 import sys
 import threading
 import time
@@ -33,7 +34,7 @@ from control import ValveController  # noqa: E402
 
 PAGES_DIR = Path(__file__).resolve().parent / "templates" / "pages"
 WATERBUTT_STATUS_HZ = 2
-TICK_HZ = 2
+TICK_HZ = 1  # see control.py's REOPEN_INTERVAL_S comment - this needs to keep up with a sub-1s reopen interval
 VALVE_TIMEOUT_S = 3.0  # the ESP8266's own /open,/close handler blocks for ~0.5s moving the servo, plus wifi round-trip
 # Slider steps — non-linear, matching how short a watering burst is
 # actually useful for vs. a longer soak; also the server-side allow-list
@@ -56,7 +57,7 @@ aruco_cfg = cfg["services"]["aruco"]
 # waterbutt-prd.md's "QC gating on fill".
 QC_DEFAULT_THRESHOLD_M = service_cfg["qc_default_threshold_m"]
 
-VALVE_BASE_URL = f"http://{service_cfg['hostname']}"
+VALVE_HOSTNAME = service_cfg["hostname"]
 QC_MARKER_PATH = Path(__file__).resolve().parent.parent / service_cfg["qc_marker_file"]
 LOGS_DIR = Path(__file__).resolve().parent / "data" / "logs"
 QC_HPR_CB = tuple(aruco_cfg["camera_extrinsics"]["hpr_cb"])
@@ -71,17 +72,61 @@ use_shared_static(app)
 sock = Sock(app)
 
 
-def send_open():
+# `VALVE_HOSTNAME` is mDNS (avahi/nss-mdns) - resolving it fresh on
+# every single /open call (2026-08-15: measured live, ~1 in 20-30
+# calls) occasionally stalls for 2.5-2.8s, eating almost all of
+# VALVE_TIMEOUT_S before the actual HTTP request even starts. A
+# phone/browser hitting the same hostname doesn't show this because it
+# caches the resolved address far longer than a bare requests.get()
+# call does. Resolved once and cached as an IP instead; re-resolved
+# only after a request actually fails (the ESP8266's DHCP address can
+# shift too, same as amundsen's own wifi IP did) rather than on every
+# call.
+_valve_ip_lock = threading.Lock()
+_valve_ip = None
+
+
+def _resolve_valve_ip():
+    global _valve_ip
     try:
-        requests.get(f"{VALVE_BASE_URL}/open", timeout=VALVE_TIMEOUT_S, allow_redirects=False)
+        ip = socket.gethostbyname(VALVE_HOSTNAME)
+    except OSError as e:
+        app.logger.warning("[waterbutt] Couldn't resolve valve hostname %s: %s", VALVE_HOSTNAME, e)
+        return None
+    with _valve_ip_lock:
+        _valve_ip = ip
+    return ip
+
+
+def _valve_base_url():
+    with _valve_ip_lock:
+        ip = _valve_ip
+    if ip is None:
+        ip = _resolve_valve_ip()
+    return f"http://{ip}" if ip else None
+
+
+def send_open():
+    base = _valve_base_url()
+    if base is None:
+        app.logger.warning("[waterbutt] Couldn't reach the valve to open it (no address)")
+        return
+    try:
+        requests.get(f"{base}/open", timeout=VALVE_TIMEOUT_S, allow_redirects=False)
     except requests.exceptions.RequestException:
         app.logger.warning("[waterbutt] Couldn't reach the valve to open it")
+        _resolve_valve_ip()  # address may have moved - pick that up for the next attempt, not this one
 
 
 def send_close():
+    base = _valve_base_url()
+    if base is None:
+        app.logger.warning("[waterbutt] Couldn't reach the valve to close it (no address)")
+        return
     try:
-        requests.get(f"{VALVE_BASE_URL}/close", timeout=VALVE_TIMEOUT_S, allow_redirects=False)
+        requests.get(f"{base}/close", timeout=VALVE_TIMEOUT_S, allow_redirects=False)
     except requests.exceptions.RequestException:
+        _resolve_valve_ip()
         app.logger.warning("[waterbutt] Couldn't reach the valve to close it")
 
 

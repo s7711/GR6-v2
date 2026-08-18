@@ -38,9 +38,8 @@ between "valve stuck open" and safety, so this service leans on it
 rather than replacing it — see `control.py`'s `ValveController`:
 
 - **Go**: calls `/open` immediately, and again every
-  `REOPEN_INTERVAL_S` (3s — comfortably inside the firmware's 5s
-  window) for as long as the requested duration lasts, via a
-  background tick loop (`app.py`'s `_tick_loop`, 2Hz).
+  `REOPEN_INTERVAL_S` for as long as the requested duration lasts, via
+  a background tick loop (`app.py`'s `_tick_loop`).
 - **Duration elapses**: the next tick calls `/close` and returns to
   idle — no separate timer thread per run, one shared tick handles it.
 - **Stop**: always calls `/close` immediately regardless of current
@@ -52,6 +51,33 @@ rather than replacing it — see `control.py`'s `ValveController`:
   fail-safe already guarantees the valve shuts itself within 5s of the
   last successful `/open`, which is the actual safety property that
   matters. This service doesn't need to reimplement that.
+
+**Reopen cadence tightened (2026-08-15):** `REOPEN_INTERVAL_S` was 3s
+against a 2Hz tick loop — a wide, deliberately conservative margin
+under the firmware's 5s fail-safe. Live use showed the valve dropping
+out mid-fill more often than felt right for what looked like a solid
+wifi link, suggesting occasional dropped/delayed `/open` requests
+rather than a real outage. Changed to `REOPEN_INTERVAL_S = 0.9` with
+the tick loop itself slowed to 1Hz (so every tick reopens, roughly one
+`/open` per second).
+
+**Real cause found, same day: mDNS resolution, not packet loss.**
+Tightening the cadence made things measurably worse — 50s with no
+water, and the Run page's own countdown visibly stalling. The actual
+culprit: `VALVE_HOSTNAME` (`waterbutt.local`) is mDNS (avahi/
+nss-mdns), and `send_open`/`send_close` built their URL from the
+hostname directly, so `requests.get()` re-resolved it fresh on *every*
+call. Measured live: roughly 1 in 20-30 of those resolutions stalls for
+2.5-2.8s — eating almost all of `VALVE_TIMEOUT_S` (3s) before the
+actual HTTP request even starts. A phone/browser hitting the same
+hostname never showed this because it caches the resolved address far
+longer than a bare `requests.get()` call does. Fixed by resolving
+`VALVE_HOSTNAME` once and caching the IP (`_resolve_valve_ip`/
+`_valve_base_url` in `app.py`), re-resolving only after a request
+actually fails — the ESP8266's DHCP address can shift too, the same
+class of problem amundsen's own wifi IP had after a restart. The
+reopen-cadence tightening above stands on its own merits now that the
+actual stall source is gone.
 
 `ValveController` takes `send_open`/`send_close` as injected
 functions (same pattern as `navigate`'s `PathRunner` taking

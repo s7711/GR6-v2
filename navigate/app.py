@@ -563,11 +563,24 @@ def _log_file_summary(path):
     if not lines:
         return {"filename": path.name, "start_t": None, "end_t": None, "line_count": 0, "path_name": None}
     first = json.loads(lines[0])
-    last = json.loads(lines[-1])
+    # The file for whichever run is still going gets read mid-write here
+    # sometimes - its last line can be a torn/incomplete write caught
+    # between _append_debug_log()'s open() and close() (2026-08-15: this
+    # took the whole page down, since one bad file used to raise past
+    # _log_summaries and 500 the entire /api/logs response instead of
+    # just that file's own end_t). Fall back through trailing lines
+    # until one actually parses.
+    last = None
+    for line in reversed(lines):
+        try:
+            last = json.loads(line)
+            break
+        except json.JSONDecodeError:
+            continue
     return {
         "filename": path.name,
         "start_t": first.get("t"),
-        "end_t": last.get("t"),
+        "end_t": last.get("t") if last else None,
         "line_count": len(lines),
         "path_name": first.get("path_name"),  # None for waterbutt's own logs, or a navigate log from before this field existed
     }
@@ -576,7 +589,15 @@ def _log_file_summary(path):
 def _log_summaries(logs_dir):
     if not logs_dir.exists():
         return []
-    summaries = [_log_file_summary(p) for p in logs_dir.glob("*.jsonl")]
+    summaries = []
+    for p in logs_dir.glob("*.jsonl"):
+        try:
+            summaries.append(_log_file_summary(p))
+        except json.JSONDecodeError:
+            # First line itself unparseable - genuinely corrupt, not just
+            # a live-write race. Skip it rather than take the whole
+            # listing down for every other run.
+            logging.warning("Skipping unreadable log file %s", p)
     return sorted(summaries, key=lambda s: s["start_t"] or 0, reverse=True)
 
 

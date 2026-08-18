@@ -541,6 +541,31 @@ class NavigateAppTestCase(unittest.TestCase):
             "line_count": 0, "path_name": None,
         }])
 
+    def test_api_logs_recovers_end_t_past_a_torn_last_line(self):
+        # A run still being logged can get read mid-write by /api/logs -
+        # its last line can be a torn/incomplete write caught between
+        # _append_debug_log()'s open() and close() (found live 2026-08-15,
+        # took the whole page down for every run, not just this file).
+        app.LOGS_DIR.mkdir(parents=True)
+        (app.LOGS_DIR / "260815_080036_loop.jsonl").write_text(
+            '{"t": 100.0, "path_name": "loop"}\n{"t": 101.0, "path_name": "loop"}\n{"t": 102'
+        )
+
+        resp = self.client.get("/api/logs").get_json()
+
+        self.assertEqual(resp["navigate"][0]["start_t"], 100.0)
+        self.assertEqual(resp["navigate"][0]["end_t"], 101.0)
+
+    def test_api_logs_skips_a_file_with_an_unparseable_first_line(self):
+        app.LOGS_DIR.mkdir(parents=True)
+        (app.LOGS_DIR / "260815_bad.jsonl").write_text("not json\n")
+        (app.LOGS_DIR / "260815_100000_loop.jsonl").write_text('{"t": 100.0, "path_name": "loop"}\n')
+
+        resp = self.client.get("/api/logs").get_json()
+
+        self.assertEqual(len(resp["navigate"]), 1)
+        self.assertEqual(resp["navigate"][0]["filename"], "260815_100000_loop.jsonl")
+
     def test_api_log_file_serves_raw_content(self):
         app.LOGS_DIR.mkdir(parents=True)
         (app.LOGS_DIR / "260812_100000_loop.jsonl").write_text('{"t": 100.0}\n')

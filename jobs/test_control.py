@@ -377,6 +377,28 @@ class TestFillStep(unittest.TestCase):
         self.assertEqual(status["state"], "aborted")
         self.assertIn("waterbutt", status["abort_reason"])
 
+    def test_fill_step_qc_refusal_skips_without_water_rather_than_aborting(self):
+        # 2026-08-15: keep going without water rather than abort the
+        # whole job (and, via missions, the whole round) over one
+        # obscured QC marker.
+        clock = FakeClock()
+        runner, stub, hw = make_runner(clock)
+        hw.waterbutt_go_result = {"ok": False, "reason": "QC marker 7 not visible", "qc_refused": True}
+        runner.go("m", [{"type": "fill", "duration_s": 20}, {"type": "pause", "duration_s": 1}])
+        status = runner.status()
+        self.assertEqual(status["state"], "running")
+        self.assertEqual(status["current_step_index"], 1)
+        self.assertEqual(status["step_log"][-1]["outcome"], "skipped_no_water")
+        self.assertEqual(status["step_log"][-1]["reason"], "QC marker 7 not visible")
+
+    def test_fill_step_qc_refusal_on_last_step_finishes_the_job_ok(self):
+        clock = FakeClock()
+        runner, stub, hw = make_runner(clock)
+        hw.waterbutt_go_result = {"ok": False, "reason": "QC marker 7 not visible", "qc_refused": True}
+        runner.go("m", [{"type": "fill", "duration_s": 20}])
+        status = runner.status()
+        self.assertEqual(status["state"], "stopped_ok")
+
 
 class TestStopDuringTimedStep(unittest.TestCase):
     def test_stop_during_water_turns_pump_off(self):

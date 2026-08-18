@@ -11,11 +11,24 @@ const NCOM_GPS_MODE_STRINGS = ["None", "Search", "Doppler", "SPS", "Differential
     "ixInteger", "PPP converging", "PPP", "Unknown", "Unknown", "GAD" // 29..34
 ];
 const NCOM_HEADING_QUALITY_STRINGS = ["None", "Poor", "OK", "Good"];
+// NCOM manual, "GPS Differential Ntrip status" (status channel 76 in
+// this codebase's own decoder numbering - see ncomrx.py's
+// decodeStatus76 comment). WiFiConnectionStatus (the same channel's
+// byte 7) has no table here - it's for other OXTS products, the xNAV
+// connects over ethernet and doesn't have wifi.
+const NCOM_NTRIP_STATUS_STRINGS = [
+  "Invalid", "Ready to connect", "Resolving URL to IP", "Getting source table", "Parsing source table", // 0..4
+  "Providing authentication", "Running", "Triggering closing of connection", "Closing connection before retrying", // 5..8
+  "Reconfiguring and reconnecting", "Disabled", "Error, undefined", "Error, Bad Authentication", // 9..12
+  "Error, TCP connection failed", "Error, unrecognised mount point", "Error, unable to resolve IP", // 13..15
+  "Error, invalid address string", "Error, invalid port number", // 16..17
+];
 
 const NCOM_STRING_TABLES = {
   GnssPosMode: NCOM_GPS_MODE_STRINGS,
   GnssVelMode: NCOM_GPS_MODE_STRINGS,
   GnssAttMode: NCOM_GPS_MODE_STRINGS,
+  GnssDiffNtripStatus: NCOM_NTRIP_STATUS_STRINGS,
 };
 
 function translateNcomCodes(prefix, data) {

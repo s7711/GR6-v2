@@ -16,7 +16,16 @@ same shape as navigate's PathRunner.
 import threading
 import time
 
-REOPEN_INTERVAL_S = 3.0  # comfortably under the firmware's 5s FAILSAFE_TIMEOUT
+# 0.9s, not the much-more-conservative-looking 3s this was before
+# 2026-08-15: with app.py's tick loop itself only running at 1Hz,
+# anything above ~1s here would mean tick() doesn't necessarily catch
+# every reopen on time. This trades a much smaller margin under the
+# firmware's 5s FAILSAFE_TIMEOUT for a request going out roughly once a
+# second instead of every 3s - deliberately, to paper over what looks
+# like occasional dropped/delayed /open requests over wifi (accepted
+# risk: a genuinely bad link could now trip the fail-safe *faster*, not
+# slower, since there's less slack per missed send - see waterbutt-prd.md).
+REOPEN_INTERVAL_S = 0.9
 
 
 class ValveController:

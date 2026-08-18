@@ -199,6 +199,22 @@ button. `fill`'s duration options are drawn from `waterbutt`'s own
 same fixed set offered for `pause`/`water` — a duration `waterbutt`
 would just reject isn't offered as a choice in the first place.
 
+**Fill step QC refusal (added 2026-08-15):** if `waterbutt`'s own QC
+gating refuses the fill (its check marker isn't visible, unconfigured,
+unreachable, or too far from ideal — see `waterbutt-prd.md`'s "QC
+gating on fill"), the step is **skipped, not failed** — logged with
+outcome `"skipped_no_water"` and the refusal reason, then the job moves
+on to its next step as if the fill had completed. Originally this
+aborted the whole job (and, via `missions`' own abort-propagation, the
+entire mission) the same as any other failed step; live use showed that
+one obscured marker on one bed shouldn't cancel an entire watering
+round when the alternative — one dry bed — is comfortably the lesser
+problem. Distinguished from a genuine failure (bad request, `waterbutt`
+unreachable entirely) by `waterbutt`'s `/go` returning `409`
+specifically for a QC refusal (`jobs/app.py`'s `waterbutt_go` sets
+`qc_refused: True` only for that status code) — those other failures
+still abort the job as before.
+
 ### Deferred: conditional steps
 
 The harder half of "water one plant" is the return trip: get to open
