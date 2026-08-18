@@ -26,6 +26,7 @@ import geometry  # noqa: E402
 import paths  # noqa: E402
 from control import PathRunner  # noqa: E402
 from feed import NavigateFeedServer  # noqa: E402
+from turn_control import TurnRunner  # noqa: E402
 
 PAGES_DIR = Path(__file__).resolve().parent / "templates" / "pages"
 NAVIGATE_STATUS_HZ = 5
@@ -70,6 +71,17 @@ CONTROL_CONFIG = {
     "localisation_accuracy_limit_m": service_cfg["localisation_accuracy_limit_m"],
     "max_heading_correction_deg": service_cfg["max_heading_correction_deg"],
     "wheel_base_m": drive_cfg["wheel_base_m"],
+    "stall_check_window_s": service_cfg["stall_check_window_s"],
+    "stall_min_distance_m": service_cfg["stall_min_distance_m"],
+}
+
+TURN_CONFIG = {
+    "wheel_base_m": drive_cfg["wheel_base_m"],
+    "turn_gain": service_cfg["turn_gain"],
+    "turn_max_rate_rad_s": service_cfg["turn_max_rate_rad_s"],
+    "turn_max_mps": service_cfg["turn_max_mps"],
+    "stall_check_window_s": service_cfg["stall_check_window_s"],
+    "turn_stall_min_deg": service_cfg["turn_stall_min_deg"],
 }
 
 
@@ -130,6 +142,7 @@ def _end_aruco_priority_if_active():
 
 nav_client = FeedClient(oxtsnav_cfg["nav_feed_socket"], default={"nav": {}, "status": {}, "connection": {}})
 runner = PathRunner(CONTROL_CONFIG, send_velocity, send_pump)
+turn_runner = TurnRunner(TURN_CONFIG, send_velocity)
 
 _recording_lock = threading.Lock()
 _recording_points = []
@@ -144,6 +157,16 @@ _recording_points = []
 # Published in the feed below so any page watching it can stay in sync
 # regardless of how the path got loaded.
 _current_path_name = None
+
+# Which of runner/turn_runner is the one whose status/debug-log actually
+# matters right now (added 2026-08-18 alongside turn_runner) - only one
+# of the two is ever "running" at a time (both /control/start and
+# /control/turn refuse to start while the other is), but once a run
+# finishes its terminal state (stopped_ok/aborted) needs to keep being
+# reported until something else starts, exactly like _current_path_name
+# already does for path runs - this is that same idea, generalised to
+# cover which *kind* of run it was.
+_active_kind = "path"  # "path" | "turn"
 
 
 def _current_position():
@@ -187,7 +210,14 @@ def _start_new_debug_log():
     global _debug_log_path
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.datetime.now().strftime("%y%m%d_%H%M%S")
-    stem = f"{timestamp}_{_current_path_name}" if _current_path_name else timestamp
+    # A turn has no path name of its own - label its log with the target
+    # heading instead, same reasoning (a plain `ls` already says what it
+    # was).
+    if _active_kind == "turn" and turn_runner.target_heading_deg is not None:
+        label = f"turn_{turn_runner.target_heading_deg:.0f}deg"
+    else:
+        label = _current_path_name
+    stem = f"{timestamp}_{label}" if label else timestamp
     candidate = LOGS_DIR / f"{stem}.jsonl"
     suffix = 1
     while candidate.exists():
@@ -203,7 +233,10 @@ def _start_new_debug_log():
 def _append_debug_log(position):
     if _debug_log_path is None:
         return
-    entry = {"t": time.time(), "path_name": _current_path_name, **position, **runner.status()}
+    if _active_kind == "turn":
+        entry = {"t": time.time(), "path_name": None, **position, **turn_runner.status()}
+    else:
+        entry = {"t": time.time(), "path_name": _current_path_name, **position, **runner.status()}
     with open(_debug_log_path, "a") as f:
         f.write(json.dumps(entry, default=str) + "\n")
 
@@ -230,9 +263,13 @@ def _control_tick():
     position = _current_position()
     if position is None:
         return
-    runner.step(position["lat"], position["lon"], position["heading_deg"], position["horizontal_accuracy_m"])
-    runner.preview(position["lat"], position["lon"], position["heading_deg"])
-    state = runner.status()["state"]
+    if _active_kind == "turn":
+        turn_runner.step(position["heading_deg"])
+        state = turn_runner.status()["state"]
+    else:
+        runner.step(position["lat"], position["lon"], position["heading_deg"], position["horizontal_accuracy_m"])
+        runner.preview(position["lat"], position["lon"], position["heading_deg"])
+        state = runner.status()["state"]
     # Every control tick while running, not a throttled ~1Hz snapshot —
     # this is now the data an analysis tool compares runs with, so it
     # needs the same resolution the control loop itself acts at (see
@@ -526,24 +563,56 @@ def control_entry_check():
 
 @app.route("/control/start", methods=["POST"])
 def control_start():
+    global _active_kind
+    if turn_runner.status()["state"] == "running":
+        return jsonify({"ok": False, "reason": "a turn is already running - stop it first"})
     position = _current_position()
     if position is None:
         return jsonify({"ok": False, "reason": "no position fix yet"})
     result = runner.start(position["lat"], position["lon"], position["heading_deg"])
     if result["ok"]:
+        _active_kind = "path"
         _start_new_debug_log()
         _maybe_enter_aruco_priority()
     return jsonify(result)
 
 
+@app.route("/control/turn", methods=["POST"])
+def control_turn():
+    """Turn-in-place to a target heading - see turn_control.py. For
+    jobs' `turn_to_heading` step, but also directly usable on its own
+    (see the Run page) - independent testability was the whole point,
+    see navigate-prd.md's "Turn in place"."""
+    global _active_kind
+    if runner.status()["state"] == "running":
+        return jsonify({"ok": False, "reason": "a path is already running - stop it first"})
+    position = _current_position()
+    if position is None:
+        return jsonify({"ok": False, "reason": "no position fix yet"})
+    payload = request.get_json(force=True)
+    heading_deg = float(payload["heading_deg"])
+    tolerance_deg = float(payload.get("tolerance_deg", service_cfg["turn_tolerance_deg"]))
+    result = turn_runner.start(heading_deg, tolerance_deg, position["heading_deg"])
+    if result["ok"]:
+        _active_kind = "turn"
+        _start_new_debug_log()
+    return jsonify(result)
+
+
 @app.route("/control/stop", methods=["POST"])
 def control_stop():
+    # Both, unconditionally - whichever wasn't running is a harmless
+    # no-op (see PathRunner.stop()/TurnRunner.stop()), and the caller
+    # shouldn't have to know which kind of run it's stopping.
     runner.stop()
+    turn_runner.stop()
     _end_aruco_priority_if_active()
     return "", 204
 
 
 def _snapshot():
+    if _active_kind == "turn":
+        return {**turn_runner.status(), "path_name": None}
     return {**runner.status(), "path_name": _current_path_name}
 
 

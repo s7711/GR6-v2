@@ -89,6 +89,13 @@ services:
     navigate_feed_socket: /tmp/gr6-navigate-feed.sock  # Unix domain socket — see navigate-prd.md
     navigate_feed_hz: 10               # matches control_hz — see navigate-prd.md's "Config additions"
     log_retention_days: 2              # per-run debug logs (navigate/data/logs/) — same convention/value as jobs and missions
+    stall_check_window_s: 5.0          # "hasn't moved" watchdog (added 2026-08-18) — checked every window, not continuously, see stall.py
+    stall_min_distance_m: 0.10         # path-following: abort if less than this is covered in stall_check_window_s
+    turn_stall_min_deg: 5.0            # turning in place: same idea, measuring heading change instead of distance
+    turn_gain: 1.0                     # proportional heading control for turn-in-place — rad/s of turn rate per rad of heading error
+    turn_max_rate_rad_s: 0.5           # cap on commanded turn rate (~29deg/s) — untested live yet, start slow
+    turn_max_mps: 0.15                 # cap on either wheel's speed while turning in place
+    turn_tolerance_deg: 10.0           # default heading tolerance for a turn_to_heading job step that doesn't specify its own
 
   network:
     unit: robot-network.service

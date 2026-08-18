@@ -1,36 +1,41 @@
 """Job sequencing state machine — drives navigate's existing HTTP
-API (load/start/stop/status), never drive or the control loop directly.
-Mirrors navigate/control.py's PathRunner shape: no networking of its
-own (load_path/start_path/stop_path/navigate_status/pump_on/
-waterbutt_go/waterbutt_stop are injected, so this is testable without a
-real navigate/waterbutt running — see test_control.py), driven by
-repeated tick() calls from app.py's background loop. See
-jobs-prd.md's "Job execution".
+API (load/start/stop/turn/status), never drive or the control loop
+directly. Mirrors navigate/control.py's PathRunner shape: no
+networking of its own (load_path/start_path/stop_path/start_turn/
+navigate_status/pump_on/waterbutt_go/waterbutt_stop are injected, so
+this is testable without a real navigate/waterbutt running — see
+test_control.py), driven by repeated tick() calls from app.py's
+background loop. See jobs-prd.md's "Job execution".
 
-Four step types: `run_path` (unchanged - watches navigate's own status
-until stopped_ok/aborted), and three timed steps added 2026-08-08 for
-single-plant watering - `pause` (wait, nothing else), `water` (pump on,
-stationary, for duration_s), `fill` (waterbutt's valve open for
-duration_s). The timed steps don't have anything external to poll like
-navigate's state, so completion is tracked with an injected `now`
-clock instead (defaults to time.monotonic, overridable in tests so they
-don't need to sleep in wall-clock time).
+Five step types: `run_path` and `turn_to_heading` (added 2026-08-18 -
+both watch navigate's own status until stopped_ok/aborted, since
+navigate's own /control/stop stops whichever of the two it's actually
+doing - see navigate-prd.md's "Turn in place"), and three timed steps
+added 2026-08-08 for single-plant watering - `pause` (wait, nothing
+else), `water` (pump on, stationary, for duration_s), `fill`
+(waterbutt's valve open for duration_s). The timed steps don't have
+anything external to poll like navigate's state, so completion is
+tracked with an injected `now` clock instead (defaults to
+time.monotonic, overridable in tests so they don't need to sleep in
+wall-clock time).
 """
 
 import threading
 import time
 
 TIMED_STEP_TYPES = ("pause", "water", "fill")
+NAVIGATE_STEP_TYPES = ("run_path", "turn_to_heading")  # both polled via _tick_navigate_step
 
-RUN_PATH_FEED_GRACE_S = 1.0  # see _tick_run_path's comment
+NAVIGATE_STEP_FEED_GRACE_S = 1.0  # see _tick_navigate_step's comment
 
 
 class JobRunner:
-    def __init__(self, load_path, start_path, stop_path, navigate_status,
+    def __init__(self, load_path, start_path, stop_path, start_turn, navigate_status,
                  pump_on, waterbutt_go, waterbutt_stop, now=time.monotonic):
         self.load_path = load_path              # (path_name) -> {"ok": bool, "reason": ...}
         self.start_path = start_path            # () -> {"ok": bool, "reason": ...}
-        self.stop_path = stop_path              # () -> None
+        self.stop_path = stop_path              # () -> None - also stops a turn_to_heading step, see navigate's /control/stop
+        self.start_turn = start_turn            # (heading_deg, tolerance_deg) -> {"ok": bool, "reason": ...}
         self.navigate_status = navigate_status  # () -> {"state": ..., "abort_reason": ...}
         self.pump_on = pump_on                  # (bool) -> {"ok": bool, "reason": ...}
         self.waterbutt_go = waterbutt_go        # (duration_s) -> {"ok": bool, "reason": ...}
@@ -45,10 +50,10 @@ class JobRunner:
         self.state = "idle"  # idle | running | stopped_ok | aborted
         self.current_step_index = None
         self.abort_reason = None
-        self.step_log = []  # [{"index", "type", "path"/"duration_s", "outcome", "reason"}, ...] - this run only
+        self.step_log = []  # [{"index", "type", "path"/"duration_s"/"heading_deg", "outcome", "reason"}, ...] - this run only
         self.step_deadline = None  # self.now() value a pause/water/fill step completes at
-        self._run_path_seen_running = False  # see _tick_run_path's comment
-        self._run_path_started_at = None
+        self._navigate_step_seen_running = False  # see _tick_navigate_step's comment
+        self._navigate_step_started_at = None
 
     def go(self, job_name: str, steps: list, start_index: int = 0):
         """Starts (or resumes, from start_index) a job."""
@@ -90,6 +95,8 @@ class JobRunner:
         step_type = step.get("type", "run_path")
         if step_type == "run_path":
             return {"type": "run_path", "path": step["path"]}
+        if step_type == "turn_to_heading":
+            return {"type": "turn_to_heading", "heading_deg": step["heading_deg"], "tolerance_deg": step.get("tolerance_deg")}
         return {"type": step_type, "duration_s": step.get("duration_s")}
 
     def _start_current_step(self, step_index: int):
@@ -98,6 +105,8 @@ class JobRunner:
 
         if step_type == "run_path":
             self._start_run_path_step(step_index, step)
+        elif step_type == "turn_to_heading":
+            self._start_turn_step(step_index, step)
         elif step_type == "pause":
             with self.lock:
                 self.step_deadline = self.now() + step["duration_s"]
@@ -123,17 +132,17 @@ class JobRunner:
         # Stamped up front, before the (blocking, real network I/O)
         # load_path/start_path calls below - not after they return.
         # self.state is already "running" by the time we're called (set
-        # by go()/_tick_run_path before dispatching here), so the
-        # background tick loop can call _tick_run_path concurrently
+        # by go()/_tick_navigate_step before dispatching here), so the
+        # background tick loop can call _tick_navigate_step concurrently
         # while load_path/start_path are still in flight. Stamping late
-        # left a real window where _run_path_started_at was still None
-        # while state was already "running", crashing tick() outright
-        # (seen live 2026-08-09, right after this race fix was added -
-        # killed the tick thread entirely, so the job never progressed
-        # again until the service was restarted).
+        # left a real window where _navigate_step_started_at was still
+        # None while state was already "running", crashing tick()
+        # outright (seen live 2026-08-09, right after this race fix was
+        # added - killed the tick thread entirely, so the job never
+        # progressed again until the service was restarted).
         with self.lock:
-            self._run_path_seen_running = False
-            self._run_path_started_at = self.now()
+            self._navigate_step_seen_running = False
+            self._navigate_step_started_at = self.now()
 
         path_name = step["path"]
 
@@ -145,6 +154,18 @@ class JobRunner:
         result = self.start_path()
         if not result.get("ok"):
             self._fail_step(step_index, "failed_to_start", result.get("reason", "couldn't start path"))
+            return
+
+    def _start_turn_step(self, step_index: int, step: dict):
+        # Same up-front stamping as _start_run_path_step, same reason -
+        # see its comment.
+        with self.lock:
+            self._navigate_step_seen_running = False
+            self._navigate_step_started_at = self.now()
+
+        result = self.start_turn(step["heading_deg"], step.get("tolerance_deg"))
+        if not result.get("ok"):
+            self._fail_step(step_index, "failed_to_start", result.get("reason", "couldn't start turning"))
             return
 
     def _fail_step(self, step_index: int, outcome: str, reason: str):
@@ -185,12 +206,18 @@ class JobRunner:
             step_index = self.current_step_index
             step_type = self._current_step_type()
 
-        if step_type == "run_path":
-            self._tick_run_path(step_index)
+        if step_type in NAVIGATE_STEP_TYPES:
+            self._tick_navigate_step(step_index)
         else:
             self._tick_timed(step_index, step_type)
 
-    def _tick_run_path(self, step_index: int):
+    def _tick_navigate_step(self, step_index: int):
+        """Polls navigate's own status until it's left "running" -
+        shared by run_path and turn_to_heading (added 2026-08-18): both
+        just ask navigate to do something and wait, and navigate's own
+        /control/stop already stops whichever of the two is actually in
+        progress, so the polling/race-guard logic below doesn't need to
+        know which one this run actually is."""
         nav = self.navigate_status()
         nav_state = nav.get("state")
 
@@ -200,10 +227,10 @@ class JobRunner:
                 return  # stop() (or another tick) already handled this
 
             if nav_state == "running":
-                self._run_path_seen_running = True
+                self._navigate_step_seen_running = True
                 return  # still going - nothing to do yet
 
-            if not self._run_path_seen_running and self.now() - self._run_path_started_at < RUN_PATH_FEED_GRACE_S:
+            if not self._navigate_step_seen_running and self.now() - self._navigate_step_started_at < NAVIGATE_STEP_FEED_GRACE_S:
                 # navigate's feed pushes on its own fixed timer (see
                 # navigate/feed.py), independent of when its internal
                 # state actually changes - right after start_path()

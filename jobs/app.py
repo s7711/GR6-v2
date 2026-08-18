@@ -76,6 +76,23 @@ def stop_path():
         logging.warning("[jobs] Couldn't reach navigate to stop")
 
 
+def start_turn(heading_deg, tolerance_deg):
+    """For `turn_to_heading` steps - navigate owns the actual turn-in-
+    place control (see its /control/turn), jobs never talks to drive
+    directly, same boundary as run_path steps. tolerance_deg of None
+    (step didn't specify one) is dropped rather than sent as null, so
+    navigate's own config default applies - see navigate-prd.md's "Turn
+    in place"."""
+    payload = {"heading_deg": heading_deg}
+    if tolerance_deg is not None:
+        payload["tolerance_deg"] = tolerance_deg
+    try:
+        resp = requests.post(f"{NAVIGATE_BASE_URL}/control/turn", json=payload, timeout=NAVIGATE_TIMEOUT_S)
+        return resp.json()
+    except requests.exceptions.RequestException:
+        return {"ok": False, "reason": "couldn't reach navigate"}
+
+
 def navigate_status():
     return navigate_feed.latest()
 
@@ -128,7 +145,7 @@ def waterbutt_stop():
         logging.warning("[jobs] Couldn't reach waterbutt to stop")
 
 
-runner = JobRunner(load_path, start_path, stop_path, navigate_status, pump_on, waterbutt_go, waterbutt_stop)
+runner = JobRunner(load_path, start_path, stop_path, start_turn, navigate_status, pump_on, waterbutt_go, waterbutt_stop)
 
 _log_lock = threading.Lock()
 _log_path = None

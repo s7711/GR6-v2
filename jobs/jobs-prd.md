@@ -215,6 +215,24 @@ specifically for a QC refusal (`jobs/app.py`'s `waterbutt_go` sets
 `qc_refused: True` only for that status code) — those other failures
 still abort the job as before.
 
+**Turn to heading (added 2026-08-18):** a fifth step type, `turn_to_
+heading` (`heading_deg`, optional `tolerance_deg`) — some plants are
+only reachable by turning on the spot to face a heading no saved path
+can reach, which pure-pursuit path-following has no way to do. Polled
+exactly like `run_path`: both just ask `navigate` to do something
+(`/control/turn` instead of `/control/load`+`/control/start`) and wait
+for its status to leave `running` — the shared polling/race-guard
+method is `_tick_navigate_step` (renamed from `_tick_run_path`, no
+longer path-specific). An operator **Stop** mid-turn needs no extra
+step-specific cleanup the way `water`/`fill` do (no pump/valve to
+switch off) — `stop_path()` alone covers it, since `navigate`'s own
+`/control/stop` already stops whichever of a path-follow or a turn is
+actually in progress. See `navigate-prd.md`'s "Turn in place" for why
+this isn't a saved path (no real geometry, and paths are already
+heading toward needing their own organisation as the count grows) or a
+`jobs`-only step with nothing backing it in `navigate` (loses
+independent testability).
+
 ### Deferred: conditional steps
 
 The harder half of "water one plant" is the return trip: get to open

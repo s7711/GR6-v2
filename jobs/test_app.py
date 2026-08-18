@@ -47,6 +47,9 @@ class NavigateStub:
         self.start_calls += 1
         return self.start_result
 
+    def start_turn(self, heading_deg, tolerance_deg):
+        return {"ok": True}
+
     def stop_path(self):
         self.stop_calls += 1
 
@@ -73,8 +76,8 @@ class JobsAppTestCase(unittest.TestCase):
         app.NAVIGATE_PATHS_DIR = Path(tempfile.mkdtemp())
         self.stub = NavigateStub()
         app.runner = JobRunner(
-            self.stub.load_path, self.stub.start_path, self.stub.stop_path, self.stub.navigate_status,
-            self.stub.pump_on, self.stub.waterbutt_go, self.stub.waterbutt_stop,
+            self.stub.load_path, self.stub.start_path, self.stub.stop_path, self.stub.start_turn,
+            self.stub.navigate_status, self.stub.pump_on, self.stub.waterbutt_go, self.stub.waterbutt_stop,
         )
         self.client = app.app.test_client()
 

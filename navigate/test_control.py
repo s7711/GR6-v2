@@ -11,6 +11,8 @@ CONFIG = {
     "localisation_accuracy_limit_m": 1.0,
     "max_heading_correction_deg": 70,
     "wheel_base_m": 0.42,
+    "stall_check_window_s": 5.0,
+    "stall_min_distance_m": 0.10,
 }
 
 # A short straight path running due north from a fixed lat/lon, generated
@@ -36,9 +38,25 @@ class Recorder:
         self.pump_calls.append(on)
 
 
-def make_runner():
+class FakeClock:
+    """Injected as PathRunner's/TurnRunner's `now` - lets stall-abort
+    tests advance time explicitly instead of sleeping in real
+    wall-clock time."""
+
+    def __init__(self, t=0.0):
+        self.t = t
+
+    def __call__(self):
+        return self.t
+
+    def advance(self, dt):
+        self.t += dt
+
+
+def make_runner(clock=None):
     recorder = Recorder()
-    runner = PathRunner(CONFIG, recorder.send_velocity, recorder.send_pump)
+    kwargs = {"now": clock} if clock is not None else {}
+    runner = PathRunner(CONFIG, recorder.send_velocity, recorder.send_pump, **kwargs)
     runner.load_path(STRAIGHT_NORTH_PATH)
     return runner, recorder
 
@@ -123,6 +141,44 @@ class TestStep(unittest.TestCase):
         runner, recorder = make_runner()
         runner.step(robot_lat=52.200000, robot_lon=-1.500000, robot_heading_deg=0, horizontal_accuracy_m=0.1)
         self.assertEqual(recorder.velocity_calls, [])
+
+    def test_stall_aborts_when_barely_moving_within_the_window(self):
+        clock = FakeClock()
+        runner, recorder = make_runner(clock)
+        runner.start(robot_lat=52.200000, robot_lon=-1.500000, robot_heading_deg=0)
+        runner.step(robot_lat=52.200000, robot_lon=-1.500000, robot_heading_deg=0, horizontal_accuracy_m=0.1)
+        self.assertEqual(runner.status()["state"], "running")
+        clock.advance(CONFIG["stall_check_window_s"] + 0.1)
+        # Same position - stuck.
+        runner.step(robot_lat=52.200000, robot_lon=-1.500000, robot_heading_deg=0, horizontal_accuracy_m=0.1)
+        status = runner.status()
+        self.assertEqual(status["state"], "aborted")
+        self.assertIn("stuck", status["abort_reason"])
+        self.assertEqual(recorder.velocity_calls[-1], (0.0, 0.0))
+
+    def test_stall_does_not_abort_when_making_real_progress(self):
+        clock = FakeClock()
+        runner, recorder = make_runner(clock)
+        runner.start(robot_lat=52.200000, robot_lon=-1.500000, robot_heading_deg=0)
+        runner.step(robot_lat=52.200000, robot_lon=-1.500000, robot_heading_deg=0, horizontal_accuracy_m=0.1)
+        clock.advance(CONFIG["stall_check_window_s"] + 0.1)
+        # ~10m further north - comfortably over stall_min_distance_m.
+        runner.step(robot_lat=52.200090, robot_lon=-1.500000, robot_heading_deg=0, horizontal_accuracy_m=0.1)
+        self.assertEqual(runner.status()["state"], "running")
+
+    def test_stall_window_resets_each_check_not_from_the_original_start(self):
+        # Small genuine movement every window should never trip the
+        # guard, even though the *cumulative* distance since start()
+        # would - the checkpoint must slide forward each time, not stay
+        # pinned to the run's original position.
+        clock = FakeClock()
+        runner, recorder = make_runner(clock)
+        runner.start(robot_lat=52.200000, robot_lon=-1.500000, robot_heading_deg=0)
+        runner.step(robot_lat=52.200000, robot_lon=-1.500000, robot_heading_deg=0, horizontal_accuracy_m=0.1)
+        for lat in (52.200005, 52.200010, 52.200015):
+            clock.advance(CONFIG["stall_check_window_s"] + 0.1)
+            runner.step(robot_lat=lat, robot_lon=-1.500000, robot_heading_deg=0, horizontal_accuracy_m=0.1)
+            self.assertEqual(runner.status()["state"], "running")
 
     def test_step_while_on_path_sends_forward_velocity(self):
         runner, recorder = make_runner()

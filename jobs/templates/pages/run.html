@@ -86,7 +86,7 @@ const STEP_COLORS = [
   "rgba(13, 110, 253, 0.35)", "rgba(220, 53, 69, 0.35)", "rgba(25, 135, 84, 0.35)",
   "rgba(253, 126, 20, 0.35)", "rgba(111, 66, 193, 0.35)",
 ];
-const STEP_LABELS = { pause: "Pause", water: "Water (stationary)", fill: "Fill water butt" };
+const STEP_LABELS = { pause: "Pause", water: "Water (stationary)", fill: "Fill water butt", turn_to_heading: "Turn to heading" };
 const pathPointsCache = {};
 let currentJobSteps = []; // set by updateMap() whenever a job's steps are fetched - reused by the status display below
 
@@ -170,7 +170,9 @@ document.getElementById("stop-btn").addEventListener("click", () => {
 function stepDescription(index) {
   const step = currentJobSteps[index];
   if (!step) return "";
-  return step.type === "run_path" ? step.path : `${STEP_LABELS[step.type]} (${step.duration_s}s)`;
+  if (step.type === "run_path") return step.path;
+  if (step.type === "turn_to_heading") return `${STEP_LABELS[step.type]} (${step.heading_deg}°)`;
+  return `${STEP_LABELS[step.type]} (${step.duration_s}s)`;
 }
 
 const joystickEl = document.getElementById("joystick");

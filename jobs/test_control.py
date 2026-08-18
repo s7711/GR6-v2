@@ -1,6 +1,6 @@
 import unittest
 
-from control import RUN_PATH_FEED_GRACE_S, JobRunner
+from control import NAVIGATE_STEP_FEED_GRACE_S, JobRunner
 
 STEPS = [{"path": "A"}, {"path": "B"}, {"path": "C"}]
 
@@ -10,8 +10,10 @@ class NavigateStub:
         self.loaded = []
         self.start_calls = 0
         self.stop_calls = 0
+        self.turn_calls = []  # [(heading_deg, tolerance_deg), ...]
         self.load_result = {"ok": True}
         self.start_result = {"ok": True}
+        self.turn_result = {"ok": True}
         self._status = {"state": "idle", "abort_reason": None}
 
     def load_path(self, name):
@@ -21,6 +23,10 @@ class NavigateStub:
     def start_path(self):
         self.start_calls += 1
         return self.start_result
+
+    def start_turn(self, heading_deg, tolerance_deg):
+        self.turn_calls.append((heading_deg, tolerance_deg))
+        return self.turn_result
 
     def stop_path(self):
         self.stop_calls += 1
@@ -75,7 +81,7 @@ def make_runner(clock=None):
     hw = HardwareStub()
     kwargs = {"now": clock} if clock is not None else {}
     runner = JobRunner(
-        stub.load_path, stub.start_path, stub.stop_path, stub.navigate_status,
+        stub.load_path, stub.start_path, stub.stop_path, stub.start_turn, stub.navigate_status,
         hw.pump_on, hw.waterbutt_go, hw.waterbutt_stop, **kwargs,
     )
     return runner, stub, hw
@@ -116,6 +122,67 @@ class TestGo(unittest.TestCase):
         self.assertEqual(status["state"], "aborted")
         self.assertIn("already running", status["abort_reason"])
         self.assertEqual(stub.start_calls, 0)
+
+
+class TestTurnToHeadingStep(unittest.TestCase):
+    # turn_to_heading polls navigate exactly like run_path does (shared
+    # _tick_navigate_step - see control.py) - the grace-period/race
+    # tests already cover that machinery via run_path, this just checks
+    # the turn-specific bits: starting it, its own failure/step-log
+    # shape, and that it defaults tolerance_deg the same way navigate's
+    # own /control/turn does.
+    def test_go_starts_a_turn_with_its_own_heading_and_tolerance(self):
+        runner, stub, hw = make_runner()
+        runner.go("test-job", [{"type": "turn_to_heading", "heading_deg": 245, "tolerance_deg": 10}])
+        self.assertEqual(stub.turn_calls, [(245, 10)])
+        self.assertEqual(runner.status()["state"], "running")
+
+    def test_go_omits_tolerance_when_the_step_does_not_specify_one(self):
+        runner, stub, hw = make_runner()
+        runner.go("test-job", [{"type": "turn_to_heading", "heading_deg": 245}])
+        self.assertEqual(stub.turn_calls, [(245, None)])
+
+    def test_failed_turn_start_aborts_immediately(self):
+        runner, stub, hw = make_runner()
+        stub.turn_result = {"ok": False, "reason": "a path is already running - stop it first"}
+        runner.go("test-job", [{"type": "turn_to_heading", "heading_deg": 245}])
+        status = runner.status()
+        self.assertEqual(status["state"], "aborted")
+        self.assertIn("already running", status["abort_reason"])
+
+    def test_advances_once_navigate_reports_stopped_ok(self):
+        runner, stub, hw = make_runner()
+        runner.go("test-job", [
+            {"type": "turn_to_heading", "heading_deg": 245, "tolerance_deg": 10},
+            {"path": "A"},
+        ])
+        stub.set_status("running")  # navigate's feed catches up to the step actually running
+        runner.tick()
+        stub.set_status("stopped_ok")
+        runner.tick()
+        self.assertEqual(runner.status()["current_step_index"], 1)
+        self.assertEqual(stub.loaded, ["A"])
+
+    def test_navigate_abort_mid_turn_aborts_the_job(self):
+        runner, stub, hw = make_runner()
+        runner.go("test-job", [{"type": "turn_to_heading", "heading_deg": 245}])
+        stub.set_status("running")
+        runner.tick()
+        stub.set_status("aborted", abort_reason="turned only 0.0deg in 5.0s (limit 5.0deg) - stuck?")
+        runner.tick()
+        status = runner.status()
+        self.assertEqual(status["state"], "aborted")
+        self.assertIn("stuck", status["abort_reason"])
+
+    def test_stop_during_turn_stops_navigate(self):
+        # No pump/waterbutt equivalent for a turn - stop_path() alone
+        # covers it, since navigate's own /control/stop stops whichever
+        # of run_path/turn_to_heading is actually in progress.
+        runner, stub, hw = make_runner()
+        runner.go("test-job", [{"type": "turn_to_heading", "heading_deg": 245}])
+        runner.stop()
+        self.assertEqual(stub.stop_calls, 1)
+        self.assertEqual(runner.status()["state"], "idle")
 
 
 class TestTick(unittest.TestCase):
@@ -234,7 +301,7 @@ class TestRunPathFeedRace(unittest.TestCase):
         runner.go("m", STEPS)
         runner.tick()
         self.assertEqual(runner.status()["current_step_index"], 0)  # still within the grace window
-        clock.advance(RUN_PATH_FEED_GRACE_S + 0.1)
+        clock.advance(NAVIGATE_STEP_FEED_GRACE_S + 0.1)
         runner.tick()
         self.assertEqual(runner.status()["current_step_index"], 1)  # now trusted
 

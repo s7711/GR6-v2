@@ -15,15 +15,18 @@ from oxts-nav's feed at control_hz and calling step()) lives in app.py.
 import logging
 import math
 import threading
+import time
 
 import geometry
+from stall import StallGuard
 
 
 class PathRunner:
-    def __init__(self, config: dict, send_velocity, send_pump):
+    def __init__(self, config: dict, send_velocity, send_pump, now=time.monotonic):
         self.config = config
         self.send_velocity = send_velocity
         self.send_pump = send_pump
+        self.now = now
         self.lock = threading.RLock()
         self._reset()
 
@@ -36,6 +39,7 @@ class PathRunner:
         self.distance_travelled_m = 0.0
         self._last_robot_local = None
         self.last_status = {}
+        self._stall_guard = StallGuard(self.config["stall_check_window_s"], self.config["stall_min_distance_m"])
 
     def load_path(self, points: list) -> dict:
         """points: stored path dicts (lat/lon/speed_mps/pump/clearance_m),
@@ -113,6 +117,8 @@ class PathRunner:
             self.abort_reason = None
             self.distance_travelled_m = 0.0
             self._last_robot_local = None
+            robot_north, robot_east = geometry.to_local(robot_lat, robot_lon, *self.path_ref)
+            self._stall_guard.reset((robot_north, robot_east), self.now())
             return {"ok": True}
 
     def stop(self):
@@ -184,6 +190,16 @@ class PathRunner:
             limit = self.config["localisation_accuracy_limit_m"]
             if horizontal_accuracy_m is not None and horizontal_accuracy_m > limit:
                 self._abort(f"localisation accuracy {horizontal_accuracy_m:.2f}m exceeds limit {limit:.2f}m")
+                return
+
+            stalled = self._stall_guard.stalled(
+                (robot_north, robot_east), self.now(),
+                lambda a, b: math.hypot(b[0] - a[0], b[1] - a[1]),
+            )
+            if stalled is not None:
+                window_s = self.config["stall_check_window_s"]
+                min_m = self.config["stall_min_distance_m"]
+                self._abort(f"moved only {stalled:.2f}m in {window_s:.1f}s (limit {min_m:.2f}m) - stuck?")
                 return
 
             result = geometry.find_lookahead_point(

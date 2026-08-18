@@ -49,9 +49,24 @@
           <option value="pause">Pause</option>
           <option value="water">Water (stationary)</option>
           <option value="fill">Fill water butt</option>
+          <option value="turn_to_heading">Turn to heading</option>
         </select>
-        <label class="form-label">Duration</label>
-        <select id="step-duration" class="form-select"></select>
+        <div id="step-duration-fields">
+          <label class="form-label">Duration</label>
+          <select id="step-duration" class="form-select"></select>
+        </div>
+        <div id="step-turn-fields" class="d-none">
+          <div class="row g-2">
+            <div class="col-6">
+              <label class="form-label">Heading (deg)</label>
+              <input id="step-turn-heading" type="number" class="form-control" min="0" max="359" value="0">
+            </div>
+            <div class="col-6">
+              <label class="form-label">Tolerance (&plusmn;deg)</label>
+              <input id="step-turn-tolerance" type="number" class="form-control" min="1" max="90" placeholder="default">
+            </div>
+          </div>
+        </div>
       </div>
       <div class="modal-footer">
         <button id="step-modal-add" type="button" class="btn btn-success">Add</button>
@@ -95,14 +110,14 @@ const jobName = params.get("name");
 // stays answerable even then.
 const STEP_COLORS = ["#0d6efd", "#dc3545", "#198754", "#fd7e14", "#6f42c1"];
 
-const STEP_LABELS = { pause: "Pause", water: "Water (stationary)", fill: "Fill water butt" };
+const STEP_LABELS = { pause: "Pause", water: "Water (stationary)", fill: "Fill water butt", turn_to_heading: "Turn to heading" };
 // Fill is a real waterbutt API call (see waterbutt/control.py's own
 // DURATIONS_S allow-list) - 60s isn't one of the values it accepts, so
 // it gets its own shorter list rather than a duration that would always
 // be refused at run time. Pause/water have no such restriction.
 const DURATION_OPTIONS_S = { pause: [5, 10, 20, 60], water: [5, 10, 20, 60], fill: [5, 10, 20, 50] };
 
-let steps = []; // [{type: "run_path", path: "..."}, {type: "pause"|"water"|"fill", duration_s: N}]
+let steps = []; // [{type: "run_path", path: "..."}, {type: "pause"|"water"|"fill", duration_s: N}, {type: "turn_to_heading", heading_deg: N, tolerance_deg: N|undefined}]
 let dirty = false;
 let existingNames = [];
 let navigatePaths = [];
@@ -122,6 +137,10 @@ function pathOptionsHtml(selected) {
 function stepCellHtml(step) {
   if (step.type === "run_path") {
     return `<select class="form-select form-select-sm step-path">${pathOptionsHtml(step.path)}</select>`;
+  }
+  if (step.type === "turn_to_heading") {
+    const tolerance = step.tolerance_deg !== undefined ? `&plusmn;${step.tolerance_deg}` : "default tolerance";
+    return `${STEP_LABELS[step.type]} &mdash; ${step.heading_deg}&deg; (${tolerance})`;
   }
   return `${STEP_LABELS[step.type]} &mdash; ${step.duration_s}s`;
 }
@@ -206,6 +225,10 @@ const stepTypeSelect = document.getElementById("step-type");
 const stepDurationSelect = document.getElementById("step-duration");
 
 function fillStepDurationOptions() {
+  const isTurn = stepTypeSelect.value === "turn_to_heading";
+  document.getElementById("step-duration-fields").classList.toggle("d-none", isTurn);
+  document.getElementById("step-turn-fields").classList.toggle("d-none", !isTurn);
+  if (isTurn) return;
   const options = DURATION_OPTIONS_S[stepTypeSelect.value];
   stepDurationSelect.innerHTML = options.map((s) => `<option value="${s}">${s}s</option>`).join("");
 }
@@ -217,7 +240,14 @@ document.getElementById("add-step").addEventListener("click", () => {
 });
 
 document.getElementById("step-modal-add").addEventListener("click", () => {
-  steps.push({ type: stepTypeSelect.value, duration_s: parseInt(stepDurationSelect.value, 10) });
+  if (stepTypeSelect.value === "turn_to_heading") {
+    const step = { type: "turn_to_heading", heading_deg: parseFloat(document.getElementById("step-turn-heading").value) };
+    const tolerance = document.getElementById("step-turn-tolerance").value;
+    if (tolerance !== "") step.tolerance_deg = parseFloat(tolerance);
+    steps.push(step);
+  } else {
+    steps.push({ type: stepTypeSelect.value, duration_s: parseInt(stepDurationSelect.value, 10) });
+  }
   dirty = true;
   stepModal.hide();
   renderSteps();

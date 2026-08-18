@@ -688,6 +688,104 @@ know about path-level flags at all).
   own editor (e.g. wanting aruco priority to continue through a fill).
   Deliberately deferred — "let's do the path, then see if it works."
 
+## Stall abort (added 2026-08-18)
+
+The robot now runs unattended for stretches (missions, several jobs
+back to back) rather than always being watched — physically getting
+stuck (wedged against something, a wheel losing traction, an obstacle)
+used to have no dedicated abort of its own; the existing accuracy/
+heading/cross-track limits don't necessarily catch "commanding a
+velocity but not actually going anywhere."
+
+**Mechanism** (`navigate/stall.py`'s `StallGuard`, used by both
+`PathRunner` and `TurnRunner`): a resetting checkpoint, not a sliding
+buffer — every `stall_check_window_s` (config, default 5.0s), compare
+the current progress value against wherever it was at the start of
+that window; if less than the configured minimum was covered, abort.
+Checked, and the checkpoint slid forward, every window regardless of
+outcome — so a robot making small-but-real progress each window never
+falsely trips it, and the check is always against a fresh baseline
+rather than the run's original starting point. Precise sub-window
+timing isn't needed for a coarse safety net like this, and it avoids
+keeping a position history around.
+
+`PathRunner` measures linear distance (`stall_min_distance_m`, default
+0.10m) in local north/east coordinates; `TurnRunner` measures heading
+change (`turn_stall_min_deg`, default 5.0deg) via `geometry.angle_diff`
+— genuinely different quantities, which is why this isn't just "hasn't
+moved": a turn-in-place robot barely moves position by design, so a
+position-only check would misfire on every turn. Same `StallGuard`
+class, different progress function supplied by the caller.
+
+Aborts exactly like any other `PathRunner`/`TurnRunner` limit (state ->
+`aborted`, `abort_reason` set, zero velocity sent, logged to the
+journal) — no new plumbing needed in `jobs`/`missions`: the existing
+abort propagation (navigate aborts -> `jobs` fails the step -> `missions`
+aborts the round) already covers it.
+
+## Turn in place (added 2026-08-18)
+
+`jobs` steps could only ever run a saved path or sit stationary
+(pause/water/fill) — some plants are only reachable by driving to a
+nearby point, then turning to face a heading no path-following segment
+can reach (the pure-pursuit controller has no notion of "stop and
+rotate"). A job like "follow path to pot 1" -> "turn right to 245±10"
+-> "water for 60s" -> "go back to waterbutt" needed this as a
+first-class step.
+
+**Design considered and rejected**: saving it as a "path" (it has no
+real geometry, and paths are already heading toward needing their own
+organisation as the saved-path count grows — adding a non-geometric
+entry to that list now would make that worse, not better). Also
+rejected: a `jobs`-only step with no navigate-level primitive backing
+it, since that loses independent testability — needing a whole job just
+to test whether a turn works at all.
+
+**What was built instead**, following the same shape `water`/`fill`
+steps already established (a job step with inline parameters calling a
+direct control endpoint on the owning service, not a reference to some
+saved named thing — no new storage, no CRUD page, nothing added to the
+paths-organisation problem):
+
+- `navigate/turn_control.py`'s `TurnRunner` — heading-only control, no
+  position holding. Considered and explicitly deferred: the drive
+  motors are "sticky" enough that one wheel often does most of the
+  turning, so the robot doesn't reliably spin about a fixed point,
+  and the navigation frame's own origin (left-right-middle, forward of
+  the wheels) isn't the robot's true body-centre either — holding a
+  genuine fixed centre of rotation would need a calibrated lever arm to
+  that body-centre *and* a two-DOF position+heading controller, real
+  added complexity for a problem not yet confirmed to matter in
+  practice. Started simple: accept wherever the robot ends up:
+  shortest-way proportional heading control (`turn_gain`, capped by
+  `turn_max_rate_rad_s`/`turn_max_mps`), same
+  `geometry.differential_drive`/`angle_diff` the path-following
+  controller already uses, just with zero forward speed. Revisit only
+  if live use shows the drift actually matters.
+- `POST /control/turn` (`heading_deg`, optional `tolerance_deg` —
+  defaults to config's `turn_tolerance_deg` if omitted) alongside the
+  existing `/control/load/<name>` + `/control/start`. Mutually
+  exclusive with path-following: each refuses to start while the other
+  is running. `/control/stop` stops whichever of the two is actually
+  in progress, so callers (including `jobs`) never need to know which
+  kind of run they're stopping.
+- `_active_kind` (`app.py`) tracks whether the path runner or the turn
+  runner is the one whose status/debug-log actually matters right now —
+  same idea `_current_path_name` already used for display, generalised
+  to cover *which kind* of run it was. The debug log (see "Debug log"
+  above) works for turns too, labelled by target heading instead of
+  path name.
+- `jobs/control.py`: `turn_to_heading` step, polled exactly like
+  `run_path` (both just ask navigate to do something and wait for it to
+  leave "running" — the shared method is now `_tick_navigate_step`,
+  renamed from `_tick_run_path` since it's no longer path-specific).
+  No accuracy-limit check for turning (unlike path-following) — heading
+  isn't well correlated with `horizontal_accuracy_m`, which measures
+  position error specifically.
+- Independent testability, the whole point of not making this a
+  `jobs`-only step: a small "Turn in place" control on navigate's own
+  Run page, separate from any job.
+
 ## Open question: heading-error aborts on jagged paths
 
 A real run aborted on a heading-error breach, suspected by the

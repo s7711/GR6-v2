@@ -21,6 +21,7 @@ import requests
 import app
 import paths as paths_module
 from control import PathRunner
+from turn_control import TurnRunner
 
 SAMPLE_POINTS = [
     {"lat": 52.2, "lon": -1.5, "speed_mps": 0.5, "pump": False, "clearance_m": 0.5},
@@ -88,7 +89,9 @@ class NavigateAppTestCase(unittest.TestCase):
         app._debug_log_path = None
         self.recorder = Recorder()
         app.runner = PathRunner(app.CONTROL_CONFIG, self.recorder.send_velocity, self.recorder.send_pump)
+        app.turn_runner = TurnRunner(app.TURN_CONFIG, self.recorder.send_velocity)
         app._current_path_name = None
+        app._active_kind = "path"
         app._aruco_priority_active_for_run = False
         app._control_loop_last_state = "idle"
         app.nav_client = FakeNavClient()
@@ -472,6 +475,53 @@ class NavigateAppTestCase(unittest.TestCase):
     def test_control_start_without_position_fix(self):
         resp = self.client.post("/control/start")
         self.assertEqual(resp.get_json(), {"ok": False, "reason": "no position fix yet"})
+
+    def test_control_turn_start_stop(self):
+        self._set_position(52.2, -1.5, 0)
+        resp = self.client.post("/control/turn", json={"heading_deg": 90, "tolerance_deg": 10})
+        self.assertEqual(resp.get_json(), {"ok": True})
+        self.assertEqual(app.turn_runner.status()["state"], "running")
+
+        self.assertEqual(self.client.post("/control/stop").status_code, 204)
+        self.assertEqual(app.turn_runner.status()["state"], "idle")
+        self.assertEqual(self.recorder.velocity_calls[-1], (0.0, 0.0))
+
+    def test_control_turn_defaults_tolerance_from_config(self):
+        self._set_position(52.2, -1.5, 85)  # within the configured default tolerance of 90
+        self.client.post("/control/turn", json={"heading_deg": 90})
+        app._control_tick()
+        self.assertEqual(app.turn_runner.status()["state"], "stopped_ok")
+
+    def test_control_turn_without_position_fix(self):
+        resp = self.client.post("/control/turn", json={"heading_deg": 90})
+        self.assertEqual(resp.get_json(), {"ok": False, "reason": "no position fix yet"})
+
+    def test_control_turn_refused_while_a_path_is_running(self):
+        paths_module.save_path(app.PATHS_DIR, "loop", SAMPLE_POINTS)
+        self.client.post("/control/load/loop")
+        self._set_position(52.2, -1.5, 0)
+        self.client.post("/control/start")
+
+        resp = self.client.post("/control/turn", json={"heading_deg": 90})
+        self.assertEqual(resp.get_json(), {"ok": False, "reason": "a path is already running - stop it first"})
+        self.assertEqual(app.turn_runner.status()["state"], "idle")
+
+    def test_control_start_refused_while_a_turn_is_running(self):
+        self._set_position(52.2, -1.5, 0)
+        self.client.post("/control/turn", json={"heading_deg": 90, "tolerance_deg": 1})
+
+        paths_module.save_path(app.PATHS_DIR, "loop", SAMPLE_POINTS)
+        self.client.post("/control/load/loop")
+        resp = self.client.post("/control/start")
+        self.assertEqual(resp.get_json(), {"ok": False, "reason": "a turn is already running - stop it first"})
+        self.assertEqual(app.runner.status()["state"], "idle")
+
+    def test_snapshot_reports_turn_status_while_a_turn_is_active(self):
+        self._set_position(52.2, -1.5, 0)
+        self.client.post("/control/turn", json={"heading_deg": 90, "tolerance_deg": 10})
+        snapshot = app._snapshot()
+        self.assertEqual(snapshot["state"], "running")
+        self.assertIsNone(snapshot["path_name"])
 
     def test_control_entry_check(self):
         paths_module.save_path(app.PATHS_DIR, "loop", SAMPLE_POINTS)

@@ -44,6 +44,28 @@
   </div>
 </div>
 
+<div class="row g-3 mb-3">
+  <div class="col-12 col-md-6">
+    <div class="card">
+      <div class="card-body">
+        <h6 class="card-title">Turn in place</h6>
+        <div class="row g-2">
+          <div class="col-6">
+            <label class="form-label">Heading (deg)</label>
+            <input id="turn-heading" type="number" class="form-control" min="0" max="359" value="0">
+          </div>
+          <div class="col-6">
+            <label class="form-label">Tolerance (&plusmn;deg)</label>
+            <input id="turn-tolerance" type="number" class="form-control" min="1" max="90" placeholder="default">
+          </div>
+        </div>
+        <button id="turn-btn" class="btn btn-success mt-2">Turn</button>
+        <div id="turn-message" class="text-body-secondary small mt-2"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div id="map-wrapper" style="position: relative; width: 100%;">
   <canvas id="map-canvas" style="display: block; width: 100%; height: 100%;"></canvas>
   <div class="btn-group-vertical position-absolute top-0 end-0 m-2" role="group">
@@ -111,6 +133,26 @@ document.getElementById("start-btn").addEventListener("click", () => {
 
 document.getElementById("stop-btn").addEventListener("click", () => {
   fetch("/control/stop", { method: "POST" });
+});
+
+// --- Turn in place (added 2026-08-18 - see navigate-prd.md's "Turn in
+// place") - independently testable was the whole point, so it's a
+// plain control here, not tucked inside a job. Shares the Stop button
+// above: navigate's own /control/stop stops whichever of a path/turn
+// is actually running.
+
+document.getElementById("turn-btn").addEventListener("click", () => {
+  const heading_deg = parseFloat(document.getElementById("turn-heading").value);
+  const toleranceInput = document.getElementById("turn-tolerance").value;
+  const body = { heading_deg };
+  if (toleranceInput !== "") body.tolerance_deg = parseFloat(toleranceInput);
+  fetch("/control/turn", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }).then((r) => r.json()).then((result) => {
+    document.getElementById("turn-message").textContent = result.ok === false ? (result.reason || "Couldn't turn.") : "";
+  });
 });
 
 // --- Live status (navigate's own feed) ---
