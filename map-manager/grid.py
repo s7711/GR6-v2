@@ -31,6 +31,22 @@ def sensor_world_pose(robot_north, robot_east, robot_heading_deg, sensor_x_m, se
     return robot_north + world_dn, robot_east + world_de, beam_heading_deg
 
 
+def effective_range_m(range_mm, max_range_m):
+    """Raw millimetre reading (or None) -> the range_m record_detection
+    expects, or None for "nothing in range". Firmware's own "no echo"
+    sentinel isn't documented (see drive/protocol.py) - clamping at
+    max_range_m gets the same behaviour regardless of what the firmware
+    actually reports on a timeout. A shared helper (not duplicated
+    between app.py's live tick and reprocess.py's replay) specifically
+    so max_range_m can differ between the two - raw captures store the
+    untouched range_mm, letting a later replay reinterpret it against a
+    different max_range_m than was live at capture time."""
+    if range_mm is None:
+        return None
+    range_m = range_mm / 1000.0
+    return None if range_m >= max_range_m else range_m
+
+
 def _angle_diff_deg(a, b):
     """Signed a-b, wrapped to [-180, 180) — same idea as
     navigate/geometry.py's angle_diff, kept local since it's a
@@ -39,21 +55,54 @@ def _angle_diff_deg(a, b):
     return (a - b + 180) % 360 - 180
 
 
-class MapGrid:
-    """Sparse dict of (i, j) grid-cell-index -> {"hit", "miss", "t"}, plus
-    a separate sparse dict of human overrides that always wins over
-    sensor data and never decays. No raw event log — see
-    map-manager-prd.md ("Why not a raw event list") for why that was
-    deliberately dropped in favour of updating this grid live."""
+def logit(p: float) -> float:
+    """Probability (0-1, exclusive) -> log-odds. Inverse of sigmoid."""
+    return math.log(p / (1.0 - p))
 
-    def __init__(self, cell_size_m, max_range_m, beam_half_angle_deg, forget_after_s, min_observations=2, now=time.time):
+
+def sigmoid(l: float) -> float:
+    """Log-odds -> probability (0-1). Inverse of logit."""
+    return 1.0 / (1.0 + math.exp(-l))
+
+
+class LogOddsParams:
+    """The sensor-confidence/clamp numbers a grid update needs, as
+    human-meaningful probabilities rather than raw log-odds - see
+    map-manager-prd.md ("Occupancy grid: clamped log-odds") for what
+    each one means and why clamping is what fixes the "15,000
+    observations make the belief immovable" problem a plain hit/miss
+    ratio has. Bundled into one object because the post-processor needs
+    to pass a whole alternate set through at once (see reprocess.py)."""
+
+    def __init__(self, p_hit, p_miss, p_min, p_max):
+        self.p_hit = p_hit
+        self.p_miss = p_miss
+        self.p_min = p_min
+        self.p_max = p_max
+        self.l_hit = logit(p_hit)
+        self.l_miss = logit(p_miss)
+        self.l_min = logit(p_min)
+        self.l_max = logit(p_max)
+
+    def to_dict(self):
+        return {"p_hit": self.p_hit, "p_miss": self.p_miss, "p_min": self.p_min, "p_max": self.p_max}
+
+
+class MapGrid:
+    """Sparse dict of (i, j) grid-cell-index -> {"log_odds", "t"}, plus
+    a separate sparse dict of human overrides that always wins over
+    sensor data and never decays. No raw event log in here - this is
+    the *derived* grid; see raw_log.py for the separately-toggled raw
+    capture a post-processor can rebuild one of these from."""
+
+    def __init__(self, cell_size_m, max_range_m, beam_half_angle_deg, forget_after_s, params: LogOddsParams, now=time.time):
         self.cell_size_m = cell_size_m
         self.max_range_m = max_range_m
         self.beam_half_angle_deg = beam_half_angle_deg
         self.forget_after_s = forget_after_s
-        self.min_observations = min_observations
+        self.params = params
         self._now = now
-        self._cells = {}  # (i, j) -> {"hit": int, "miss": int, "t": float}
+        self._cells = {}  # (i, j) -> {"log_odds": float, "t": float}
         self._overrides = {}  # (i, j) -> "blocked" | "clear"
         self.dirty = False
 
@@ -64,8 +113,9 @@ class MapGrid:
         return i * self.cell_size_m, j * self.cell_size_m
 
     def _bump(self, index, hit, t):
-        cell = self._cells.setdefault(index, {"hit": 0, "miss": 0, "t": t})
-        cell["hit" if hit else "miss"] += 1
+        cell = self._cells.setdefault(index, {"log_odds": 0.0, "t": t})
+        cell["log_odds"] += self.params.l_hit if hit else self.params.l_miss
+        cell["log_odds"] = max(self.params.l_min, min(self.params.l_max, cell["log_odds"]))
         cell["t"] = t
         self.dirty = True
 
@@ -98,12 +148,11 @@ class MapGrid:
 
     def cell_value(self, north, east):
         """{"source": "override", "value": ...} | {"source": "unknown"} |
-        {"source": "sensor", "p_occupied":, "hit":, "miss":, "age_s":} —
-        an override always wins; otherwise a cell with too few
-        observations, or nothing recent enough (see forget_after_s),
-        reads as unknown rather than guessing. p_occupied is a first
-        cut (see map-manager-prd.md) - expect to revisit once a path
-        planner actually consumes this."""
+        {"source": "sensor", "p_occupied":, "age_s":} - an override
+        always wins; otherwise a cell that's never been touched, or
+        nothing recent enough (see forget_after_s), reads as unknown
+        rather than guessing. p_occupied comes from the clamped
+        log-odds value via sigmoid()."""
         index = self._index(north, east)
         override = self._overrides.get(index)
         if override is not None:
@@ -114,10 +163,7 @@ class MapGrid:
         age_s = self._now() - entry["t"]
         if age_s > self.forget_after_s:
             return {"source": "unknown"}
-        total = entry["hit"] + entry["miss"]
-        if total < self.min_observations:
-            return {"source": "unknown"}
-        return {"source": "sensor", "p_occupied": entry["hit"] / total, "hit": entry["hit"], "miss": entry["miss"], "age_s": age_s}
+        return {"source": "sensor", "p_occupied": sigmoid(entry["log_odds"]), "age_s": age_s}
 
     def set_override(self, north, east, value):
         if value not in ("blocked", "clear"):
@@ -130,14 +176,16 @@ class MapGrid:
         self.dirty = True
 
     def stats(self):
-        total_hit = sum(c["hit"] for c in self._cells.values())
-        total_miss = sum(c["miss"] for c in self._cells.values())
-        return {"cells": len(self._cells), "overrides": len(self._overrides), "total_hit": total_hit, "total_miss": total_miss}
+        return {"cells": len(self._cells), "overrides": len(self._overrides)}
 
     def dump_state(self):
         return {
             "cells": {f"{i},{j}": v for (i, j), v in self._cells.items()},
             "overrides": {f"{i},{j}": v for (i, j), v in self._overrides.items()},
+            "params": self.params.to_dict(),
+            "cell_size_m": self.cell_size_m,
+            "max_range_m": self.max_range_m,
+            "beam_half_angle_deg": self.beam_half_angle_deg,
         }
 
     def load_state(self, data):

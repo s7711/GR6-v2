@@ -157,8 +157,21 @@ services:
     cell_size_m: 0.10
     max_range_m: 1.2                    # ultrasonics aren't trusted beyond this — see map-manager-prd.md
     beam_half_angle_deg: 7.5            # half of the ultrasonics' ~15 degree cone
-    forget_after_days: 30               # a cell with no fresh hit/miss in this long reads back as "unknown" — see grid.py's cell_value
-    min_observations: 2                 # a cell needs at least this many hit+miss readings before it's trusted at all
+    forget_after_days: 30               # a cell with no fresh update in this long reads back as "unknown" — see grid.py's cell_value
+    # Clamped log-odds occupancy update (grid.py's LogOddsParams) — see
+    # map-manager-prd.md's "Occupancy grid: clamped log-odds". p_hit/
+    # p_miss are P(occupied | sensor said hit/miss) - how much to trust
+    # a single reading; p_min/p_max clamp the resulting probability so
+    # no amount of repeated confirmation makes a cell's belief so
+    # extreme that real, later, contradicting evidence can't move it
+    # within a handful of readings. Starting values, not measured yet —
+    # tune once real behaviour's been seen (the post-processor lets you
+    # replay captured raw data with different values without re-driving).
+    p_hit: 0.7
+    p_miss: 0.3
+    p_min: 0.02
+    p_max: 0.98
+    raw_log_retention_days: 4           # separate from forget_after_days above - this is the raw per-detection capture (map-manager/data/raw/), only ever kept around for the few days of a tuning session, not the derived grid itself. See map-manager-prd.md's "Raw event capture"
     accuracy_h_max_m: 0.03              # only update the grid while oxts-nav's horizontal accuracy is at least this good
     accuracy_v_max_m: 0.05              # same, vertical
     map_origin_lat: 0.0                 # placeholder — SET to the waterbutt QC marker's own surveyed lat (aruco marker id 12, aruco/data/marker-map.yaml) — fixed reference point the whole persistent grid is built relative to (see map-manager-prd.md "Reference frame"). Real value deliberately not committed here - it's this robot's real-world location (see config.yaml, gitignored)
