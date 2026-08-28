@@ -40,7 +40,7 @@ map-manager/data/
 
 # Compiled firmware artifacts — a build output, not source; the .ino is
 # the source of truth, see drive-prd.md
-drive/firmware/*.hex
+drive/firmware/arduino/*.hex
 
 # Claude Code's own local tooling state, not project source
 .claude/
