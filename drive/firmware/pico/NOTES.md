@@ -57,28 +57,78 @@ would have produced through a comparator) and the actual non-
 overlapping pulse shape unipolar digital switches like the A3144
 produce.
 
-## Plan (agreed 2026-08-28, staged)
+## Fixed encoder direction decode (2026-08-28)
 
-1. Replace the level-sampling X2 decode with an alternation-required
-   order-based decode: track which channel's pulse last completed:
-   only count a step (and only then decide direction) when the
-   *other* channel's pulse completes next. If the same channel fires
-   twice in a row (wheel rocking/backlash without a full step,
-   plausible at low speed or right at motor start/stop), treat it as
-   a no-op rather than guessing - safer to undercount briefly than to
-   misattribute direction.
-2. Separately (once (1) is bench-proven), add a time-based velocity
-   estimate using the precise per-edge microsecond timestamps
-   (already proven out in the bench diagnostic scripts) rather than
-   the current fixed-100ms-window position-delta approach, which is
-   noisy at low speed (few counts per window) and needed the `Kb`
-   filter to compensate at the cost of added lag. Needs calibrated
-   angular widths for the two distinct segment types (the ~45 degree
-   A-to-B gap and the ~135 degree B-to-next-A gap) since they are not
-   symmetric. Direction still comes from (1) - timing only gives
-   speed magnitude, not sign.
+First attempt was an "alternation-required" decode: only count a step
+when the *other* channel's pulse completes next, treating a repeated
+same-channel pulse (backlash/jitter) as a no-op. Bench-tested on the
+real spinning LM motor and it still failed (`position` stuck near 0
+despite ~130 real edges/channel over 2s, confirmed genuinely happening
+by eye via the pump-style LEDs wired onto the encoder lines) - because
+alternation (A,B,A,B,...) happens on *every* cycle regardless of
+rotation direction; individual transition order alone carries no
+direction information for two phase-offset unipolar channels like
+these.
 
-Both steps get bench-tested independently (motor spin + logged
-edges/position, same technique used to find this bug) before being
-combined into the real PID loop, so a fault in one is not confused
-with a fault in the other.
+The actual usable signal is the timing asymmetry already documented
+above: the genuine ~45 degree gap (short, 3-6ms) versus the ~135
+degree wrap-around gap (long, 14-21ms). Only the short transition's
+channel order reveals which sensor is really leading; the long one is
+skipped for counting to avoid double-counting/flip-flop. Bench-
+confirmed on LM: forward spin gave `position = -132` against 132 real
+short-transition events (clean, consistent sign throughout, no more
+cancelling), and a matched-duration reverse spin brought it back to
+`-2` - correctly flipping sign on reversal. Implemented in `main.py`
+as `_lm_encoder_edge`/`_rm_encoder_edge`, replacing the old ISRs.
+
+Caveats:
+- **`ENC_SHORT_THRESHOLD_US` (10000) is a fixed cutoff validated at
+  only one bench speed** (~60% PWM duty, ~66Hz per channel). Since the
+  short/long gap durations scale with rotation speed, a fixed
+  time threshold is speed-dependent and could misclassify at speeds
+  far from what was tested (e.g. a very slow crawl making even the
+  short gap exceed 10ms, or a very fast spin making the long gap dip
+  under it). A ratio-based rule (comparing each interval against a
+  running average, rather than an absolute cutoff) would be more
+  robust - not done yet, flagged for when real closed-loop speeds are
+  known.
+- **Resolution is coarse**: 2 counts per revolution per motor (only
+  the short transition counts), same order as the original x2 decode,
+  just with correct sign now. This is exactly where the time-based
+  velocity estimate (below) is expected to help.
+- **RM's sign convention is unconfirmed.** It mirrors LM's, matching
+  the Arduino original's opposite convention for RM vs LM (accounting
+  for the right motor's mirrored physical mounting), but this is an
+  assumption carried over, not independently bench-tested - there is
+  no working right-motor/encoder rig as of 2026-08-28 (see "Test rig
+  status" below). Verify RM_position's sign against real hardware
+  before trusting it in the PID loop.
+
+## Time-based velocity estimate - not yet built
+
+Still the planned next step: use the precise per-edge microsecond
+timestamps (already proven out in the bench diagnostic scripts) for a
+velocity estimate, rather than the current fixed-100ms-window
+position-delta approach, which is noisy at low speed (few counts per
+window) and needed the `Kb` filter to compensate at the cost of added
+lag. Needs calibrated angular widths for the two distinct segment
+types (the ~45 degree and ~135 degree gaps), since they are not
+symmetric. Direction still comes from the fix above - timing only
+gives speed magnitude, not sign. Bench-test independently (motor spin
++ logged edges/position) before combining into the real PID loop, same
+approach used throughout this work, so a fault in one piece isn't
+confused with a fault in another.
+
+## Test rig status (2026-08-28)
+
+Amundsen's two original motors (both the same design) remain on the
+robot. Two spare motors were bought hoping to match them for bench
+testing, but turned out to have a different gearbox internally, with
+no way to fit encoder magnets - so only one motor+encoder bench rig
+exists right now (used for all the LM testing above), built from a
+third, different spare motor. Options discussed for the right-motor
+channel: test the electronics alone against the spare bench motor;
+prove PID on LM first then physically swap the same bench motor onto
+the RM channel for its own test; or the higher-risk step of pulling
+the working electronics out of Amundsen entirely and fitting the new
+board. No decision made yet on which.

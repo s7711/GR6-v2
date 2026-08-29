@@ -74,31 +74,78 @@ RM_ENC_B = Pin(pins.RM_ENC_B, Pin.IN, Pin.PULL_UP)
 LM_position = 0
 RM_position = 0
 
+# Direction decode: see NOTES.md "Fixed encoder direction decode
+# (2026-08-28)". Alternation order (A,B,A,B,...) by itself carries no
+# direction information - it happens every cycle regardless of which
+# way the wheel is turning, since these are two phase-offset unipolar
+# sensors, not overlapping ~50%-duty channels. What's actually
+# asymmetric (confirmed on the bench) is the GAP: ~45 degrees (short,
+# 3-6ms one way) vs ~135 degrees (long, 14-21ms the wrap-around way).
+# Only the short transition reveals which channel is really leading,
+# so only it is counted; the long transition is skipped to avoid
+# double-counting/flip-flop. ENC_SHORT_THRESHOLD_US is a fixed cutoff
+# validated at one bench speed only - see NOTES.md's caveat on this
+# being speed-dependent.
+ENC_SHORT_THRESHOLD_US = 10000
 
-# KNOWN BROKEN for direction with the A3144s as mounted (unipolar,
-# 45-degree spacing) - see NOTES.md "Known issue: encoder direction
-# decode does not work with the A3144s". Kept as a faithful Arduino
-# port / rollback point; do not trust LM_position/RM_position's sign
-# until the alternation-required decode replaces this.
-def _lm_encoder_isr(pin):
-    global LM_position
-    if LM_ENC_A.value() == LM_ENC_B.value():
-        LM_position -= 1
-    else:
-        LM_position += 1
-
-
-# Same caveat as _lm_encoder_isr above - see NOTES.md.
-def _rm_encoder_isr(pin):
-    global RM_position
-    if RM_ENC_A.value() == RM_ENC_B.value():
-        RM_position += 1
-    else:
-        RM_position -= 1
+_lm_last_channel = None
+_lm_last_time = 0
+_rm_last_channel = None
+_rm_last_time = 0
 
 
-LM_ENC_A.irq(trigger=Pin.IRQ_RISING | Pin.IRQ_FALLING, handler=_lm_encoder_isr)
-RM_ENC_A.irq(trigger=Pin.IRQ_RISING | Pin.IRQ_FALLING, handler=_rm_encoder_isr)
+def _lm_encoder_edge(channel):
+    global LM_position, _lm_last_channel, _lm_last_time
+    now = time.ticks_us()
+    if _lm_last_channel is not None and channel != _lm_last_channel:
+        if time.ticks_diff(now, _lm_last_time) < ENC_SHORT_THRESHOLD_US:
+            if _lm_last_channel == "A" and channel == "B":
+                LM_position += 1
+            else:
+                LM_position -= 1
+    _lm_last_channel = channel
+    _lm_last_time = now
+
+
+def _lm_enc_a_isr(pin):
+    _lm_encoder_edge("A")
+
+
+def _lm_enc_b_isr(pin):
+    _lm_encoder_edge("B")
+
+
+# RM's sign convention mirrors LM's (matching the Arduino original,
+# which also used an opposite convention for RM vs LM to account for
+# the right motor's mirrored physical mounting) - but this has NOT
+# been independently bench-validated on real RM hardware yet (no
+# working right-motor/encoder rig as of 2026-08-28, see NOTES.md).
+# Treat RM_position's sign as unconfirmed until it has been.
+def _rm_encoder_edge(channel):
+    global RM_position, _rm_last_channel, _rm_last_time
+    now = time.ticks_us()
+    if _rm_last_channel is not None and channel != _rm_last_channel:
+        if time.ticks_diff(now, _rm_last_time) < ENC_SHORT_THRESHOLD_US:
+            if _rm_last_channel == "A" and channel == "B":
+                RM_position -= 1
+            else:
+                RM_position += 1
+    _rm_last_channel = channel
+    _rm_last_time = now
+
+
+def _rm_enc_a_isr(pin):
+    _rm_encoder_edge("A")
+
+
+def _rm_enc_b_isr(pin):
+    _rm_encoder_edge("B")
+
+
+LM_ENC_A.irq(trigger=Pin.IRQ_RISING, handler=_lm_enc_a_isr)
+LM_ENC_B.irq(trigger=Pin.IRQ_RISING, handler=_lm_enc_b_isr)
+RM_ENC_A.irq(trigger=Pin.IRQ_RISING, handler=_rm_enc_a_isr)
+RM_ENC_B.irq(trigger=Pin.IRQ_RISING, handler=_rm_enc_b_isr)
 
 # ---- Control loop constants ----
 CTRL_LOOP_STEP_MS = 100
