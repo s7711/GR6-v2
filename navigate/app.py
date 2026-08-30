@@ -170,10 +170,15 @@ _active_kind = "path"  # "path" | "turn"
 
 
 def _current_position():
-    """{"lat":, "lon":, "heading_deg":, "horizontal_accuracy_m":} from
-    oxts-nav's live feed (Lat/Lon there are radians; converted to
-    degrees here since that's what geometry.py/paths.py both expect),
-    or None if no fix has been received yet."""
+    """{"lat":, "lon":, "heading_deg":, "horizontal_accuracy_m":,
+    "horizontal_speed_mps":} from oxts-nav's live feed (Lat/Lon there
+    are radians; converted to degrees here since that's what
+    geometry.py/paths.py both expect), or None if no fix has been
+    received yet. horizontal_speed_mps is the xNAV's own INS-derived
+    ground speed (hypot of its Vn/Ve velocity components) - logged
+    purely for comparison against wheel-derived speed (see
+    drive-prd.md/wheelspeed's counts_per_metre calibration question),
+    not used for control."""
     payload = nav_client.latest()
     nav = payload.get("nav", {})
     status = payload.get("status", {})
@@ -184,11 +189,15 @@ def _current_position():
     horizontal_accuracy_m = (
         math.hypot(north_acc, east_acc) if north_acc is not None and east_acc is not None else None
     )
+    vn = nav.get("Vn")
+    ve = nav.get("Ve")
+    horizontal_speed_mps = math.hypot(vn, ve) if vn is not None and ve is not None else None
     return {
         "lat": math.degrees(nav["Lat"]),
         "lon": math.degrees(nav["Lon"]),
         "heading_deg": nav["Heading"],
         "horizontal_accuracy_m": horizontal_accuracy_m,
+        "horizontal_speed_mps": horizontal_speed_mps,
     }
 
 

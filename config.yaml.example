@@ -64,7 +64,7 @@ services:
     web_ui: true
     serial_port: /dev/ttyACM0       # Pico's native USB CDC (was /dev/ttyUSB0 for the old Arduino)
     baud: 115200
-    counts_per_metre: 250            # from GR6-v1, needs re-measuring on this robot — the wheelspeed-GAD sender will depend on this being right
+    counts_per_metre: 159            # re-measured 2026-08-30 against xNAV horizontal_speed_mps (was 250 from GR6-v1) — the wheelspeed-GAD sender depends on this being right
     wheel_base_m: 0.42               # distance between the two wheels' contact points, from GR6-v1 — lives here (not under navigate:) alongside counts_per_metre, the other physical-drivetrain constant; navigate reads it from here rather than keeping its own copy
     human_control_hold_ms: 500       # how long a manual jog command locks out automatic callers (navigate/jobs) — see drive-prd.md
     expected_firmware_version: "260828#1.GR6"
