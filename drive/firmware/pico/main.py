@@ -27,11 +27,11 @@ import select
 import sys
 import time
 
-from machine import PWM, Pin
+from machine import PWM, Pin, time_pulse_us
 
 import gr6_pins as pins
 
-VERSION = "gr6_pico_260828#1"
+VERSION = "260828#1.GR6"
 
 # ---- Power latch: first thing we do, full stop ----
 pwr_en = Pin(pins.PWR_12V_EN, Pin.OUT)
@@ -100,9 +100,9 @@ def _lm_encoder_edge(channel):
     if _lm_last_channel is not None and channel != _lm_last_channel:
         if time.ticks_diff(now, _lm_last_time) < ENC_SHORT_THRESHOLD_US:
             if _lm_last_channel == "A" and channel == "B":
-                LM_position += 1
-            else:
                 LM_position -= 1
+            else:
+                LM_position += 1
     _lm_last_channel = channel
     _lm_last_time = now
 
@@ -115,21 +115,19 @@ def _lm_enc_b_isr(pin):
     _lm_encoder_edge("B")
 
 
-# RM's sign convention mirrors LM's (matching the Arduino original,
-# which also used an opposite convention for RM vs LM to account for
-# the right motor's mirrored physical mounting) - but this has NOT
-# been independently bench-validated on real RM hardware yet (no
-# working right-motor/encoder rig as of 2026-08-28, see NOTES.md).
-# Treat RM_position's sign as unconfirmed until it has been.
+# Sign confirmed on real amundsen hardware 2026-08-29 (see NOTES.md's
+# "Sign convention confirmed on real hardware") after the motor lead
+# polarity was swapped on both motors - LM now needs the mirrored
+# convention and RM the plain one, opposite of the original guess.
 def _rm_encoder_edge(channel):
     global RM_position, _rm_last_channel, _rm_last_time
     now = time.ticks_us()
     if _rm_last_channel is not None and channel != _rm_last_channel:
         if time.ticks_diff(now, _rm_last_time) < ENC_SHORT_THRESHOLD_US:
             if _rm_last_channel == "A" and channel == "B":
-                RM_position -= 1
-            else:
                 RM_position += 1
+            else:
+                RM_position -= 1
     _rm_last_channel = channel
     _rm_last_time = now
 
@@ -237,7 +235,7 @@ def send_ultrasonic(sensor):
     trig_pin.value(0)
 
     echo_pin = Pin(pin_num, Pin.IN)
-    duration_us = time.time_pulse_us(echo_pin, 1, 13000)  # timeout ~2m, matches Arduino
+    duration_us = time_pulse_us(echo_pin, 1, 13000)  # timeout ~2m, matches Arduino
 
     if duration_us < 0:
         d = -1

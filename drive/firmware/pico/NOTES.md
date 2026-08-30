@@ -96,13 +96,37 @@ Caveats:
   the short transition counts), same order as the original x2 decode,
   just with correct sign now. This is exactly where the time-based
   velocity estimate (below) is expected to help.
-- **RM's sign convention is unconfirmed.** It mirrors LM's, matching
-  the Arduino original's opposite convention for RM vs LM (accounting
-  for the right motor's mirrored physical mounting), but this is an
-  assumption carried over, not independently bench-tested - there is
-  no working right-motor/encoder rig as of 2026-08-28 (see "Test rig
-  status" below). Verify RM_position's sign against real hardware
-  before trusting it in the PID loop.
+- ~~RM's sign convention is unconfirmed~~ - confirmed on real hardware
+  2026-08-29, see below. Originally guessed to mirror the Arduino's
+  RM-vs-LM convention; turned out to need the *opposite* pairing once
+  everything was actually wired up.
+
+## Sign convention confirmed on real hardware (2026-08-29)
+
+Fitting the new board into amundsen turned up two independent wiring
+mix-ups, found and fixed one at a time using an open-loop (no SV/PID)
+spin test on each motor output in turn, watching which physical wheel
+moved:
+
+1. The motor+encoder connectors for left/right were plugged into the
+   wrong PCB headers (a physical mix-up, not a PCB fault) - driving
+   the "LM" output moved the physical right wheel, and its encoder
+   counted on `RM_position`, not `LM_position` (fully consistent both
+   ways, i.e. the motor and its own encoder were crossed together as
+   a pair). Fixed by swapping which connector plugs into which header
+   - no code change needed for this part.
+2. With the connectors corrected, both wheels turned *backwards* on
+   what should have been each channel's forward command. Fixed by
+   swapping motor lead polarity on both motors (not the encoders).
+
+After both fixes, confirmed by direct observation (wheels turning the
+robot's real forward direction) that `_lm_encoder_edge` needs the
+*mirrored* convention and `_rm_encoder_edge` needs the *plain* one -
+the opposite pairing from the original guess (which had assumed LM
+plain / RM mirrored, based on the Arduino's RM-vs-LM convention).
+`main.py` updated accordingly. If either motor's connector or lead
+polarity is ever changed again, this sign pairing will need re-
+checking with the same open-loop spin test.
 
 ## Time-based velocity estimate - not yet built
 

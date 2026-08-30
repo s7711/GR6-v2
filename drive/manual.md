@@ -131,11 +131,11 @@ two aren't distinguishable from this reading alone).
 Sensor ids (`U0`&ndash;`U4`) match the firmware's own numbering, not
 renumbered for this page:
 
-- **U0** — front-right, facing forward
-- **U1** — back-right, facing right
-- **U4** — front-left, facing forward
-- **U3** — back-left, facing left
-- **U2** — back-centre, facing backward
+- **U0** — front-left, facing forward
+- **U1** — front-right, facing forward
+- **U2** — back-right, facing right
+- **U4** — back-left, facing left
+- **U3** — back-centre, facing backward
 
 Not currently used for any automatic obstacle-avoidance — that's
 future work, once these are trusted (see drive-prd.md). This page

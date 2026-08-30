@@ -164,9 +164,9 @@ mounting heading come from `config.yaml`'s `sensors` list, keyed by
 and firmware's `ultrasonicPins` array — not 1-indexed, caught and fixed
 2026-08-18 before any real measurements were taken against it). Heading
 is filled in already, straight from drive/templates/pages/
-ultrasonics.html's documented position/facing diagram (U0/U4 front
-corners facing forward, U1 back-right facing right, U2 back-centre
-facing backward, U3 back-left facing left) — the x/y/z position offsets
+ultrasonics.html's documented position/facing diagram (U0/U1 front
+corners facing forward, U2 back-right facing right, U3 back-centre
+facing backward, U4 back-left facing left) — the x/y/z position offsets
 are still unmeasured placeholders (`MEASURE AND SET`), pending CAD
 measurements. The wedge geometry means being off by a few degrees is
 fine (matches the sensors' own ~15 degree cone / ~5 degree practical

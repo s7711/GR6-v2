@@ -62,12 +62,12 @@ services:
     host: 0.0.0.0
     port: 8005
     web_ui: true
-    serial_port: /dev/ttyUSB0       # re-check once the Pico is fitted — likely /dev/ttyACM0 or similar
+    serial_port: /dev/ttyACM0       # Pico's native USB CDC (was /dev/ttyUSB0 for the old Arduino)
     baud: 115200
     counts_per_metre: 250            # from GR6-v1, needs re-measuring on this robot — the wheelspeed-GAD sender will depend on this being right
     wheel_base_m: 0.42               # distance between the two wheels' contact points, from GR6-v1 — lives here (not under navigate:) alongside counts_per_metre, the other physical-drivetrain constant; navigate reads it from here rather than keeping its own copy
     human_control_hold_ms: 500       # how long a manual jog command locks out automatic callers (navigate/jobs) — see drive-prd.md
-    expected_firmware_version: "260720#1.GR6"
+    expected_firmware_version: "260828#1.GR6"
     drive_feed_socket: /tmp/gr6-drive-feed.sock  # Unix domain socket — see "Feed naming" in drive-prd.md
     drive_feed_hz: 20
     tuning: {}                        # optional, e.g. {Kp: [1.0, 1.0], Ki: [3.0, 3.0]} — pushed to the microcontroller each time drive starts
@@ -185,8 +185,8 @@ services:
     # ultrasonics.html's own position/facing diagram, which is where
     # heading_deg below comes from - x/y/z are placeholders — MEASURE AND SET.
     sensors:
-      - {tag: 0, x: 0.0, y: 0.0, z: 0.0, heading_deg: 0.0}    # front-right, facing forward
-      - {tag: 1, x: 0.0, y: 0.0, z: 0.0, heading_deg: 90.0}   # back-right, facing right
-      - {tag: 2, x: 0.0, y: 0.0, z: 0.0, heading_deg: 180.0}  # back-centre, facing backward
-      - {tag: 3, x: 0.0, y: 0.0, z: 0.0, heading_deg: 270.0}  # back-left, facing left
-      - {tag: 4, x: 0.0, y: 0.0, z: 0.0, heading_deg: 0.0}    # front-left, facing forward
+      - {tag: 0, x: 0.0, y: 0.0, z: 0.0, heading_deg: 0.0}    # front-left, facing forward
+      - {tag: 1, x: 0.0, y: 0.0, z: 0.0, heading_deg: 0.0}    # front-right, facing forward
+      - {tag: 2, x: 0.0, y: 0.0, z: 0.0, heading_deg: 90.0}   # back-right, facing right
+      - {tag: 3, x: 0.0, y: 0.0, z: 0.0, heading_deg: 180.0}  # back-centre, facing backward
+      - {tag: 4, x: 0.0, y: 0.0, z: 0.0, heading_deg: 270.0}  # back-left, facing left
