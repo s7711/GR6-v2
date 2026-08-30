@@ -82,16 +82,10 @@ cancelling), and a matched-duration reverse spin brought it back to
 as `_lm_encoder_edge`/`_rm_encoder_edge`, replacing the old ISRs.
 
 Caveats:
-- **`ENC_SHORT_THRESHOLD_US` (10000) is a fixed cutoff validated at
-  only one bench speed** (~60% PWM duty, ~66Hz per channel). Since the
-  short/long gap durations scale with rotation speed, a fixed
-  time threshold is speed-dependent and could misclassify at speeds
-  far from what was tested (e.g. a very slow crawl making even the
-  short gap exceed 10ms, or a very fast spin making the long gap dip
-  under it). A ratio-based rule (comparing each interval against a
-  running average, rather than an absolute cutoff) would be more
-  robust - not done yet, flagged for when real closed-loop speeds are
-  known.
+- ~~`ENC_SHORT_THRESHOLD_US` is a fixed cutoff validated at only one
+  bench speed~~ - this bit navigate for real on 2026-08-30 and was
+  replaced with a ratio-based decode; see "Adaptive (ratio-based)
+  decode" below.
 - **Resolution is coarse**: 2 counts per revolution per motor (only
   the short transition counts), same order as the original x2 decode,
   just with correct sign now. This is exactly where the time-based
@@ -127,6 +121,57 @@ plain / RM mirrored, based on the Arduino's RM-vs-LM convention).
 `main.py` updated accordingly. If either motor's connector or lead
 polarity is ever changed again, this sign pairing will need re-
 checking with the same open-loop spin test.
+
+## Adaptive (ratio-based) decode (2026-08-30)
+
+The fixed `ENC_SHORT_THRESHOLD_US` (10000) caused a real outdoor
+`navigate` abort: `heading error -72deg exceeds limit 70deg`, with
+`left_mps`/`right_mps` diverging wildly (`0.089` vs `0.512` against a
+`0.3` target) over about 9 real seconds before the abort - gradual,
+not sudden, and asymmetric between wheels.
+
+Bench diagnostic (comparing raw rising-edge count against the
+threshold-decoded position, on the bench indoors, open-loop, no PID):
+found a hard cliff, not a gentle miscalibration - `position` reported
+exactly zero below ~56 rises/s on both motors, despite the raw edge
+count climbing normally the whole time (i.e. real motion, completely
+undetected):
+
+```
+duty=0.15  raw_rises=139  threshold_pos=0    <-- zero despite real motion
+duty=0.20  raw_rises=208  threshold_pos=0    <-- zero despite real motion
+duty=0.30  raw_rises=340  threshold_pos=-168  ratio=0.988  (fine)
+```
+
+The math lines up: at ~56 rises/s the real ~45 degree short gap works
+out to almost exactly 10ms; below that speed the short gap takes
+*longer* than the fixed cutoff and gets thrown away along with the
+genuine long gap, so nothing ever counts. This is almost certainly
+what actually caused the field abort - if a wheel's real speed dipped
+under this cliff, the PID would see zero feedback despite commanding
+real power, wind up its integral term, and drive it far harder than
+intended for real, while still reporting near-zero - matching the
+gradual, asymmetric divergence seen in the log.
+
+Fix: classify each transition against the duration of the *previous*
+transition (short = under `ENC_RATIO` (0.5) of it) instead of a fixed
+absolute cutoff. The short:long ratio (~1:3) holds regardless of
+speed, only the absolute durations scale - so this removes the cliff
+entirely rather than just relocating it. Bench-confirmed accurate
+(97.7-99.8% of the raw-edge-count reference) at every tested speed
+on both motors, including the two speeds that reported exact zero
+before, all the way down to each motor's own physical stall point (no
+decode-side floor found - LM stalls around duty 0.08, RM around 0.10;
+above that both are correctly decoded immediately, no gradual
+degradation zone). Implemented in `main.py`, replacing
+`ENC_SHORT_THRESHOLD_US`.
+
+Known limit, inherent to any 2-channel incremental encoder, not
+specific to this implementation: right after a stop (or a direction
+reversal), there's no previous transition to compare against, so the
+very first transition is genuinely ambiguous. Costs at most one
+transition per start/reversal, versus the old cliff's entire wide
+speed band of silence.
 
 ## Time-based velocity estimate - not yet built
 

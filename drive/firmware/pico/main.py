@@ -74,35 +74,51 @@ RM_ENC_B = Pin(pins.RM_ENC_B, Pin.IN, Pin.PULL_UP)
 LM_position = 0
 RM_position = 0
 
-# Direction decode: see NOTES.md "Fixed encoder direction decode
-# (2026-08-28)". Alternation order (A,B,A,B,...) by itself carries no
+# Direction decode: see NOTES.md "Adaptive (ratio-based) decode
+# (2026-08-30)". Alternation order (A,B,A,B,...) by itself carries no
 # direction information - it happens every cycle regardless of which
 # way the wheel is turning, since these are two phase-offset unipolar
 # sensors, not overlapping ~50%-duty channels. What's actually
-# asymmetric (confirmed on the bench) is the GAP: ~45 degrees (short,
-# 3-6ms one way) vs ~135 degrees (long, 14-21ms the wrap-around way).
-# Only the short transition reveals which channel is really leading,
-# so only it is counted; the long transition is skipped to avoid
-# double-counting/flip-flop. ENC_SHORT_THRESHOLD_US is a fixed cutoff
-# validated at one bench speed only - see NOTES.md's caveat on this
-# being speed-dependent.
-ENC_SHORT_THRESHOLD_US = 10000
+# asymmetric is the GAP: ~45 degrees (short) vs ~135 degrees (long, the
+# wrap-around) - only the short transition reveals which channel is
+# really leading, so only it is counted; the long one is skipped to
+# avoid double-counting/flip-flop. The short:long ratio (~1:3) holds at
+# any speed, but the absolute durations scale directly with speed - a
+# fixed microsecond cutoff had a hard cliff below ~56 rises/s (reported
+# exactly zero despite real motion). Classifying each transition
+# against the PREVIOUS transition's duration instead (short = under
+# ENC_RATIO of it) removed that cliff entirely - bench-confirmed
+# accurate at every speed down to each motor's own stall point, with
+# no absolute number baked in.
+ENC_RATIO = 0.5
+ENC_STALE_GAP_US = 1_000_000  # idle this long - nothing to compare against, same as a fresh start
 
 _lm_last_channel = None
 _lm_last_time = 0
+_lm_prev_dt = None
 _rm_last_channel = None
 _rm_last_time = 0
+_rm_prev_dt = None
 
 
 def _lm_encoder_edge(channel):
-    global LM_position, _lm_last_channel, _lm_last_time
+    global LM_position, _lm_last_channel, _lm_last_time, _lm_prev_dt
     now = time.ticks_us()
-    if _lm_last_channel is not None and channel != _lm_last_channel:
-        if time.ticks_diff(now, _lm_last_time) < ENC_SHORT_THRESHOLD_US:
+    if _lm_last_channel is None:
+        _lm_last_channel = channel
+        _lm_last_time = now
+        return
+    dt = time.ticks_diff(now, _lm_last_time)
+    if dt > ENC_STALE_GAP_US:
+        _lm_prev_dt = None
+    elif channel != _lm_last_channel and _lm_prev_dt is not None:
+        if dt < ENC_RATIO * _lm_prev_dt:
             if _lm_last_channel == "A" and channel == "B":
                 LM_position -= 1
             else:
                 LM_position += 1
+    if channel != _lm_last_channel:
+        _lm_prev_dt = dt
     _lm_last_channel = channel
     _lm_last_time = now
 
@@ -117,17 +133,26 @@ def _lm_enc_b_isr(pin):
 
 # Sign confirmed on real amundsen hardware 2026-08-29 (see NOTES.md's
 # "Sign convention confirmed on real hardware") after the motor lead
-# polarity was swapped on both motors - LM now needs the mirrored
+# polarity was swapped on both motors - LM needs the mirrored
 # convention and RM the plain one, opposite of the original guess.
 def _rm_encoder_edge(channel):
-    global RM_position, _rm_last_channel, _rm_last_time
+    global RM_position, _rm_last_channel, _rm_last_time, _rm_prev_dt
     now = time.ticks_us()
-    if _rm_last_channel is not None and channel != _rm_last_channel:
-        if time.ticks_diff(now, _rm_last_time) < ENC_SHORT_THRESHOLD_US:
+    if _rm_last_channel is None:
+        _rm_last_channel = channel
+        _rm_last_time = now
+        return
+    dt = time.ticks_diff(now, _rm_last_time)
+    if dt > ENC_STALE_GAP_US:
+        _rm_prev_dt = None
+    elif channel != _rm_last_channel and _rm_prev_dt is not None:
+        if dt < ENC_RATIO * _rm_prev_dt:
             if _rm_last_channel == "A" and channel == "B":
                 RM_position += 1
             else:
                 RM_position -= 1
+    if channel != _rm_last_channel:
+        _rm_prev_dt = dt
     _rm_last_channel = channel
     _rm_last_time = now
 
