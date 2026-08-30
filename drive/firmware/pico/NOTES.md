@@ -173,6 +173,33 @@ very first transition is genuinely ambiguous. Costs at most one
 transition per start/reversal, versus the old cliff's entire wide
 speed band of silence.
 
+## Stop now coasts instead of braking (2026-08-30)
+
+Reported after the first real outdoor run: stopping used to glide on
+the old board, now it's an abrupt jam-on-the-brakes. `SV 0 0`'s
+"coast to zero speed" bypass of the `Am` ramp (see the Arduino
+original's own comment saying exactly that) is unchanged and still
+correct - the actual bug was in `set_motor_speed()`'s direction-pin
+logic, ported byte-for-byte from the Arduino: `if motor_speed > 0: ...
+else: ...` has no genuine third case for zero, so a stop fell into the
+"reverse" branch, setting IN2 high. Checked against the real TB6612FNG
+datasheet: `IN1=L, IN2=H, PWM=L` is defined as **short brake**, not
+stop - true stop (outputs off, genuine coast) needs `IN1=L, IN2=L`.
+
+This exact same two-way branch was in the original Arduino code too,
+but never mattered there: the old L298 board's separate Enable pin
+cuts the outputs entirely whenever PWM is 0, regardless of what IN1/
+IN2 say, masking the missing zero-case by accident. The TB6612 doesn't
+work that way - PWM-low with a direction still selected is explicitly
+a braking state on this chip, not a simple disable. Identical
+software, genuinely different real-world behaviour, purely from the
+driver-chip swap.
+
+Fixed with a real three-way branch in `set_motor_speed()` (stop/
+forward/reverse), using the already-deadbanded `abs_speed` to decide
+"stop" so it also covers small values inside the deadband, not just
+exactly zero.
+
 ## Time-based velocity estimate - not yet built
 
 Still the planned next step: use the precise per-edge microsecond

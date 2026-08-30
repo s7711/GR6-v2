@@ -220,7 +220,16 @@ def set_motor_speed(motor_speed, in1, in2, pwm, deadband):
     if abs_speed > MotorMax:
         abs_speed = MotorMax
 
-    if motor_speed > 0:
+    # A genuine third case for stop matters on this board: TB6612's
+    # truth table defines IN1=L,IN2=H (or H,L) with PWM=L as an active
+    # short brake, not coast - only IN1=L,IN2=L is true stop (outputs
+    # off). The old L298 board never needed this distinction, since its
+    # separate Enable pin cut power regardless of IN1/IN2 whenever PWM
+    # was 0 - see NOTES.md "Stop now coasts instead of braking".
+    if abs_speed == 0:
+        in1.value(0)
+        in2.value(0)
+    elif motor_speed > 0:
         in1.value(1)
         in2.value(0)
     else:
