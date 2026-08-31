@@ -1,0 +1,473 @@
+{# title: Log Viewer #}
+{% extends "base.html" %}
+{% block title %}GR6 — Log Viewer{% endblock %}
+
+{% block content %}
+<p class="text-body-secondary">
+  Every service's own <code>data/logs/</code> folder, in one place — see viewer-prd.md.
+  Pick a folder, tick file(s); anything from another folder whose time range overlaps your
+  pick shows up under "Suggested" so runs that happened together are easy to find. Tick
+  quantities per file (each file gets its own tab), then Load. The chart's x-axis is
+  seconds since the earliest loaded file's own start (fixed for the whole loaded set, not
+  per file), so files covering the same real event stay aligned. Hover the chart to see
+  the matching position on the map, or the map to jump the chart there.
+</p>
+
+<div class="row g-3 mb-3">
+  <div class="col-12 col-md-4">
+    <div class="card">
+      <div class="card-body">
+        <div class="text-body-secondary small mb-2">Folders</div>
+        <div id="folder-list" class="d-flex flex-column gap-1"></div>
+      </div>
+    </div>
+  </div>
+  <div class="col-12 col-md-4">
+    <div class="card">
+      <div class="card-body">
+        <div class="text-body-secondary small mb-2" id="files-heading">Files (pick a folder)</div>
+        <div id="file-list" class="d-flex flex-column gap-1" style="max-height: 320px; overflow-y: auto;"></div>
+      </div>
+    </div>
+  </div>
+  <div class="col-12 col-md-4">
+    <div class="card">
+      <div class="card-body">
+        <div class="text-body-secondary small mb-2">Suggested (overlapping time range)</div>
+        <div id="suggested-list" class="d-flex flex-column gap-1" style="max-height: 320px; overflow-y: auto;"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card mb-3">
+  <div class="card-body d-flex justify-content-between align-items-center flex-wrap gap-3">
+    <div id="selection-summary" class="text-body-secondary small">No files selected</div>
+    <div class="d-flex gap-2">
+      <button id="clear-btn" class="btn btn-outline-secondary btn-sm">Clear selection</button>
+      <button id="load-btn" class="btn btn-primary">Load selected</button>
+    </div>
+  </div>
+</div>
+
+<div class="card mb-3">
+  <div class="card-body">
+    <div class="text-body-secondary small mb-2">Quantities to plot (populated once files are loaded — one tab per file)</div>
+    <ul class="nav nav-tabs" id="quantity-tabs"></ul>
+    <div class="tab-content pt-3" id="quantity-tab-content"></div>
+  </div>
+</div>
+
+<div class="card mb-3">
+  <div class="card-body">
+    <div class="text-body-secondary small mb-2">Chart</div>
+    <div id="chart"></div>
+  </div>
+</div>
+
+<div class="card mb-4">
+  <div class="card-body">
+    <div class="text-body-secondary small mb-2">Map (loaded files with their own lat/lon only)</div>
+    <div id="map-wrapper" style="position: relative; width: 100%;">
+      <canvas id="map-canvas" style="display: block; width: 100%; height: 100%;"></canvas>
+      <div class="btn-group-vertical position-absolute top-0 end-0 m-2" role="group">
+        <button type="button" class="btn btn-sm zoom-btn" data-zoom="auto">Auto</button>
+        <button type="button" class="btn btn-sm zoom-btn" data-zoom="2">2 m</button>
+        <button type="button" class="btn btn-sm zoom-btn" data-zoom="5">5 m</button>
+        <button type="button" class="btn btn-sm zoom-btn" data-zoom="10">10 m</button>
+        <button type="button" class="btn btn-sm zoom-btn" data-zoom="20">20 m</button>
+        <button type="button" class="btn btn-sm zoom-btn" data-zoom="50">50 m</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<link href="/static/vendor/uplot-1.6.31/uPlot.min.css" rel="stylesheet">
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/geomap.js"></script>
+<script src="/static/vendor/uplot-1.6.31/uPlot.iife.min.js"></script>
+<script>
+// Big enough distinct palette that (file, quantity) pairs rarely repeat
+// a colour before the legend/map already makes clear which is which.
+const COLOURS = [
+  "#0d6efd", "#dc3545", "#198754", "#fd7e14", "#6f42c1",
+  "#20c997", "#d63384", "#0dcaf0", "#ffc107", "#6610f2",
+];
+
+// How much slack (seconds) either side of the selection's own time span
+// counts as "overlapping" for the Suggested list — a drive log triggered
+// by a navigate run won't necessarily start/stop at exactly the same
+// instant (there's a beat of delay before the wheels actually move, and
+// navigate's own logs run a deliberate idle tail drive's don't), so this
+// is a real overlap test on [start,end] spans, not a fixed closeness
+// check on start times alone.
+const OVERLAP_SLACK_S = 3;
+
+let allLogs = {}; // {source: [{filename, start_t, end_t, line_count, path_name}, ...]}
+let currentFolder = null;
+let selected = []; // [{source, filename, start_t, end_t, line_count, path_name}]
+let loaded = []; // [{source, filename, label, lines: [...]}]
+let selectedQuantities = new Set(); // "source__filename__key"
+
+function fmtTime(t) {
+  if (t === null || t === undefined) return "—";
+  return new Date(t * 1000).toLocaleString([], { hour12: false });
+}
+
+function fileLabel(source, entry) {
+  const when = fmtTime(entry.start_t);
+  if (entry.path_name) return `${when} — ${entry.path_name} (${entry.line_count} lines)`;
+  return `${when} (${entry.line_count} lines)`;
+}
+
+function isSelected(source, filename) {
+  return selected.some((s) => s.source === source && s.filename === filename);
+}
+
+function toggleSelection(source, entry, on) {
+  if (on) {
+    if (!isSelected(source, entry.filename)) selected.push({ source, ...entry });
+  } else {
+    selected = selected.filter((s) => !(s.source === source && s.filename === entry.filename));
+  }
+  renderSelectionSummary();
+  renderSuggested();
+  renderFileList();
+}
+
+function renderFolderList() {
+  const container = document.getElementById("folder-list");
+  container.innerHTML = "";
+  for (const source of Object.keys(allLogs).sort()) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn btn-sm text-start " + (source === currentFolder ? "btn-primary" : "btn-outline-secondary");
+    btn.textContent = `${source} (${allLogs[source].length})`;
+    btn.addEventListener("click", () => {
+      currentFolder = source;
+      renderFolderList();
+      renderFileList();
+    });
+    container.appendChild(btn);
+  }
+}
+
+function renderFileList() {
+  const heading = document.getElementById("files-heading");
+  const container = document.getElementById("file-list");
+  container.innerHTML = "";
+  if (!currentFolder) {
+    heading.textContent = "Files (pick a folder)";
+    return;
+  }
+  heading.textContent = `Files in ${currentFolder}`;
+  for (const entry of allLogs[currentFolder] || []) {
+    const id = `${currentFolder}__${entry.filename}`;
+    const div = document.createElement("div");
+    div.className = "form-check";
+    const checked = isSelected(currentFolder, entry.filename) ? "checked" : "";
+    div.innerHTML = `
+      <input class="form-check-input" type="checkbox" id="cb-${id}" ${checked}>
+      <label class="form-check-label small" for="cb-${id}">${fileLabel(currentFolder, entry)}</label>
+    `;
+    div.querySelector("input").addEventListener("change", (e) => toggleSelection(currentFolder, entry, e.target.checked));
+    container.appendChild(div);
+  }
+  if (!(allLogs[currentFolder] || []).length) {
+    container.innerHTML = '<div class="text-body-secondary small">(no logs yet)</div>';
+  }
+}
+
+function renderSuggested() {
+  const container = document.getElementById("suggested-list");
+  container.innerHTML = "";
+  if (!selected.length) return;
+  const starts = selected.map((s) => s.start_t).filter((t) => t !== null && t !== undefined);
+  if (!starts.length) return;
+  const ends = selected.map((s) => s.end_t).filter((t) => t !== null && t !== undefined);
+  const minT = Math.min(...starts) - OVERLAP_SLACK_S;
+  const maxT = Math.max(...(ends.length ? ends : starts)) + OVERLAP_SLACK_S;
+  let any = false;
+  for (const source of Object.keys(allLogs).sort()) {
+    for (const entry of allLogs[source]) {
+      if (isSelected(source, entry.filename)) continue;
+      const fStart = entry.start_t;
+      if (fStart === null || fStart === undefined) continue;
+      const fEnd = entry.end_t ?? fStart;
+      if (fStart > maxT || fEnd < minT) continue; // no time-range overlap
+      any = true;
+      const id = `${source}__${entry.filename}`;
+      const div = document.createElement("div");
+      div.className = "form-check";
+      div.innerHTML = `
+        <input class="form-check-input" type="checkbox" id="sg-${id}">
+        <label class="form-check-label small" for="sg-${id}">${source}: ${fileLabel(source, entry)}</label>
+      `;
+      div.querySelector("input").addEventListener("change", (e) => toggleSelection(source, entry, e.target.checked));
+      container.appendChild(div);
+    }
+  }
+  if (!any) container.innerHTML = '<div class="text-body-secondary small">(none)</div>';
+}
+
+function renderSelectionSummary() {
+  const el = document.getElementById("selection-summary");
+  if (!selected.length) {
+    el.textContent = "No files selected";
+    return;
+  }
+  const starts = selected.map((s) => s.start_t).filter((t) => t !== null && t !== undefined);
+  if (!starts.length) {
+    el.textContent = `Selected: ${selected.length} file(s)`;
+    return;
+  }
+  const ends = selected.map((s) => s.end_t).filter((t) => t !== null && t !== undefined);
+  const d1 = new Date(Math.min(...starts) * 1000);
+  const d2 = new Date(Math.max(...(ends.length ? ends : starts)) * 1000);
+  const sameDay = d1.toDateString() === d2.toDateString();
+  const fmt = (d) => (sameDay ? d.toLocaleTimeString([], { hour12: false }) : d.toLocaleString([], { hour12: false }));
+  el.textContent = `Selected: ${selected.length} file(s) from ${fmt(d1)} until ${fmt(d2)}`;
+}
+
+document.getElementById("clear-btn").addEventListener("click", () => {
+  selected = [];
+  renderSelectionSummary();
+  renderSuggested();
+  renderFileList();
+});
+
+async function refreshSources() {
+  const resp = await fetch("/api/logs");
+  allLogs = await resp.json();
+  if (currentFolder && !(currentFolder in allLogs)) currentFolder = null;
+  renderFolderList();
+  renderFileList();
+  renderSuggested();
+}
+
+function numericKeysOf(lines) {
+  const keys = new Set();
+  for (const line of lines) {
+    for (const [k, v] of Object.entries(line)) {
+      if (k !== "t" && typeof v === "number") keys.add(k);
+    }
+  }
+  return keys;
+}
+
+function quantityKey(file, key) {
+  return `${file.source}__${file.filename}__${key}`;
+}
+
+function fileHasPosition(file) {
+  return file.lines.some((l) => typeof l.lat === "number" && typeof l.lon === "number");
+}
+
+function refreshQuantityTabs() {
+  const tabsEl = document.getElementById("quantity-tabs");
+  const contentEl = document.getElementById("quantity-tab-content");
+  tabsEl.innerHTML = "";
+  contentEl.innerHTML = "";
+  loaded.forEach((file, i) => {
+    const keys = Array.from(numericKeysOf(file.lines)).sort();
+    const prefix = `${file.source}__${file.filename}__`;
+    const hasAnySelected = Array.from(selectedQuantities).some((sk) => sk.startsWith(prefix));
+    if (!hasAnySelected) {
+      for (const k of ["cross_track_error_m", "distance_m", "distance_travelled_m"]) {
+        if (keys.includes(k)) selectedQuantities.add(quantityKey(file, k));
+      }
+    }
+    const tabId = `tab-${i}`;
+    const li = document.createElement("li");
+    li.className = "nav-item";
+    li.innerHTML = `<button class="nav-link ${i === 0 ? "active" : ""}" data-bs-toggle="tab" data-bs-target="#${tabId}" type="button">${file.label}</button>`;
+    tabsEl.appendChild(li);
+
+    const pane = document.createElement("div");
+    pane.className = `tab-pane fade ${i === 0 ? "show active" : ""}`;
+    pane.id = tabId;
+    pane.innerHTML = `<div class="d-flex flex-wrap gap-3">${keys
+      .map((k) => {
+        const qk = quantityKey(file, k);
+        const checked = selectedQuantities.has(qk) ? "checked" : "";
+        return `<div class="form-check form-check-inline">
+          <input class="form-check-input quantity-checkbox" type="checkbox" value="${qk}" id="q-${qk}" ${checked}>
+          <label class="form-check-label small" for="q-${qk}">${k}</label>
+        </div>`;
+      })
+      .join("")}</div>`;
+    if (!keys.length) pane.innerHTML = '<div class="text-body-secondary small">(no numeric fields)</div>';
+    contentEl.appendChild(pane);
+  });
+  contentEl.querySelectorAll(".quantity-checkbox").forEach((cb) => {
+    cb.addEventListener("change", () => {
+      if (cb.checked) selectedQuantities.add(cb.value);
+      else selectedQuantities.delete(cb.value);
+      redraw();
+    });
+  });
+}
+
+let chart = null;
+// Fixed for the whole loaded set - the earliest first-line `t` across
+// every currently loaded file. Computed once per Load, never recomputed
+// on a quantity toggle or redraw - two files covering the same real
+// event must stay aligned to the same real moment (see navigate-prd.md's
+// log viewer notes - normalising each file to its own start
+// independently silently misaligned files that were actually
+// simultaneous).
+let timebaseT0 = 0;
+let combinedX = [];
+
+function activeQuantityPairs() {
+  const pairs = [];
+  for (const file of loaded) {
+    for (const key of numericKeysOf(file.lines)) {
+      if (selectedQuantities.has(quantityKey(file, key))) pairs.push({ file, key });
+    }
+  }
+  pairs.sort((a, b) => (a.file.label + a.key).localeCompare(b.file.label + b.key));
+  return pairs;
+}
+
+function redrawChart() {
+  const pairs = activeQuantityPairs();
+  const series = [{}];
+  let colourIndex = 0;
+  let allTimes = [];
+
+  for (const { file, key } of pairs) {
+    const colour = COLOURS[colourIndex % COLOURS.length];
+    colourIndex++;
+    for (const line of file.lines) if (typeof line[key] === "number") allTimes.push(line.t - timebaseT0);
+    series.push({ label: `${file.label} — ${key}`, stroke: colour, width: 2, points: { show: false } });
+  }
+
+  // uPlot needs one shared x-array; different files run for different
+  // durations at slightly different tick spacing, so build one combined,
+  // sorted, de-duplicated x-axis and let each series carry nulls where it
+  // has no point at that x - uPlot draws gaps through nulls, not zeros.
+  combinedX = Array.from(new Set(allTimes)).sort((a, b) => a - b);
+  const finalData = [combinedX];
+  for (const { file, key } of pairs) {
+    const byX = new Map();
+    for (const line of file.lines) if (typeof line[key] === "number") byX.set(line.t - timebaseT0, line[key]);
+    finalData.push(combinedX.map((x) => (byX.has(x) ? byX.get(x) : null)));
+  }
+
+  if (chart) {
+    chart.destroy();
+    chart = null;
+  }
+  const el = document.getElementById("chart");
+  el.innerHTML = "";
+  chart = new uPlot(
+    {
+      width: el.clientWidth || 800,
+      height: 320,
+      scales: { x: { time: false } },
+      axes: [{ label: "seconds since the earliest loaded file's start" }],
+      series,
+      hooks: { setCursor: [onChartCursorMove] },
+    },
+    finalData,
+    el
+  );
+}
+
+// geomap.js's layers are additive by name (no removeLayer) - remember
+// every layer name ever set so a file dropped from the selection gets
+// its old layer explicitly wiped (setLayer with 0 points), not left
+// drawn stale on the map.
+const _mapLayerNamesSeen = new Set();
+let mapFileColours = new Map(); // file.label -> colour, position-bearing files only
+
+function redrawMap() {
+  const currentNames = new Set();
+  mapFileColours = new Map();
+  let colourIndex = 0;
+  for (const file of loaded) {
+    if (!fileHasPosition(file)) continue;
+    const colour = COLOURS[colourIndex % COLOURS.length];
+    colourIndex++;
+    mapFileColours.set(file.label, colour);
+    const points = file.lines.filter((l) => typeof l.lat === "number" && typeof l.lon === "number");
+    currentNames.add(file.label);
+    _mapLayerNamesSeen.add(file.label);
+    window._geoMap.setLayer(file.label, points, { color: colour, dots: false });
+  }
+  for (const name of _mapLayerNamesSeen) {
+    if (!currentNames.has(name)) window._geoMap.setLayer(name, []);
+  }
+  window._geoMap.resize();
+}
+
+function clearCursorLayers() {
+  for (const file of loaded) {
+    if (fileHasPosition(file)) window._geoMap.setLayer(`${file.label}__cursor`, []);
+  }
+  window._geoMap.draw();
+}
+
+function onChartCursorMove(u) {
+  const idx = u.cursor.idx;
+  if (idx === null || idx === undefined || combinedX[idx] === undefined) {
+    clearCursorLayers();
+    return;
+  }
+  const targetT = combinedX[idx] + timebaseT0;
+  for (const file of loaded) {
+    if (!fileHasPosition(file)) continue;
+    const pts = file.lines.filter((l) => typeof l.lat === "number" && typeof l.lon === "number");
+    if (!pts.length) continue;
+    const nearest = pts.reduce((best, p) => (Math.abs(p.t - targetT) < Math.abs(best.t - targetT) ? p : best));
+    window._geoMap.setLayer(`${file.label}__cursor`, [nearest], {
+      color: mapFileColours.get(file.label) || "#212529",
+      dots: true,
+      dotRadius: 7,
+      line: false,
+    });
+  }
+  window._geoMap.draw();
+}
+
+function onMapHover(hit) {
+  if (!chart) return;
+  if (!hit || hit.point.t === undefined) {
+    chart.setCursor({ left: -10, top: -10 });
+    return;
+  }
+  const x = hit.point.t - timebaseT0;
+  chart.setCursor({ left: chart.valToPos(x, "x"), top: chart.bbox.height / 2 / devicePixelRatio });
+}
+
+function redraw() {
+  redrawChart();
+  redrawMap();
+}
+
+async function loadSelected() {
+  loaded = [];
+  for (const s of selected) {
+    const resp = await fetch(`/api/logs/${s.source}/${s.filename}`);
+    const text = await resp.text();
+    const lines = text.trim().length ? text.trim().split("\n").map((l) => JSON.parse(l)) : [];
+    loaded.push({ source: s.source, filename: s.filename, label: `${s.source}: ${fileLabel(s.source, s)}`, lines });
+  }
+  const starts = loaded.filter((f) => f.lines.length).map((f) => f.lines[0].t);
+  timebaseT0 = starts.length ? Math.min(...starts) : 0;
+  refreshQuantityTabs();
+  redraw();
+}
+
+document.getElementById("load-btn").addEventListener("click", loadSelected);
+
+window._geoMap = createGeoMap(document.getElementById("map-canvas"), document.getElementById("map-wrapper"), ".zoom-btn");
+window._geoMap.setZoom("auto");
+window._geoMap.onHover(onMapHover);
+
+refreshSources();
+</script>
+{% endblock %}

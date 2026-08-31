@@ -71,6 +71,7 @@ services:
     drive_feed_socket: /tmp/gr6-drive-feed.sock  # Unix domain socket — see "Feed naming" in drive-prd.md
     drive_feed_hz: 20
     tuning: {}                        # optional, e.g. {Kp: [1.0, 1.0], Ki: [3.0, 3.0]} — pushed to the microcontroller each time drive starts
+    log_retention_days: 2              # self-triggered per-burst-of-activity debug logs (drive/data/logs/) — same convention/value as navigate/jobs/missions/waterbutt, see viewer-prd.md
 
   navigate:
     unit: robot-navigate.service
@@ -190,3 +191,13 @@ services:
       - {tag: 2, x: 0.0, y: 0.0, z: 0.0, heading_deg: 90.0}   # back-right, facing right
       - {tag: 3, x: 0.0, y: 0.0, z: 0.0, heading_deg: 180.0}  # back-centre, facing backward
       - {tag: 4, x: 0.0, y: 0.0, z: 0.0, heading_deg: 270.0}  # back-left, facing left
+
+  viewer:
+    unit: robot-viewer.service
+    host: 0.0.0.0
+    port: 8013
+    web_ui: true
+    # No config of its own beyond host/port/web_ui - it auto-discovers any
+    # service directory with a data/logs/ folder (navigate, waterbutt,
+    # jobs, missions, drive, ...) at request time, so a new logging
+    # service needs no entry here — see viewer-prd.md.

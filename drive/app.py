@@ -6,6 +6,7 @@ Unix-socket feed for other services to consume.
 See drive-prd.md for the requirements this implements.
 """
 
+import datetime
 import json
 import logging
 import sys
@@ -28,6 +29,11 @@ from serial_link import SerialLink  # noqa: E402
 PAGES_DIR = Path(__file__).resolve().parent / "templates" / "pages"
 DRIVE_STATUS_HZ = 5
 FIRMWARE_LOG_TIMEOUT = 5.0  # seconds to wait, in the background, before logging "no version seen"
+
+LOGS_DIR = Path(__file__).resolve().parent / "data" / "logs"
+LOG_HZ = 10  # matches the pico's own 100ms control-loop cadence, not drive_feed_hz (that's for other services' live consumers, not for debug logging)
+LOG_IDLE_TAIL_S = 3.0  # keep logging this long after the motors and commands both go quiet - long enough to see the PID's own stop/brake settle, short enough not to fill the disk with an idle robot
+LOG_ACTIVE_EPS_MPS = 0.01  # commanded or measured speed below this counts as "stopped", not real motion
 
 # The jog page posts a command roughly every 300ms while held (see
 # home.html) — still enough to flood the systemd journal via Flask/
@@ -149,6 +155,78 @@ def _snapshot():
     return combined
 
 
+_debug_log_path = None
+_last_active_monotonic = None
+
+
+def _is_active(state: dict) -> bool:
+    for field in ("LM_setvel_mps", "RM_setvel_mps", "LM_vel_filt_mps", "RM_vel_filt_mps"):
+        value = state.get(field)
+        if value is not None and abs(value) > LOG_ACTIVE_EPS_MPS:
+            return True
+    return False
+
+
+def _start_new_debug_log():
+    """Same convention as navigate's own per-run debug log (see
+    navigate/app.py's _start_new_debug_log) - a fresh, retained file per
+    burst of activity, not a single overwritten one, so past runs/jogs
+    can be compared afterward."""
+    global _debug_log_path
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.datetime.now().strftime("%y%m%d_%H%M%S")
+    candidate = LOGS_DIR / f"{timestamp}.jsonl"
+    suffix = 1
+    while candidate.exists():
+        candidate = LOGS_DIR / f"{timestamp}_{suffix}.jsonl"
+        suffix += 1
+    _debug_log_path = candidate
+    _debug_log_path.write_text("")
+
+
+def _append_debug_log(state: dict):
+    if _debug_log_path is None:
+        return
+    entry = {"t": time.time(), **state}
+    with open(_debug_log_path, "a") as f:
+        f.write(json.dumps(entry, default=str) + "\n")
+
+
+def _sweep_old_debug_logs():
+    if not LOGS_DIR.exists():
+        return
+    cutoff = time.time() - service_cfg["log_retention_days"] * 86400
+    for file in LOGS_DIR.glob("*.jsonl"):
+        if file.stat().st_mtime < cutoff:
+            file.unlink()
+
+
+def _log_loop():
+    """Self-triggered, same independence every other service already
+    keeps (see viewer-prd.md) - drive decides for itself whether it has
+    something worth recording (a command or the motors themselves going
+    non-zero), rather than navigate/jobs/missions telling it to start
+    logging. Starts a fresh timestamped file the moment that happens,
+    keeps appending through LOG_IDLE_TAIL_S of quiet afterwards (long
+    enough to see the PID's own stop/brake settle), then closes - so a
+    manual jog produces a small file and a full navigate run produces a
+    long one, distinguishable in viewer by line count alone."""
+    global _debug_log_path, _last_active_monotonic
+    period = 1.0 / LOG_HZ
+    while True:
+        state = _snapshot()
+        now = time.monotonic()
+        if _is_active(state):
+            _last_active_monotonic = now
+            if _debug_log_path is None:
+                _start_new_debug_log()
+        elif _debug_log_path is not None and _last_active_monotonic is not None:
+            if now - _last_active_monotonic > LOG_IDLE_TAIL_S:
+                _debug_log_path = None
+        _append_debug_log(state)
+        time.sleep(period)
+
+
 def _command(source: str):
     payload = request.get_json(force=True)
     left_mps = float(payload["left_mps"])
@@ -230,6 +308,8 @@ if __name__ == "__main__":
     link.start()
     push_configured_tuning()
     threading.Thread(target=log_firmware_version_once, daemon=True).start()
+    _sweep_old_debug_logs()
+    threading.Thread(target=_log_loop, daemon=True).start()
 
     feed = DriveFeedServer(service_cfg["drive_feed_socket"], _snapshot, service_cfg["drive_feed_hz"])
     feed.start()

@@ -343,6 +343,36 @@ drive:
   counts-per-metre, ultrasonic sensor behaviour, and the joystick UI
   end-to-end — can't be faked meaningfully.
 
+## Debug logging (added 2026-08-31)
+
+`data/logs/yymmdd_hhmmss.jsonl`, one retained file per burst of motor
+activity — same convention as navigate/jobs/missions/waterbutt, and
+readable by `viewer` (see viewer-prd.md) without either service knowing
+about the other. Self-triggered off drive's own state (`_is_active` in
+app.py checks whether any of `LM_setvel_mps`/`RM_setvel_mps`/
+`LM_vel_filt_mps`/`RM_vel_filt_mps` exceeds `LOG_ACTIVE_EPS_MPS`), not an
+external "start logging" signal from navigate/jobs — deliberately kept
+this way rather than build a cross-service coordination mechanism for
+what turned out to be a small need (see viewer-prd.md's "Not yet built"
+— the "global communication bus" idea is real but bigger than this).
+`_log_loop` runs as its own background thread at `LOG_HZ` (10Hz, not
+tied to `drive_feed_hz` — that Hz is for other services' live
+consumers, this one's for debug resolution), opens a fresh file the
+moment the robot goes active, and keeps appending through
+`LOG_IDLE_TAIL_S` (3s) of quiet afterwards — long enough to see the
+PID's own stop/brake settle — before closing. This means a manual jog
+or a `turn` produces its own small file alongside full navigate-run-
+triggered ones; distinguishing them is left to `viewer`'s line-count
+column rather than trying to suppress "uninteresting" ones here.
+`log_retention_days` (config) sweeps old files at startup, same
+pattern/value (2) as every other service's own logs.
+
+Prompted directly by the commanded-vs-measured wheel speed gap found
+2026-08-30 (see counts_per_metre's own history in config.yaml.example)
+— there was no way to see drive's own PID telemetry (`SV`/`FV`/`ER`
+etc., already sent by the firmware every cycle) plotted against
+navigate's commanded speed without it.
+
 ## Out of Scope (v1 of this service)
 
 - Path-following / waypoint navigation — future `navigate` service.

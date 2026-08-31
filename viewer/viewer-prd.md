@@ -1,0 +1,115 @@
+# viewer
+
+A generic cross-app log browser/plotter. Built 2026-08-31, prompted by
+two things happening at once: (1) navigate's own `/pages/logs` had
+grown a real limitation — its `/api/logs` hardcoded a two-entry dict
+(`{"navigate": ..., "waterbutt": ...}`, see navigate-prd.md's "Log
+Viewer") that map-manager's own raw-capture logs were already outside
+of, and drive had no logging at all; (2) computer-vision work is coming
+that will need the same kind of "load a run, plot it, compare it
+against another service's run at the same time" debugging that
+navigate's page already did for its own runs. Rather than keep bolting
+more hardcoded source directories onto navigate, this pulls that
+concern out into its own service that auto-discovers any app's logs,
+with no per-app registration step.
+
+This is the first slice — the generic browse/select/plot mechanism.
+navigate's own `/pages/logs` was deliberately left as-is (not touched,
+not removed) rather than risk breaking an already-working, already-used
+page while this was being built; it may be worth retiring in favour of
+this service later, once this one has seen some real use.
+
+## Auto-discovery, not registration
+
+`discover_sources()` (app.py) scans every top-level directory in the
+repo (excluding `shared`, `venv`, `viewer` itself, and dot-directories)
+for a `data/logs/` subfolder, on every request — not once at startup,
+not cached — since a source's logs directory can appear after this
+service has already started (drive's very first log, or some future
+service's first run), and the scan itself is a handful of cheap
+`is_dir()` checks. No config entry, no code change, and no service
+restart is needed for a new source to show up — it just needs to write
+`data/logs/*.jsonl` files, same convention as everyone else (navigate,
+waterbutt, jobs, missions, drive).
+
+This deliberately keeps every logging service independent of viewer:
+none of them import anything from here, or know this service exists.
+viewer only ever reads; it never writes into another service's
+directory. See top-prd.md's "Shared configuration" for the same
+independence principle applied to config.yaml.
+
+`shared/logs.py`'s `log_file_summary`/`log_summaries` (ported out of
+navigate/app.py's original, near-identical private functions) do the
+actual per-file parsing — first/last line's `t`, line count, and
+`path_name` if the file has one (navigate's own logs do; waterbutt's
+and drive's don't) — and both tolerate a file that's still being
+written (the last line can be torn mid-write; only the *first* line
+failing to parse is treated as genuine corruption and skipped with a
+warning, not a 500 — this was a real bug in navigate's original version,
+see its own commit history).
+
+## Selecting files across sources: overlap, not exact start-time match
+
+The whole point of a cross-app viewer is comparing files from different
+sources that happened at the same real time (e.g. a navigate run against
+the drive log it triggered) — but different services' logs for "the same
+event" don't share a start time or a duration: a drive log doesn't start
+until the wheels actually move (a beat after navigate issues the first
+command), and navigate's own logs run on a good deal past their real
+end (see navigate-prd.md — deliberate, not a bug: "I like to see what
+happens afterward"). So home.html's "Suggested" list is a real
+time-*range* overlap test — `[selection.min_start - slack, selection.
+max_end + slack]` intersecting a candidate file's own `[start_t, end_t]`
+— not a closeness check on start times alone. `OVERLAP_SLACK_S = 3`
+(home.html) is a first guess, not measured against anything yet.
+
+Quantities-to-plot are tabbed per loaded file (not one flat
+checkbox list across every file, which stopped scaling once a real
+mix of navigate/drive/waterbutt files could be loaded together) but
+ticking a quantity in any file's tab still overlays it on the one
+shared chart — the tabs are purely a findability aid over the checkbox
+list, they don't partition what can be plotted together. Same
+reasoning, same uPlot/`combinedX`/`timebaseT0` mechanics as navigate's
+original page (a single x-axis, seconds since the *earliest* loaded
+file's own start, fixed once per Load — not recomputed per file, which
+was itself a fix for a real live misalignment bug, see navigate-prd.md).
+
+The map only plots files that actually carry `lat`/`lon` numeric fields
+in their lines (checked per loaded file, not hardcoded to a particular
+source name) — waterbutt's and drive's logs have none, so they simply
+never appear on it, same behaviour as navigate's original page had
+hardcoded to "source === navigate".
+
+### Config
+
+```yaml
+viewer:
+  unit: robot-viewer.service
+  host: 0.0.0.0
+  port: 8013
+  web_ui: true
+```
+
+No config beyond the standard four keys — there is nothing else to
+configure; see "Auto-discovery" above.
+
+## Not yet built
+
+- **Global communication bus.** Ben's own longer-term idea: services
+  "shout" what they're doing (e.g. navigate shouting "I'm following a
+  path") and other services can choose to listen/act/ignore — a real
+  cross-app coordination mechanism, of which "start logging together"
+  would be one use among several future ones. Deliberately deferred
+  (2026-08-31) in favour of the simpler thing that was actually needed
+  right now: every logging service already decides for itself when it
+  has something worth recording (navigate on run start, drive on
+  idle→moving — see drive-prd.md), and viewer joins files after the
+  fact by time-range overlap instead of needing a shared "session"
+  concept at record time. Revisit if/when a real second use case for the
+  bus shows up.
+- **Time-range scrollbar/filter** for whittling down a folder's file
+  list once it's got a lot of small entries (drive's jog/turn bursts
+  especially) — a VS-Code-search-style minimap the user can click into.
+  Explicitly asked to be left for later.
+- Any kind of write access, editing, or deleting of another service's
+  logs from this UI — viewer is read-only by design (see "Auto-discovery").
