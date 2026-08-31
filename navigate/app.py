@@ -141,6 +141,7 @@ def _end_aruco_priority_if_active():
 
 
 nav_client = FeedClient(oxtsnav_cfg["nav_feed_socket"], default={"nav": {}, "status": {}, "connection": {}})
+drive_client = FeedClient(drive_cfg["drive_feed_socket"], default={})
 runner = PathRunner(CONTROL_CONFIG, send_velocity, send_pump)
 turn_runner = TurnRunner(TURN_CONFIG, send_velocity)
 
@@ -171,14 +172,20 @@ _active_kind = "path"  # "path" | "turn"
 
 def _current_position():
     """{"lat":, "lon":, "heading_deg":, "horizontal_accuracy_m":,
-    "horizontal_speed_mps":} from oxts-nav's live feed (Lat/Lon there
-    are radians; converted to degrees here since that's what
-    geometry.py/paths.py both expect), or None if no fix has been
-    received yet. horizontal_speed_mps is the xNAV's own INS-derived
-    ground speed (hypot of its Vn/Ve velocity components) - logged
-    purely for comparison against wheel-derived speed (see
-    drive-prd.md/wheelspeed's counts_per_metre calibration question),
-    not used for control."""
+    "horizontal_speed_mps":, "wheel_left_mps":, "wheel_right_mps":}
+    from oxts-nav's and drive's live feeds (Lat/Lon there are radians;
+    converted to degrees here since that's what geometry.py/paths.py
+    both expect), or None if no fix has been received yet.
+    horizontal_speed_mps is the xNAV's own INS-derived ground speed
+    (hypot of its Vn/Ve velocity components); wheel_left_mps/
+    wheel_right_mps are drive's own real per-wheel measured speed
+    (LM_vel_filt_mps/RM_vel_filt_mps, straight from the firmware's FV
+    telemetry) - both logged purely for comparison against each other
+    and against control.py's *commanded* left_mps/right_mps (see
+    drive-prd.md/wheelspeed's counts_per_metre calibration question;
+    note PathRunner.status()'s left_mps/right_mps below are the
+    differential-drive *command*, not a measurement - don't confuse
+    the two when reading a log). Not used for control."""
     payload = nav_client.latest()
     nav = payload.get("nav", {})
     status = payload.get("status", {})
@@ -192,12 +199,15 @@ def _current_position():
     vn = nav.get("Vn")
     ve = nav.get("Ve")
     horizontal_speed_mps = math.hypot(vn, ve) if vn is not None and ve is not None else None
+    drive_state = drive_client.latest()
     return {
         "lat": math.degrees(nav["Lat"]),
         "lon": math.degrees(nav["Lon"]),
         "heading_deg": nav["Heading"],
         "horizontal_accuracy_m": horizontal_accuracy_m,
         "horizontal_speed_mps": horizontal_speed_mps,
+        "wheel_left_mps": drive_state.get("LM_vel_filt_mps"),
+        "wheel_right_mps": drive_state.get("RM_vel_filt_mps"),
     }
 
 
@@ -734,6 +744,7 @@ register_pages(
 if __name__ == "__main__":
     _sweep_old_debug_logs()
     nav_client.start()
+    drive_client.start()
     threading.Thread(target=_control_loop, daemon=True).start()
 
     feed = NavigateFeedServer(service_cfg["navigate_feed_socket"], _snapshot, service_cfg["navigate_feed_hz"])
