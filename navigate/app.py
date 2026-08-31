@@ -273,12 +273,22 @@ def _sweep_old_debug_logs():
 
 
 _control_loop_last_state = "idle"
+# Set the moment state leaves "running" (naturally finishing -> "stopped_ok",
+# or aborting -> "aborted" - see control.py/turn_control.py). Used to bound
+# the debug log's tail below - found live 2026-08-31 that neither of those
+# states is "idle", and nothing else ever moves state back to idle on its
+# own, so without this bound the log kept appending at control_hz forever
+# (one file grew to 689k lines/~19 hours) until the next path was loaded.
+# Only an operator-pressed Stop (PathRunner.stop()/TurnRunner.stop(), which
+# set state straight to "idle") ever ended it before this fix.
+_terminal_state_entered_at = None
+LOG_TAIL_AFTER_STOP_S = 2.0  # deliberately short - "let me see what happens right after it stops", not an unbounded idle recording
 
 
 def _control_tick():
     """One control-loop iteration, factored out of _control_loop so it
     can be called directly in tests without the thread/sleep."""
-    global _control_loop_last_state
+    global _control_loop_last_state, _terminal_state_entered_at
     position = _current_position()
     if position is None:
         return
@@ -289,19 +299,25 @@ def _control_tick():
         runner.step(position["lat"], position["lon"], position["heading_deg"], position["horizontal_accuracy_m"])
         runner.preview(position["lat"], position["lon"], position["heading_deg"])
         state = runner.status()["state"]
-    # Every control tick while running, not a throttled ~1Hz snapshot —
-    # this is now the data an analysis tool compares runs with, so it
-    # needs the same resolution the control loop itself acts at (see
-    # navigate-prd.md's "Debug log").
-    if state != "idle":
-        _append_debug_log(position)
-    # A path can end by finishing or aborting entirely inside
-    # runner.step() above, with no HTTP call marking the moment -
-    # /control/stop covers the operator-Stop case, this edge detection
-    # covers the other two, so aruco priority always gets switched off
-    # however the run actually ended.
+    # A path/turn can end by finishing or aborting entirely inside
+    # step() above, with no HTTP call marking the moment - /control/stop
+    # covers the operator-Stop case, this edge detection covers the
+    # other two, so aruco priority always gets switched off and the log
+    # tail's clock starts however the run actually ended.
     if _control_loop_last_state == "running" and state != "running":
+        _terminal_state_entered_at = time.time()
         _end_aruco_priority_if_active()
+    in_tail = (
+        state not in ("idle", "running")
+        and _terminal_state_entered_at is not None
+        and time.time() - _terminal_state_entered_at <= LOG_TAIL_AFTER_STOP_S
+    )
+    # Every control tick while running (or briefly after), not a
+    # throttled ~1Hz snapshot - this is now the data an analysis tool
+    # compares runs with, so it needs the same resolution the control
+    # loop itself acts at (see navigate-prd.md's "Debug log").
+    if state == "running" or in_tail:
+        _append_debug_log(position)
     _control_loop_last_state = state
 
 

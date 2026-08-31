@@ -419,6 +419,39 @@ class NavigateAppTestCase(unittest.TestCase):
         self.assertFalse(app._aruco_priority_active_for_run)
         self.assertEqual(app.runner.status()["state"], "aborted")
 
+    def test_debug_log_stops_after_a_short_tail_once_a_run_ends_on_its_own(self):
+        # Regression test (found live 2026-08-31): a run that ends by
+        # finishing/aborting on its own (not an operator Stop) used to
+        # keep appending forever - state landed on "stopped_ok"/
+        # "aborted", neither of which is "idle", and nothing else ever
+        # moved it back to idle. One real file grew to 689k lines/~19
+        # hours overnight. LOG_TAIL_AFTER_STOP_S bounds it to a short,
+        # deliberate tail instead.
+        paths_module.save_path(app.PATHS_DIR, "loop", SAMPLE_POINTS)
+        self.client.post("/control/load/loop")
+        self._set_position(52.2, -1.5, 0)
+        self.client.post("/control/start")
+        app._control_tick()  # one clean tick while genuinely "running"
+        self.assertEqual(app._control_loop_last_state, "running")
+
+        self._set_position(52.2, -1.5, 170)  # a huge heading error -> abort
+        with patch.object(app.time, "time", return_value=1000.0):
+            app._control_tick()
+        self.assertEqual(app.runner.status()["state"], "aborted")
+        lines_at_abort = app._debug_log_path.read_text().splitlines()
+
+        # 1.5s later - still within the tail, keeps logging.
+        with patch.object(app.time, "time", return_value=1001.5):
+            app._control_tick()
+        lines_in_tail = app._debug_log_path.read_text().splitlines()
+        self.assertEqual(len(lines_in_tail), len(lines_at_abort) + 1)
+
+        # 3s after the abort - past the tail, stops logging.
+        with patch.object(app.time, "time", return_value=1003.0):
+            app._control_tick()
+        lines_after_tail = app._debug_log_path.read_text().splitlines()
+        self.assertEqual(len(lines_after_tail), len(lines_in_tail))
+
     def test_two_successful_starts_leave_both_logs_on_disk(self):
         # Each run gets its own retained file, unlike the old
         # single-overwritten-file behaviour — see navigate-prd.md.
