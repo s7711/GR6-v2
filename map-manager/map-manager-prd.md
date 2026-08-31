@@ -280,6 +280,21 @@ cell/override counts; and, separately, the raw-capture on/off state
 plus its own Enable/Disable buttons and reason - with a link through to
 the Reprocess page. Deliberately no map visualisation yet.
 
+## Known issue: ultrasonic false positives block real trials (2026-08-31)
+
+The service itself has been ready to try since 2026-08-18, but the
+robot's ultrasonic sensors report a lot of false positives (short
+readings with nothing actually there — first noticed on gravel, see
+drive-prd.md/navigate sessions around 2026-08-30). Since `p_hit`/
+`p_miss`/the log-odds clamp above assume each reading is a reasonably
+trustworthy hit/miss, a sensor that's frequently wrong would fill the
+grid with fictitious occupied cells faster than real evidence could
+correct them. Real-world mapping trials are on hold until the
+ultrasonic false-positive rate is understood/improved — the raw event
+capture (see "Raw event capture" above) exists partly so this can be
+diagnosed from recorded data without re-driving once someone looks at
+it.
+
 ## Not yet built
 
 Left out of this slice on purpose, not overlooked:
