@@ -75,6 +75,25 @@ original page (a single x-axis, seconds since the *earliest* loaded
 file's own start, fixed once per Load — not recomputed per file, which
 was itself a fix for a real live misalignment bug, see navigate-prd.md).
 
+**Cross-file interpolation (found live 2026-08-31)**: different files
+write on their own independent clock/cadence — drive at its own `LOG_HZ`
+vs. navigate's `control_hz`, or just two files that don't happen to tick
+at the same offset — so their real sample times almost never coincide.
+Plotting each series only at its own exact sample times against the
+shared `combinedX` (comparing e.g. drive's `LM_setvel_mps` against
+navigate's `horizontal_speed_mps` this way) meant nearly every point of
+one series landed on an x where the other had no data, breaking each
+line into isolated dots ("the graph goes wrong, lots of gaps"). Fixed
+by `interpolateAtX` — each series is linearly interpolated between its
+own consecutive real points at every `combinedX` tick; a genuine gap
+(before this file's own first point, after its last, or a key it simply
+doesn't have) still renders as an actual break, only the "no sample
+landed exactly here" case is filled in now. Legend labels are just the
+quantity name (`key`), not `file.label — key` — dropping the
+filename/line-count kept them readable once several files' worth of
+series were on one chart together; which file's tab a quantity was
+ticked from, plus its colour, is enough context in practice.
+
 The map only plots files that actually carry `lat`/`lon` numeric fields
 in their lines (checked per loaded file, not hardcoded to a particular
 source name) — waterbutt's and drive's logs have none, so they simply

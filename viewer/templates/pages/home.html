@@ -332,29 +332,59 @@ function activeQuantityPairs() {
   return pairs;
 }
 
+// Different files write on their own independent clock/cadence (e.g.
+// drive at ~10Hz vs navigate's control_hz, or just two files that don't
+// happen to tick at the same offset) - their real sample times almost
+// never coincide. Plotting each series only at its own exact sample
+// times against the shared combinedX (the old approach) meant nearly
+// every point of one series landed on an x where the other had no data,
+// breaking each line into isolated dots instead of a continuous trace
+// (found live 2026-08-31 - "the graph goes wrong, lots of gaps" when
+// comparing a drive file against a navigate file together). Fixed by
+// linearly interpolating each series between its OWN consecutive real
+// points at every combinedX tick - a real gap (before this file's own
+// first point, after its last, or a key it doesn't have at all) still
+// renders as an actual null/break, only the "no sample landed exactly
+// here" case is now filled in.
+function interpolateAtX(points, xs) {
+  const result = new Array(xs.length).fill(null);
+  if (!points.length) return result;
+  let i = 0;
+  for (let j = 0; j < xs.length; j++) {
+    const x = xs[j];
+    if (x < points[0].x || x > points[points.length - 1].x) continue;
+    while (i < points.length - 2 && points[i + 1].x < x) i++;
+    const a = points[i];
+    const b = points[Math.min(i + 1, points.length - 1)];
+    result[j] = a.x === b.x ? a.y : a.y + ((x - a.x) / (b.x - a.x)) * (b.y - a.y);
+  }
+  return result;
+}
+
 function redrawChart() {
   const pairs = activeQuantityPairs();
   const series = [{}];
   let colourIndex = 0;
   let allTimes = [];
+  const pointsByPair = [];
 
   for (const { file, key } of pairs) {
     const colour = COLOURS[colourIndex % COLOURS.length];
     colourIndex++;
-    for (const line of file.lines) if (typeof line[key] === "number") allTimes.push(line.t - timebaseT0);
-    series.push({ label: `${file.label} — ${key}`, stroke: colour, width: 2, points: { show: false } });
+    const points = file.lines
+      .filter((l) => typeof l[key] === "number")
+      .map((l) => ({ x: l.t - timebaseT0, y: l[key] }));
+    pointsByPair.push(points);
+    for (const p of points) allTimes.push(p.x);
+    series.push({ label: key, stroke: colour, width: 2, points: { show: false } });
   }
 
-  // uPlot needs one shared x-array; different files run for different
-  // durations at slightly different tick spacing, so build one combined,
-  // sorted, de-duplicated x-axis and let each series carry nulls where it
-  // has no point at that x - uPlot draws gaps through nulls, not zeros.
+  // uPlot needs one shared x-array; build one combined, sorted,
+  // de-duplicated axis from every series' own real sample times.
   combinedX = Array.from(new Set(allTimes)).sort((a, b) => a - b);
   const finalData = [combinedX];
-  for (const { file, key } of pairs) {
-    const byX = new Map();
-    for (const line of file.lines) if (typeof line[key] === "number") byX.set(line.t - timebaseT0, line[key]);
-    finalData.push(combinedX.map((x) => (byX.has(x) ? byX.get(x) : null)));
+  for (const points of pointsByPair) {
+    finalData.push(interpolateAtX(points, combinedX));
   }
 
   if (chart) {

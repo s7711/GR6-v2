@@ -31,7 +31,7 @@ from machine import PWM, Pin, time_pulse_us
 
 import gr6_pins as pins
 
-VERSION = "260828#1.GR6"
+VERSION = "260831#2.GR6"
 
 # ---- Power latch: first thing we do, full stop ----
 pwr_en = Pin(pins.PWR_12V_EN, Pin.OUT)
@@ -174,26 +174,32 @@ def _rm_enc_b_isr(pin):
 # decode (GR6_motor.ino's LM/RM_encoderISR: interrupt on A's CHANGE,
 # compare A's and B's instantaneous levels) applies directly and is
 # simpler/more robust than the ratio hack. Ported here so the swap is
-# just flipping ENCODER_MODE below, once wired - sign convention carried
-# over from the confirmed ratio decode (LM mirrored, RM plain) but
-# NOT yet verified on real hardware with the new sensors - re-check.
+# just flipping ENCODER_MODE below, once wired.
+#
+# Sign confirmed on real amundsen hardware 2026-08-31, with the SS41F
+# bipolar sensors fitted: both wheels moved forward by hand gave equal-
+# sign, negative position on both LM and RM - a uniform flip on both
+# functions was needed, unlike the old unipolar ratio decode's
+# asymmetric "LM mirrored, RM plain" convention (that was a property of
+# the old sensors'/decode's own wiring, not something that carries over
+# to a different decode path and different physical sensors).
 def _lm_enc_a_isr_quadrature(pin):
     global LM_position
     if LM_ENC_A.value() == LM_ENC_B.value():
-        LM_position -= 1
-    else:
         LM_position += 1
+    else:
+        LM_position -= 1
 
 
 def _rm_enc_a_isr_quadrature(pin):
     global RM_position
     if RM_ENC_A.value() == RM_ENC_B.value():
-        RM_position += 1
-    else:
         RM_position -= 1
+    else:
+        RM_position += 1
 
 
-ENCODER_MODE = "ratio"  # "ratio" (current unipolar hack, live) or "quadrature" (bipolar, direct port of Arduino's decode - not yet tested on hardware)
+ENCODER_MODE = "quadrature"  # bipolar (SS41F) Hall sensors fitted 2026-08-31 - "ratio" (the old unipolar A3144 hack) kept above for reference/rollback only
 if ENCODER_MODE == "ratio":
     LM_ENC_A.irq(trigger=Pin.IRQ_RISING, handler=_lm_enc_a_isr)
     LM_ENC_B.irq(trigger=Pin.IRQ_RISING, handler=_lm_enc_b_isr)
