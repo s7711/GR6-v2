@@ -165,10 +165,43 @@ def _rm_enc_b_isr(pin):
     _rm_encoder_edge("B")
 
 
-LM_ENC_A.irq(trigger=Pin.IRQ_RISING, handler=_lm_enc_a_isr)
-LM_ENC_B.irq(trigger=Pin.IRQ_RISING, handler=_lm_enc_b_isr)
-RM_ENC_A.irq(trigger=Pin.IRQ_RISING, handler=_rm_enc_a_isr)
-RM_ENC_B.irq(trigger=Pin.IRQ_RISING, handler=_rm_enc_b_isr)
+# ---- Alternate decode: true quadrature (for bipolar Hall sensors) ----
+# The ratio decode above exists because the current unipolar A3144s only
+# trigger on one pole, giving narrow asymmetric pulses with no real phase
+# relationship between A and B. Bipolar sensors (e.g. SS41F) trigger on
+# both poles, giving a real ~50%-duty square wave on each channel with a
+# genuine 90-degree phase offset - at that point the Arduino's original
+# decode (GR6_motor.ino's LM/RM_encoderISR: interrupt on A's CHANGE,
+# compare A's and B's instantaneous levels) applies directly and is
+# simpler/more robust than the ratio hack. Ported here so the swap is
+# just flipping ENCODER_MODE below, once wired - sign convention carried
+# over from the confirmed ratio decode (LM mirrored, RM plain) but
+# NOT yet verified on real hardware with the new sensors - re-check.
+def _lm_enc_a_isr_quadrature(pin):
+    global LM_position
+    if LM_ENC_A.value() == LM_ENC_B.value():
+        LM_position -= 1
+    else:
+        LM_position += 1
+
+
+def _rm_enc_a_isr_quadrature(pin):
+    global RM_position
+    if RM_ENC_A.value() == RM_ENC_B.value():
+        RM_position += 1
+    else:
+        RM_position -= 1
+
+
+ENCODER_MODE = "ratio"  # "ratio" (current unipolar hack, live) or "quadrature" (bipolar, direct port of Arduino's decode - not yet tested on hardware)
+if ENCODER_MODE == "ratio":
+    LM_ENC_A.irq(trigger=Pin.IRQ_RISING, handler=_lm_enc_a_isr)
+    LM_ENC_B.irq(trigger=Pin.IRQ_RISING, handler=_lm_enc_b_isr)
+    RM_ENC_A.irq(trigger=Pin.IRQ_RISING, handler=_rm_enc_a_isr)
+    RM_ENC_B.irq(trigger=Pin.IRQ_RISING, handler=_rm_enc_b_isr)
+else:
+    LM_ENC_A.irq(trigger=Pin.IRQ_RISING | Pin.IRQ_FALLING, handler=_lm_enc_a_isr_quadrature)
+    RM_ENC_A.irq(trigger=Pin.IRQ_RISING | Pin.IRQ_FALLING, handler=_rm_enc_a_isr_quadrature)
 
 # ---- Control loop constants ----
 CTRL_LOOP_STEP_MS = 100
