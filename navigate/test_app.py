@@ -85,7 +85,6 @@ class NavigateAppTestCase(unittest.TestCase):
         # re-derived when PATHS_DIR is reassigned above — redirect it too,
         # so tests never touch this robot's real debug logs.
         app.LOGS_DIR = app.PATHS_DIR / "logs"
-        app.WATERBUTT_LOGS_DIR = app.PATHS_DIR / "waterbutt-logs"
         app._debug_log_path = None
         self.recorder = Recorder()
         app.runner = PathRunner(app.CONTROL_CONFIG, self.recorder.send_velocity, self.recorder.send_pump)
@@ -582,96 +581,9 @@ class NavigateAppTestCase(unittest.TestCase):
         self.assertEqual(resp.status_code, 502)
 
     def test_pages_render(self):
-        for path in ["/", "/pages/create-path", "/pages/paths", "/pages/config", "/pages/edit-path", "/pages/logs"]:
+        for path in ["/", "/pages/create-path", "/pages/paths", "/pages/config", "/pages/edit-path"]:
             resp = self.client.get(path)
             self.assertEqual(resp.status_code, 200, path)
-
-    def test_api_logs_empty_when_no_logs_dirs_exist(self):
-        resp = self.client.get("/api/logs")
-        self.assertEqual(resp.get_json(), {"navigate": [], "waterbutt": []})
-
-    def test_api_logs_summarises_navigate_and_waterbutt_logs(self):
-        app.LOGS_DIR.mkdir(parents=True)
-        (app.LOGS_DIR / "260812_100000_loop.jsonl").write_text(
-            '{"t": 100.0, "path_name": "loop"}\n{"t": 101.0, "path_name": "loop"}\n'
-        )
-        app.WATERBUTT_LOGS_DIR.mkdir(parents=True)
-        (app.WATERBUTT_LOGS_DIR / "260812_090000.jsonl").write_text(
-            '{"t": 90.0, "state": "not_visible"}\n'
-        )
-
-        resp = self.client.get("/api/logs").get_json()
-
-        self.assertEqual(len(resp["navigate"]), 1)
-        nav_entry = resp["navigate"][0]
-        self.assertEqual(nav_entry["path_name"], "loop")
-        self.assertEqual(nav_entry["start_t"], 100.0)
-        self.assertEqual(nav_entry["end_t"], 101.0)
-        self.assertEqual(nav_entry["line_count"], 2)
-
-        self.assertEqual(len(resp["waterbutt"]), 1)
-        self.assertEqual(resp["waterbutt"][0]["start_t"], 90.0)
-        self.assertIsNone(resp["waterbutt"][0]["path_name"])
-
-    def test_api_logs_ignores_an_empty_just_started_file(self):
-        app.LOGS_DIR.mkdir(parents=True)
-        (app.LOGS_DIR / "260812_100000_loop.jsonl").write_text("")
-
-        resp = self.client.get("/api/logs").get_json()
-
-        self.assertEqual(resp["navigate"], [{
-            "filename": "260812_100000_loop.jsonl", "start_t": None, "end_t": None,
-            "line_count": 0, "path_name": None,
-        }])
-
-    def test_api_logs_recovers_end_t_past_a_torn_last_line(self):
-        # A run still being logged can get read mid-write by /api/logs -
-        # its last line can be a torn/incomplete write caught between
-        # _append_debug_log()'s open() and close() (found live 2026-08-15,
-        # took the whole page down for every run, not just this file).
-        app.LOGS_DIR.mkdir(parents=True)
-        (app.LOGS_DIR / "260815_080036_loop.jsonl").write_text(
-            '{"t": 100.0, "path_name": "loop"}\n{"t": 101.0, "path_name": "loop"}\n{"t": 102'
-        )
-
-        resp = self.client.get("/api/logs").get_json()
-
-        self.assertEqual(resp["navigate"][0]["start_t"], 100.0)
-        self.assertEqual(resp["navigate"][0]["end_t"], 101.0)
-
-    def test_api_logs_skips_a_file_with_an_unparseable_first_line(self):
-        app.LOGS_DIR.mkdir(parents=True)
-        (app.LOGS_DIR / "260815_bad.jsonl").write_text("not json\n")
-        (app.LOGS_DIR / "260815_100000_loop.jsonl").write_text('{"t": 100.0, "path_name": "loop"}\n')
-
-        resp = self.client.get("/api/logs").get_json()
-
-        self.assertEqual(len(resp["navigate"]), 1)
-        self.assertEqual(resp["navigate"][0]["filename"], "260815_100000_loop.jsonl")
-
-    def test_api_log_file_serves_raw_content(self):
-        app.LOGS_DIR.mkdir(parents=True)
-        (app.LOGS_DIR / "260812_100000_loop.jsonl").write_text('{"t": 100.0}\n')
-
-        resp = self.client.get("/api/logs/navigate/260812_100000_loop.jsonl")
-
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.get_data(as_text=True), '{"t": 100.0}\n')
-
-    def test_api_log_file_404s_for_an_unknown_filename(self):
-        app.LOGS_DIR.mkdir(parents=True)
-        resp = self.client.get("/api/logs/navigate/does-not-exist.jsonl")
-        self.assertEqual(resp.status_code, 404)
-
-    def test_api_log_file_404s_for_path_traversal(self):
-        resp = self.client.get("/api/logs/navigate/..%2F..%2Fetc%2Fpasswd")
-        self.assertEqual(resp.status_code, 404)
-
-    def test_api_log_file_404s_for_an_unknown_source(self):
-        app.LOGS_DIR.mkdir(parents=True)
-        (app.LOGS_DIR / "260812_100000_loop.jsonl").write_text('{"t": 100.0}\n')
-        resp = self.client.get("/api/logs/oxts-nav/260812_100000_loop.jsonl")
-        self.assertEqual(resp.status_code, 404)
 
 
 if __name__ == "__main__":

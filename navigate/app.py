@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 
 import requests
-from flask import Flask, abort, jsonify, request, send_from_directory
+from flask import Flask, abort, jsonify, request
 from flask_sock import Sock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -53,14 +53,7 @@ oxtsnav_cfg = cfg["services"]["oxts-nav"]
 PATHS_DIR = Path(__file__).resolve().parent.parent / service_cfg["paths_dir"]
 DRIVE_BASE_URL = f"http://localhost:{drive_cfg['port']}"  # server-to-server, same machine — not a browser-facing URL, see shared/web.py's service_url for that case
 OXTSNAV_BASE_URL = f"http://localhost:{oxtsnav_cfg['port']}"  # same — see "Aruco priority" in navigate-prd.md
-LOGS_DIR = PATHS_DIR / "logs"  # one retained file per run — see jobs'/missions' identical convention
-# The Log Viewer page (added 2026-08-12) reads waterbutt's QC logs
-# straight off disk alongside navigate's own — a read-only historical
-# join for offline analysis, not a live control dependency, so this
-# doesn't go through waterbutt's own API (see navigate-prd.md's "Log
-# Viewer" for why that's a different kind of coupling to the
-# jobs->navigate control calls elsewhere in this project).
-WATERBUTT_LOGS_DIR = Path(__file__).resolve().parent.parent / "waterbutt" / "data" / "logs"
+LOGS_DIR = PATHS_DIR / "logs"  # one retained file per run — see jobs'/missions' identical convention; viewed via the "viewer" service now, see viewer-prd.md
 
 CONTROL_CONFIG = {
     "entry_max_distance_m": service_cfg["entry_max_distance_m"],
@@ -659,64 +652,6 @@ def ws_navigate(ws):
         ws.send(json.dumps(_snapshot()))
         time.sleep(period)
 
-
-# --- Log Viewer (added 2026-08-12 - see navigate-prd.md) ---
-
-
-def _log_file_summary(path):
-    lines = path.read_text().splitlines()
-    if not lines:
-        return {"filename": path.name, "start_t": None, "end_t": None, "line_count": 0, "path_name": None}
-    first = json.loads(lines[0])
-    # The file for whichever run is still going gets read mid-write here
-    # sometimes - its last line can be a torn/incomplete write caught
-    # between _append_debug_log()'s open() and close() (2026-08-15: this
-    # took the whole page down, since one bad file used to raise past
-    # _log_summaries and 500 the entire /api/logs response instead of
-    # just that file's own end_t). Fall back through trailing lines
-    # until one actually parses.
-    last = None
-    for line in reversed(lines):
-        try:
-            last = json.loads(line)
-            break
-        except json.JSONDecodeError:
-            continue
-    return {
-        "filename": path.name,
-        "start_t": first.get("t"),
-        "end_t": last.get("t") if last else None,
-        "line_count": len(lines),
-        "path_name": first.get("path_name"),  # None for waterbutt's own logs, or a navigate log from before this field existed
-    }
-
-
-def _log_summaries(logs_dir):
-    if not logs_dir.exists():
-        return []
-    summaries = []
-    for p in logs_dir.glob("*.jsonl"):
-        try:
-            summaries.append(_log_file_summary(p))
-        except json.JSONDecodeError:
-            # First line itself unparseable - genuinely corrupt, not just
-            # a live-write race. Skip it rather than take the whole
-            # listing down for every other run.
-            logging.warning("Skipping unreadable log file %s", p)
-    return sorted(summaries, key=lambda s: s["start_t"] or 0, reverse=True)
-
-
-@app.route("/api/logs")
-def api_logs():
-    return jsonify({"navigate": _log_summaries(LOGS_DIR), "waterbutt": _log_summaries(WATERBUTT_LOGS_DIR)})
-
-
-@app.route("/api/logs/<source>/<filename>")
-def api_log_file(source, filename):
-    logs_dir = {"navigate": LOGS_DIR, "waterbutt": WATERBUTT_LOGS_DIR}.get(source)
-    if logs_dir is None or filename not in {p.name for p in logs_dir.glob("*.jsonl")}:
-        abort(404)
-    return send_from_directory(logs_dir, filename)
 
 
 # --- Pages ---

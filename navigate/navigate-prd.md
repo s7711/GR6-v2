@@ -525,95 +525,26 @@ history, not just the latest one.
 - A fresh file is opened at the start of each successful `Start`. A
   failed start (no path loaded, no position fix, too far to enter)
   creates nothing, since nothing new actually happened.
-- Surfaced in the UI as of the Log Viewer page below.
+- Surfaced in the UI via the `viewer` service, not a page of navigate's
+  own — see below.
 
-## Log Viewer (added 2026-08-12)
+## Log Viewer — superseded by `viewer` (2026-08-12, removed 2026-08-31)
 
-Built to actually use the debug log above and `waterbutt`'s equivalent
-QC-reading log (see `waterbutt-prd.md`'s "QC reading log") — separating
-whether a water-butt approach failing is a navigation problem (xNAV
-accuracy) or a control problem (tracking what xNAV reports) needs
-looking at several runs side by side, not reading one file by eye.
-
-- `GET /api/logs` lists every `.jsonl` file in both `navigate`'s own
-  `LOGS_DIR` and `waterbutt`'s `WATERBUTT_LOGS_DIR` (a plain sibling
-  path on the same filesystem — `waterbutt/data/logs/`, computed from
-  `navigate/app.py`'s own location, same way `PATHS_DIR` etc. are
-  computed elsewhere in this file). This reads waterbutt's log files
-  directly off disk rather than calling into waterbutt's own API — a
-  read-only, offline join over historical data, not a live control
-  call, so it doesn't need to respect the jobs→navigate-style "never
-  skip a layer" convention that governs *control* calls elsewhere in
-  this project; there's no control relationship being bypassed here at
-  all, just a file read.
-- Each summary is `{filename, start_t, end_t, line_count, path_name}`
-  — `start_t`/`end_t` from the first/last line's own `t`, `path_name`
-  read from the first line's `path_name` field (`None` for waterbutt's
-  logs, or for an old navigate log from before that field existed —
-  the filename itself still carries it for those).
-- `GET /api/logs/<source>/<filename>` serves one file's raw content
-  (`source` is `navigate` or `waterbutt`; `filename` is checked against
-  that directory's actual `*.jsonl` listing before serving, same
-  traversal-safe pattern as `oxts-nav`'s xNAV config file route).
-- The page (`templates/pages/logs.html`) is a plain checkbox picker —
-  tick any number of files from either list, tick which numeric
-  quantities to plot (the list is generated from whatever keys are
-  actually numeric across the loaded files, not a hardcoded list — a
-  new field logged in the future just shows up here for free), Load.
-  A uPlot chart gets one series per (file, quantity) pair actually
-  present, coloured from a fixed palette and legend-labelled `file —
-  quantity` so many series stay distinguishable; a `geomap.js` map
-  gets one layer per loaded *navigate* file (waterbutt's own readings
-  have no lat/lon of their own — see "Deferred" below).
-- **x-axis is seconds since a common zero**, not wall-clock time — the
-  zero is the *earliest* first-line `t` across every currently loaded
-  file (navigate and waterbutt alike), computed once per Load and held
-  fixed until the next one. First built per-file (each file normalised
-  to its own start) for overlaying separate runs' *shapes*; changed to
-  one shared zero (2026-08-12, live feedback) once it became clear that
-  broke comparing a navigate run against the waterbutt log covering the
-  same real event — two files that actually happened simultaneously
-  were being plotted as if both started at the same relative moment,
-  which is only true when they really are unrelated separate runs. A
-  fixed shared zero still supports shape-overlay of separate runs from
-  the same session reasonably well (they land at nearby, not identical,
-  offsets) while staying correct for the simultaneous-files case, and
-  — per the same feedback — must never shift underneath an
-  already-open chart just because a different quantity got toggled.
-- **Cursor linking (added 2026-08-12)**: hovering the chart highlights
-  the nearest point in time on the map (one dot per loaded navigate
-  file, coloured to match that file's own track); hovering the map
-  moves the chart's cursor to that point's time. Chart→map reuses
-  `geomap.js`'s existing layer mechanism (each highlight is just
-  another named layer, `<file label>__cursor`) — no new drawing code
-  needed. Map→chart needed `geomap.js` itself extended with a small
-  `onHover(callback)` (nearest plotted point to the mouse, or `null`),
-  since it had no way to report "what's near the pointer" before this;
-  see `geomap.js`'s own header comment. Both directions go through
-  uPlot's/geomap's own public APIs (`setCursor`/`valToPos`/`cursor.idx`
-  on the uPlot side, cross-checked directly against the vendored
-  `uPlot.iife.min.js` source since this couldn't be tried in a real
-  browser here — no headless browser tooling in this environment: not
-  interactively verified, worth an early look once you're using it.
-- Deferred: plotting the waterbutt QC reading as a ground-truth point
-  on the map. Doing that properly means transforming a QC reading's
-  marker-relative `forward_m`/`right_m`/`down_m` (anchored to the
-  *ideal* saved reading's own orientation — see `qc_check.compare()`)
-  into an absolute lat/lon via the marker's own surveyed pose in
-  `aruco/data/marker-map.yaml`, the same rotate-then-`ned_to_lla` math
-  `aruco/survey.py` already uses to survey a marker in the first
-  place — real, doable geometry, but new, unverified code that risks
-  quietly misleading whoever's reading the map if it's subtly wrong.
-  Shipped without it for now; the QC reading's numeric quantities
-  (`distance_m`/`forward_m`/`right_m`/`down_m`/`state`) are still fully
-  available on the chart, which needs no frame conversion at all.
-- Not (yet) a generic analysis tool for anything logged anywhere in
-  this project — scoped to exactly `navigate`'s and `waterbutt`'s two
-  logs, which is what today's actual question needs. A fully generic
-  version (any service, any log, a shared log-format convention) was
-  discussed and deliberately deferred in favour of solving the one
-  question actually in front of us; worth revisiting once more
-  services have their own logs worth comparing.
+navigate originally had its own `/pages/logs` page and `/api/logs`
+endpoints here, scoped to exactly navigate's and waterbutt's two logs
+(hardcoded). That was deliberately the smallest thing that solved the
+one question in front of us at the time — separating a water-butt
+approach failure into a navigation problem (xNAV accuracy) vs. a
+control problem (tracking what xNAV reports) needed looking at several
+runs side by side. It's since been replaced by the standalone `viewer`
+service (see `viewer-prd.md`), which auto-discovers *any* service's
+`data/logs/` folder rather than hardcoding two — map-manager's raw
+capture and drive's own new PID telemetry (see `drive-prd.md`'s "Debug
+logging") were already outside what navigate's version could show.
+Removed outright rather than left running alongside viewer, since
+keeping two log viewers around split where "the" log viewer lived for
+no benefit. The debug log itself (above) is unchanged — still written
+here, just read elsewhere now.
 
 ## Aruco priority (added 2026-08-14)
 

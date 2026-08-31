@@ -14,10 +14,11 @@ concern out into its own service that auto-discovers any app's logs,
 with no per-app registration step.
 
 This is the first slice — the generic browse/select/plot mechanism.
-navigate's own `/pages/logs` was deliberately left as-is (not touched,
-not removed) rather than risk breaking an already-working, already-used
-page while this was being built; it may be worth retiring in favour of
-this service later, once this one has seen some real use.
+navigate's own `/pages/logs` was initially left as-is (not touched)
+while this was being built, to avoid risking an already-working page;
+once this service had seen some real use it was retired outright (see
+navigate-prd.md's "Log Viewer — superseded by viewer") rather than kept
+running alongside this one.
 
 ## Auto-discovery, not registration
 

@@ -38,6 +38,10 @@ network/recovery.json
 # map-manager-prd.md
 map-manager/data/
 
+# Self-triggered PID/encoder debug logs — this robot's real run data,
+# see drive-prd.md's "Debug logging"
+drive/data/
+
 # Compiled firmware artifacts — a build output, not source; the .ino is
 # the source of truth, see drive-prd.md
 drive/firmware/arduino/*.hex
