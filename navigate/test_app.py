@@ -418,6 +418,41 @@ class NavigateAppTestCase(unittest.TestCase):
         self.assertFalse(app._aruco_priority_active_for_run)
         self.assertEqual(app.runner.status()["state"], "aborted")
 
+    def test_control_tick_aborts_a_running_path_when_the_nav_feed_goes_stale(self):
+        # Regression test: oxts-nav going stale (xNAV disconnected/
+        # rebooting) used to make _current_position() return None, which
+        # _control_tick() just silently returned on - a run in progress
+        # stayed "running" forever with drive still holding whatever
+        # velocity was last commanded, since drive has no watchdog of its
+        # own for "auto" commands. It must abort instead, same as any
+        # other in-run failure.
+        paths_module.save_path(app.PATHS_DIR, "loop", SAMPLE_POINTS)
+        self.client.post("/control/load/loop")
+        self._set_position(52.2, -1.5, 0)
+        self.client.post("/control/start")
+        app._control_tick()  # one clean tick while genuinely "running"
+        self.assertEqual(app._control_loop_last_state, "running")
+
+        app.nav_client.payload = {"nav": {}, "status": {}, "connection": {}}  # feed gone stale
+        app._control_tick()
+        status = app.runner.status()
+        self.assertEqual(status["state"], "aborted")
+        self.assertIn("stale", status["abort_reason"])
+        self.assertEqual(self.recorder.velocity_calls[-1], (0.0, 0.0))
+
+    def test_control_tick_aborts_a_running_turn_when_the_nav_feed_goes_stale(self):
+        self._set_position(52.2, -1.5, 0)
+        self.client.post("/control/turn", json={"heading_deg": 90})
+        app._control_tick()
+        self.assertEqual(app._control_loop_last_state, "running")
+
+        app.nav_client.payload = {"nav": {}, "status": {}, "connection": {}}
+        app._control_tick()
+        status = app.turn_runner.status()
+        self.assertEqual(status["state"], "aborted")
+        self.assertIn("stale", status["abort_reason"])
+        self.assertEqual(self.recorder.velocity_calls[-1], (0.0, 0.0))
+
     def test_debug_log_stops_after_a_short_tail_once_a_run_ends_on_its_own(self):
         # Regression test (found live 2026-08-31): a run that ends by
         # finishing/aborting on its own (not an operator Stop) used to

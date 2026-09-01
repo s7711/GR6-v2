@@ -469,6 +469,27 @@ pattern exactly (config-driven defaults, `Set` button, no server-side
 range validation) — this also fixes v1's broken live-tuning commands,
 since the mechanism being reused here is already proven to work.
 
+## Aborting on a stale/lost nav feed (added 2026-09-01)
+
+Found live: `_control_tick()` calls `_current_position()` first, which
+returns `None` once oxts-nav's own feed has gone stale (xNAV
+disconnected, rebooting, or - the real case that triggered this - the
+network path to it dropped entirely). The tick used to just `return` in
+that case, leaving a run in progress stuck in `"running"` forever, with
+`drive` still holding whatever velocity was last commanded - `drive` has
+no watchdog of its own for `"auto"` commands (unlike a manual jog's
+`human_control_hold_ms`, see drive-prd.md/control.py's `ControlArbiter`),
+so nothing would have stopped the robot on its own.
+
+Fixed by giving `PathRunner`/`TurnRunner` a public `abort_if_running(reason)`
+(a no-op unless actually `"running"`, so it's safe to call unconditionally
+every tick) and calling it from `_control_tick()` whenever position is
+`None`, instead of silently returning. This reuses the exact same
+`_abort()` path (state -> `"aborted"`, zero velocity sent, reason logged)
+as every other in-run failure — see "Abort reason logged to the journal"
+below — so a stale feed shows up in the journal and on the Run page the
+same way a stall or an accuracy breach would.
+
 ## Abort reason logged to the journal
 
 Every abort (real path-following runs and `/record/forward`'s mini-path

@@ -284,8 +284,20 @@ def _control_tick():
     global _control_loop_last_state, _terminal_state_entered_at
     position = _current_position()
     if position is None:
-        return
-    if _active_kind == "turn":
+        # oxts-nav's feed has gone stale (xNAV disconnected/rebooting) -
+        # a run in progress used to just silently stop being stepped,
+        # leaving it in "running" forever with drive still holding
+        # whatever velocity was last commanded (drive has no watchdog of
+        # its own for "auto" commands, unlike a manual jog - see
+        # control.py's ControlArbiter). Abort it properly instead, same
+        # as any other abort reason, so the robot actually stops.
+        if _active_kind == "turn":
+            turn_runner.abort_if_running("no position - oxts-nav feed is stale/lost")
+            state = turn_runner.status()["state"]
+        else:
+            runner.abort_if_running("no position - oxts-nav feed is stale/lost")
+            state = runner.status()["state"]
+    elif _active_kind == "turn":
         turn_runner.step(position["heading_deg"])
         state = turn_runner.status()["state"]
     else:
@@ -309,7 +321,7 @@ def _control_tick():
     # throttled ~1Hz snapshot - this is now the data an analysis tool
     # compares runs with, so it needs the same resolution the control
     # loop itself acts at (see navigate-prd.md's "Debug log").
-    if state == "running" or in_tail:
+    if position is not None and (state == "running" or in_tail):
         _append_debug_log(position)
     _control_loop_last_state = state
 

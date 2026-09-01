@@ -234,9 +234,31 @@ class NcomRx:
         
         # ... Must have a valid packet or we would have returned
         # Decode NavStatus to find what other fields are valid
-        self.nav['InsNavMode'] = int(self.ncomBytes[21])
-        self.status['InsNavMode'] = int(self.ncomBytes[21])
-        
+        nav_status = int(self.ncomBytes[21])
+
+        if nav_status == 11:
+            # Structure-B packet (NCOM manual, "Navigation status byte"
+            # section: value 11 marks a completely different packet
+            # layout, not a nav-solution state at all - Batch A/B/S's
+            # byte offsets below assume Structure-A). Found live
+            # 2026-09-01: navigate was aborting a run every time one of
+            # these arrived, because the code below (before this check)
+            # treated 11 same as "reacquiring" (modes 1/2) and actively
+            # popped Lat/Lon/Heading from self.nav even though the real
+            # Structure-A solution never actually lost lock - confirmed
+            # against real logs: numChars/skippedChars/repeatedUdp all
+            # clean, timeJitterMax_ms a couple of ms, nothing to suggest
+            # a real gap. Ignore this packet outright instead - leave
+            # self.nav/self.status completely untouched, as if it had
+            # never arrived, same as the docstring's own "Special
+            # packets ... are not decoded" note above.
+            self.ncomBytes = self.ncomBytes[NOUTPUT_PACKET_LENGTH:]
+            self.connection['unprocessedBytes'] = len(self.ncomBytes)
+            return 1
+
+        self.nav['InsNavMode'] = nav_status
+        self.status['InsNavMode'] = nav_status
+
         if self.nav['InsNavMode'] in [0,5,6,7]:
             # All quantities are invalid - self.nav/self.status are
             # single long-lived dicts for this process's whole life

@@ -64,7 +64,7 @@ services:
     web_ui: true
     serial_port: /dev/ttyACM0       # Pico's native USB CDC (was /dev/ttyUSB0 for the old Arduino)
     baud: 115200
-    counts_per_metre: 250            # 260831: bipolar Hall sensors fitted, decode now matches GR6_motor.ino's exactly - trying GR6-v1's original Arduino value again, still to be verified — the wheelspeed-GAD sender depends on this being right
+    counts_per_metre: 261            # 260901: calibrated against xNAV GNSS arc length - 269 from a figure-8 test, then adjusted down 2.8% after wheelspeed-only (GNSS off) straight-line runs read consistently short; confirmed to under 1% across several further runs — the wheelspeed-GAD sender depends on this being right
     wheel_base_m: 0.42               # distance between the two wheels' contact points, from GR6-v1 — lives here (not under navigate:) alongside counts_per_metre, the other physical-drivetrain constant; navigate reads it from here rather than keeping its own copy
     human_control_hold_ms: 500       # how long a manual jog command locks out automatic callers (navigate/jobs) — see drive-prd.md
     expected_firmware_version: "260831#2.GR6"

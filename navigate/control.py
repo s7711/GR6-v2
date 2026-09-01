@@ -129,6 +129,16 @@ class PathRunner:
             self.abort_reason = None
         self.send_velocity(0.0, 0.0)
 
+    def abort_if_running(self, reason):
+        """For a caller outside the normal step() loop (app.py, when
+        oxts-nav's feed has gone stale and there's no position to step()
+        with at all) - a no-op unless actually running, so it's safe to
+        call every tick regardless of state."""
+        with self.lock:
+            if self.state != "running":
+                return
+            self._abort(reason)
+
     def preview(self, robot_lat, robot_lon, robot_heading_deg):
         """Live cross-track/heading error against the loaded path, for
         the Run page's display to stay meaningful even with no run in

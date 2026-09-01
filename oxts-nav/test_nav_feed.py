@@ -73,6 +73,28 @@ class TestSnapshot(unittest.TestCase):
         result = nav_feed.snapshot(nrxs, XNAV_IP, stale_after_s=2.0)
         self.assertEqual(result, {"nav": {}, "status": {}, "connection": {}})
 
+    def test_logs_once_on_transition_into_stale_and_once_on_recovery(self):
+        nrxs = FakeNrxs()
+        decoder = FakeDecoder(connection={"ip": XNAV_IP, "timeJitterMax_ms": 1.23})
+        nrxs.set_last_packet(XNAV_IP, decoder, time.monotonic())
+
+        with self.assertNoLogs(level="WARNING"):
+            nav_feed.snapshot(nrxs, XNAV_IP, stale_after_s=2.0)  # fresh - no transition
+
+        nrxs.set_last_packet(XNAV_IP, decoder, time.monotonic() - 5.0)
+        with self.assertLogs(level="WARNING") as logs:
+            nav_feed.snapshot(nrxs, XNAV_IP, stale_after_s=2.0)  # -> stale
+        self.assertIn("went stale", logs.output[0])
+        self.assertIn("1.23", logs.output[0])
+
+        with self.assertNoLogs(level="WARNING"):
+            nav_feed.snapshot(nrxs, XNAV_IP, stale_after_s=2.0)  # still stale - quiet
+
+        nrxs.set_last_packet(XNAV_IP, decoder, time.monotonic())
+        with self.assertLogs(level="WARNING") as logs:
+            nav_feed.snapshot(nrxs, XNAV_IP, stale_after_s=2.0)  # -> recovered
+        self.assertIn("recovered", logs.output[0])
+
     def test_blanking_returns_empty_dicts_not_none_valued_keys(self):
         # Every consumer (navigate's _current_position, wheelspeed's
         # _forward_mps, aruco's "if nav:" guards) treats a missing key

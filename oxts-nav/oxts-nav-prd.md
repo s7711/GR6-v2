@@ -258,6 +258,52 @@ all today (it works on raw byte-level NCOM packets with sync/checksum
 framing), consistent with the rest of this file, not a gap introduced
 by this fix.
 
+**A third bug, in the fields-popped branch above (found live 2026-09-01):**
+that "pop the position fields" branch treated *every* `InsNavMode` not in
+`[3,4,20,21,22]` as a genuine no-fix reacquisition state — including 11.
+Per the NCOM manual (`oxts-nav/documentation/NCOM_man.pdf`, "Navigation
+status byte"), 11 doesn't mean that at all: it marks an entirely
+different packet layout (Structure-B), sent alongside the normal
+Structure-A stream, not a nav-solution-quality state. Real logs showed
+these arriving for a single ~100ms window between otherwise-clean
+mode-4 packets, with `connection`'s `skippedChars`/`repeatedUdp`/
+`timeJitterMax_ms` all showing a perfectly healthy feed throughout - the
+xNAV's actual Structure-A solution never lost lock. But `navigate`
+polls `_current_position()` at `control_hz` (10Hz, much faster than the
+`nav_update_hz: 2` page most people are watching), so it reliably caught
+every one of these ~100ms blips and aborted an in-progress run every
+time, misreported as "oxts-nav feed is stale/lost" - a real bug chased
+for the best part of a day (switch replaced, xNAV connector redone,
+Pi rebooted, brownout/undervoltage ruled out via `vcgencmd`, none of it
+relevant) before this was found. Fixed in `decode()`: `InsNavMode == 11`
+is now detected before any of `self.nav`/`self.status` is touched, and
+that packet is skipped outright - `self.nav`/`self.status` are left
+exactly as they were, as if it had never arrived, rather than being
+treated as a (spurious) loss of fix. See `test_ncomrx.py` for the
+regression test - the one piece of `decode()` that now has coverage.
+
+Two other things changed while chasing this, kept for different reasons.
+`nav_feed.py`'s `snapshot()` now logs a `WARNING` on each edge-triggered
+transition into/out of the `stale_after_s` blanked state (previously
+silent - the only way to tell was reconstructing it after the fact from
+a downstream consumer's own debug log, or catching a brief "—" on a page
+that only redraws twice a second) - kept permanently, it's cheap (only
+fires on a real transition) and gives real visibility if the feed ever
+does genuinely go stale. `shared/feed_client.py`'s "lost connection,
+reconnecting" message was bumped from `logging.info` to `logging.warning`
+(it had been silently swallowed by every consumer's default log level
+this whole time) - also kept on.
+
+A third thing was removed once this was fixed, not kept:
+`navigate/app.py`'s `_current_position()` briefly logged the raw feed
+payload the first time it saw `Lat`/`Lon`/`Heading` missing - that's
+what actually surfaced the `InsNavMode: 11` values that cracked the
+case, showing exactly what `navigate` received rather than what
+`oxts-nav` believed it sent. Once-off debugging value, not an ongoing
+one - the abort itself already logs when this happens in production, and
+dumping oxts-nav's entire nav/status/connection dict (dozens of fields)
+into the journal on every future stale event would just be noise.
+
 ## xNAV config editing and reset (added 2026-08-11)
 
 The "download and view only" config page now supports editing and

@@ -49,7 +49,7 @@ class FeedClient:
                 with self.lock:
                     self._latest = payload
         except (OSError, EOFError):
-            logging.info("[feed_client] Lost connection to %s, reconnecting", self.socket_path)
+            logging.warning("[feed_client] Lost connection to %s, reconnecting", self.socket_path)
         finally:
             conn.close()
 

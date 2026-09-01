@@ -59,6 +59,16 @@ class TurnRunner:
             self.abort_reason = None
         self.send_velocity(0.0, 0.0)
 
+    def abort_if_running(self, reason):
+        """For a caller outside the normal step() loop (app.py, when
+        oxts-nav's feed has gone stale and there's no heading to step()
+        with at all) - a no-op unless actually running, so it's safe to
+        call every tick regardless of state."""
+        with self.lock:
+            if self.state != "running":
+                return
+            self._abort(reason)
+
     def step(self, robot_heading_deg: float):
         """Call at control_hz while running. No-op if not running."""
         with self.lock:
