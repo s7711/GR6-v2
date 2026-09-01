@@ -1,13 +1,13 @@
-// Header status badges (map-manager logging, temp, wifi, CPU, GPS
+// Header status badges (map-manager logging, battery, wifi, CPU, GPS
 // position mode, Aruco marker status) — every service's shared header
 // watches the manager's /ws/system, oxts-nav's /ws/nav, aruco's
-// /ws/aruco, and map-manager's /ws/map-manager directly, cross-port,
-// via connectWsUrl (same pattern as aruco's own Map page reading
-// oxts-nav's /ws/nav). See shared/sysstats.py for what the manager is
-// reading. Each of these is a separate, independently-retrying
-// websocket (see ws-utils.js) — if the owning service isn't running,
-// its badge just stays at its initial "—" default (set in base.html)
-// rather than anything more elaborate.
+// /ws/aruco, drive's /ws/drive, and map-manager's /ws/map-manager
+// directly, cross-port, via connectWsUrl (same pattern as aruco's own
+// Map page reading oxts-nav's /ws/nav). See shared/sysstats.py for what
+// the manager is reading. Each of these is a separate, independently-
+// retrying websocket (see ws-utils.js) — if the owning service isn't
+// running, its badge just stays at its initial "—" default (set in
+// base.html) rather than anything more elaborate.
 
 (function () {
   const wsUrl = MANAGER_URL.replace(/^http/, "ws") + "ws/system";
@@ -28,30 +28,34 @@
     });
   }
 
-  connectWsUrl(wsUrl, (msg) => {
-    // Thresholds for the temperature badge (°C): red whenever vcgencmd's
-    // own "currently throttled" bit is set (the SoC is actually running
-    // slower right now, whatever the exact reading), or at/above 80°C —
-    // the Pi 4's own documented soft throttle point, so red lines up with
-    // "the hardware itself would start throttling about here" rather
-    // than an arbitrary number. Amber at 70°C as an early warning before
-    // that point is reached.
-    const TEMP_RED_C = 80;
-    const TEMP_AMBER_C = 70;
-
-    const temp = document.getElementById("sys-temp");
-    if (msg.temp.temp_c === null) {
-      temp.textContent = "—°C";
-      temp.className = "badge text-bg-secondary";
-    } else {
-      temp.textContent = `${Math.round(msg.temp.temp_c)}°C`;
-      temp.className = "badge " + (
-        msg.temp.throttled || msg.temp.temp_c >= TEMP_RED_C ? "text-bg-danger"
-        : msg.temp.temp_c >= TEMP_AMBER_C ? "text-bg-warning"
-        : "text-bg-success"
+  // Battery voltage badge (added 2026-09-01, replacing the CPU
+  // temperature badge - the new electronics has a big fan and the CPU
+  // runs comfortably cool, but the battery is worth watching). Red
+  // below drive's own configured battery_low_voltage_v, green at/above
+  // - sent alongside the reading itself in drive's feed so this page
+  // doesn't need its own copy of drive's config. Two states only (no
+  // amber) - deliberately simple until there's a reason for more.
+  // Unfiltered raw reading for now - drive-prd.md notes filtering (a
+  // slow ~60s average) as a possible future addition, once it's known
+  // how noisy the real sensor is.
+  if (DRIVE_WS_URL) {
+    connectWsUrl(DRIVE_WS_URL, (msg) => {
+      const battery = document.getElementById("sys-battery");
+      if (msg.battery_voltage_v === undefined || msg.battery_voltage_v === null) {
+        battery.textContent = "—V";
+        battery.className = "badge text-bg-secondary";
+        return;
+      }
+      battery.textContent = `${msg.battery_voltage_v.toFixed(1)}V`;
+      const lowThreshold = msg.battery_low_voltage_v;
+      battery.className = "badge " + (
+        lowThreshold !== undefined && lowThreshold !== null && msg.battery_voltage_v < lowThreshold
+          ? "text-bg-danger" : "text-bg-success"
       );
-    }
+    });
+  }
 
+  connectWsUrl(wsUrl, (msg) => {
     // Thresholds for wifi quality (%): this Pi's signal is never seen
     // above ~4/5 bars in practice (never 5/5) — so rather than a scale
     // that requires 5/5 for "good", the old bar 3/5's own quality range

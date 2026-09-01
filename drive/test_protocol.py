@@ -41,6 +41,9 @@ class TestParseLine(unittest.TestCase):
     def test_version(self):
         self.assertEqual(protocol.parse_line("Version 250819#5.GR6"), {"firmware_version": "250819#5.GR6"})
 
+    def test_battery_voltage(self):
+        self.assertEqual(protocol.parse_line("BV 1325"), {"battery_voltage_v": 13.25})
+
 
 class TestEncodeSetVelocity(unittest.TestCase):
     def test_rounds_to_int(self):
@@ -54,6 +57,12 @@ class TestEncodePump(unittest.TestCase):
     def test_on_off(self):
         self.assertEqual(protocol.encode_pump(True), "WP 1\n")
         self.assertEqual(protocol.encode_pump(False), "WP 0\n")
+
+
+class TestEncodePowerOff(unittest.TestCase):
+    def test_rounds_to_int_seconds(self):
+        self.assertEqual(protocol.encode_power_off(20), "P_OFF 20\n")
+        self.assertEqual(protocol.encode_power_off(19.6), "P_OFF 20\n")
 
 
 class TestEncodeTuning(unittest.TestCase):

@@ -8,11 +8,13 @@ comments throughout the code.
 
 import datetime
 import json
+import logging
 import subprocess
 import sys
 import time
 from pathlib import Path
 
+import requests
 import yaml
 from flask import Flask, abort, render_template, request, send_from_directory
 from flask_sock import Sock
@@ -28,6 +30,7 @@ SYSSTATS_POLL_SECONDS = 3
 MANAGER_SERVICE_NAME = "manager"
 CONFIG_BACKUP_DIR = Path(__file__).resolve().parent / "config-backup"
 JOURNAL_LINES = 200
+POWER_OFF_DELAY_S = 20  # gives the Pi's own clean shutdown this long before the pico physically cuts power - see drive-prd.md
 
 app = Flask(__name__)
 use_shared_templates(app)
@@ -45,6 +48,7 @@ def inject_manager_url():
         "oxtsnav_ws_url": service_url(browser_host, "oxts-nav", scheme="ws") + "/ws/nav",
         "aruco_ws_url": service_url(browser_host, "aruco", scheme="ws") + "/ws/aruco",
         "map_manager_ws_url": service_url(browser_host, "map-manager", scheme="ws") + "/ws/map-manager",
+        "drive_ws_url": service_url(browser_host, "drive", scheme="ws") + "/ws/drive",  # battery badge - see sysstatus.js
     }
 
 
@@ -120,6 +124,28 @@ def services_action(name, action):
     if action not in ALLOWED_ACTIONS:
         abort(400)
     control_unit(cfg["unit"], action)
+    return "", 204
+
+
+@app.route("/power-off", methods=["POST"])
+def power_off():
+    """Arms the pico's delayed hard power cut (the real safety net -
+    see drive/protocol.py's encode_power_off), then starts a clean Pi
+    shutdown. Order matters: arm the cutoff first, so a slow or stuck
+    shutdown still gets forcibly cut after POWER_OFF_DELAY_S regardless
+    of what the Pi itself manages to do. Requires `sudo shutdown`
+    permitted in sudoers for this user, same as `sudo systemctl` already
+    is for services_action above - not set up automatically here."""
+    drive_port = services()["drive"]["port"]
+    try:
+        requests.post(
+            f"http://localhost:{drive_port}/power-off", json={"delay_s": POWER_OFF_DELAY_S}, timeout=2.0
+        )
+    except requests.exceptions.RequestException:
+        logging.warning("[manager] Couldn't reach drive to arm the power-off cutoff")
+    result = subprocess.run(["sudo", "shutdown", "-h", "now"], capture_output=True, text=True)
+    if result.returncode != 0:
+        logging.warning("[manager] shutdown command failed: %s", result.stderr.strip())
     return "", 204
 
 

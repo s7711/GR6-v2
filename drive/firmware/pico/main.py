@@ -27,15 +27,19 @@ import select
 import sys
 import time
 
-from machine import PWM, Pin, time_pulse_us
+from machine import ADC, PWM, Pin, time_pulse_us
 
 import gr6_pins as pins
 
-VERSION = "260831#2.GR6"
+VERSION = "260901#1.GR6"
 
 # ---- Power latch: first thing we do, full stop ----
 pwr_en = Pin(pins.PWR_12V_EN, Pin.OUT)
 pwr_en.value(1)
+pwr_off_at_ms = None  # time.ticks_ms() target set by a P_OFF command - see user_command()/main()
+
+# ---- Battery voltage sense ----
+vbatt_adc = ADC(pins.VBATT_SENSE_PIN)
 
 # ---- Motor driver standby (TB6612s) ----
 motor_stby = Pin(pins.MOTOR_STBY, Pin.OUT)
@@ -327,7 +331,7 @@ def user_command(cmd):
     global wp_state, TimePumpLastCommand
     global LM_Kp, RM_Kp, LM_Ki, RM_Ki, LM_Kd, RM_Kd, LM_Kf, RM_Kf, LM_Ka, RM_Ka
     global LM_Kb, RM_Kb, LM_Db, RM_Db, LM_Mi, RM_Mi, LM_Mj, RM_Mj, LM_Id, RM_Id
-    global LM_Am, RM_Am
+    global LM_Am, RM_Am, pwr_off_at_ms
 
     now = time.ticks_ms()
     parts = cmd.split()
@@ -377,6 +381,14 @@ def user_command(cmd):
             LM_Id, RM_Id = int(parts[1]) * 0.01, int(parts[2]) * 0.01
         elif tag == "Am" and len(parts) == 3:
             LM_Am, RM_Am = float(parts[1]) * dt, float(parts[2]) * dt
+        elif tag == "P_OFF" and len(parts) == 2:
+            # Arms (or re-arms, on a later command) a delayed hard power
+            # cut via pwr_en - see main()'s own check. Deliberately not
+            # cancellable by design yet (no "call it off" command) - the
+            # Pi is expected to be mid-clean-shutdown by the time it
+            # sends this, so there's currently no case where it would
+            # need to change its mind.
+            pwr_off_at_ms = time.ticks_add(now, int(parts[1]) * 1000)
     except ValueError:
         pass  # malformed command - ignore, same as the Arduino's sscanf failing silently
 
@@ -484,7 +496,12 @@ def send_telemetry():
             send_int("Am", int(LM_Am * cf), int(RM_Am * cf))
         elif whichControlUpdate == 12:
             print("Version %s" % VERSION)
-        whichControlUpdate = 0 if whichControlUpdate >= 12 else whichControlUpdate
+        elif whichControlUpdate == 13:
+            # Single value, not a L/R pair (like Version above) - see
+            # drive/protocol.py's parse_line. Scaled x100 same as the
+            # SCALED_TUNING_PARAMS convention, so "BV 1325" is 13.25V.
+            print("BV %d" % int(pins.read_vbatt(vbatt_adc) * 100))
+        whichControlUpdate = 0 if whichControlUpdate >= 13 else whichControlUpdate
         whichControlUpdate += 1
 
     whichUpdate = 0 if whichUpdate >= 15 else whichUpdate
@@ -506,6 +523,9 @@ def main():
 
     while True:
         now = time.ticks_ms()
+
+        if pwr_off_at_ms is not None and time.ticks_diff(now, pwr_off_at_ms) >= 0:
+            pwr_en.value(0)  # cut the 12V rail - see gr6_pins.py's PWR_12V_EN comment
 
         while poll.poll(0):
             ch = sys.stdin.read(1)

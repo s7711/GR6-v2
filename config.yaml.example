@@ -67,11 +67,13 @@ services:
     counts_per_metre: 261            # 260901: calibrated against xNAV GNSS arc length - 269 from a figure-8 test, then adjusted down 2.8% after wheelspeed-only (GNSS off) straight-line runs read consistently short; confirmed to under 1% across several further runs — the wheelspeed-GAD sender depends on this being right
     wheel_base_m: 0.42               # distance between the two wheels' contact points, from GR6-v1 — lives here (not under navigate:) alongside counts_per_metre, the other physical-drivetrain constant; navigate reads it from here rather than keeping its own copy
     human_control_hold_ms: 500       # how long a manual jog command locks out automatic callers (navigate/jobs) — see drive-prd.md
-    expected_firmware_version: "260831#2.GR6"
+    expected_firmware_version: "260901#1.GR6"
     drive_feed_socket: /tmp/gr6-drive-feed.sock  # Unix domain socket — see "Feed naming" in drive-prd.md
     drive_feed_hz: 20
     tuning: {}                        # optional, e.g. {Kp: [1.0, 1.0], Ki: [3.0, 3.0]} — pushed to the microcontroller each time drive starts
     log_retention_days: 2              # self-triggered per-burst-of-activity debug logs (drive/data/logs/) — same convention/value as navigate/jobs/missions/waterbutt, see viewer-prd.md
+    battery_low_voltage_v: 12.9          # header battery badge (shared/web/static/sysstatus.js) goes red below this, green at/above
+    battery_power_off_voltage_v: 11.0    # NOT enforced yet - no code reads this for an automatic cutoff; a placeholder for a future forced power-off, needs a deliberate real value first
 
   navigate:
     unit: robot-navigate.service

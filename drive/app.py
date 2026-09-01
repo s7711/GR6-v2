@@ -117,6 +117,7 @@ def inject_manager_url():
         "oxtsnav_ws_url": service_url(browser_host, "oxts-nav", scheme="ws") + "/ws/nav",
         "aruco_ws_url": service_url(browser_host, "aruco", scheme="ws") + "/ws/aruco",
         "map_manager_ws_url": service_url(browser_host, "map-manager", scheme="ws") + "/ws/map-manager",
+        "drive_ws_url": service_url(browser_host, "drive", scheme="ws") + "/ws/drive",  # battery badge - see sysstatus.js
     }
 
 
@@ -152,6 +153,10 @@ def _snapshot():
     for raw_field, physical_field in _PHYSICAL_UNIT_FIELDS.items():
         if raw_field in state:
             combined[physical_field] = counts_s_to_mps(state[raw_field])
+    # Passed through so the shared header's battery badge (any service's
+    # page, not just drive's own) can colour itself without needing its
+    # own copy of drive's config - see shared/web/static/sysstatus.js.
+    combined["battery_low_voltage_v"] = service_cfg.get("battery_low_voltage_v")
     return combined
 
 
@@ -261,6 +266,17 @@ def set_tuning():
     if name not in protocol.ALL_TUNING_PARAMS:
         abort(400)
     link.send(protocol.encode_tuning(name, float(payload["left"]), float(payload["right"])))
+    return "", 204
+
+
+@app.route("/power-off", methods=["POST"])
+def power_off():
+    """Arms a delayed hard power cut on the pico - see protocol.py's
+    encode_power_off(). No UI wired to this yet; the caller is expected
+    to have the Pi itself well into a clean shutdown before delay_s
+    elapses - there's no cancel command."""
+    payload = request.get_json(force=True)
+    link.send(protocol.encode_power_off(float(payload["delay_s"])))
     return "", 204
 
 

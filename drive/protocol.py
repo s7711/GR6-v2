@@ -68,6 +68,9 @@ def parse_line(line: str) -> dict:
 
         if tag == "Version" and len(parts) >= 2:
             return {"firmware_version": parts[1]}
+
+        if tag == "BV" and len(parts) == 2:
+            return {"battery_voltage_v": int(parts[1]) / 100.0}
     except ValueError:
         return {}
 
@@ -83,6 +86,14 @@ def encode_set_velocity(left_counts_s: float, right_counts_s: float) -> str:
 
 def encode_pump(on: bool) -> str:
     return f"WP {1 if on else 0}\n"
+
+
+def encode_power_off(delay_s: float) -> str:
+    """`P_OFF <seconds>` - firmware cuts the 12V rail (motors, pumps,
+    and itself - see gr6_pins.py's PWR_12V_EN) that many seconds from
+    when it receives this. No cancel command exists yet - see
+    firmware's user_command()."""
+    return f"P_OFF {int(round(delay_s))}\n"
 
 
 def encode_tuning(name: str, left: float, right: float) -> str:

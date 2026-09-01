@@ -373,6 +373,39 @@ Prompted directly by the commanded-vs-measured wheel speed gap found
 etc., already sent by the firmware every cycle) plotted against
 navigate's commanded speed without it.
 
+## Battery voltage and power-off (added 2026-09-01)
+
+`gr6_pins.py` already had a battery-voltage ADC divider and a
+`read_vbatt()` helper wired up but unused — firmware now reads it and
+sends `BV <volts*100>` (single value, not a L/R pair — see
+`send_telemetry()`'s `whichControlUpdate == 13` alongside `Version`,
+same slow, low-priority cadence). `protocol.py` parses it to
+`battery_voltage_v`; `_snapshot()` also passes through
+`config.yaml`'s `battery_low_voltage_v` alongside the reading, so the
+shared header's battery badge (any service's page, not just drive's
+own — see `shared/web/static/sysstatus.js`) can colour itself red/green
+without needing its own copy of drive's config. Unfiltered for now —
+worth a slow (~60s) filter later if the raw ADC reading turns out
+noisy in practice, not done pre-emptively.
+
+`battery_power_off_voltage_v` also exists in config but nothing reads
+it yet — a placeholder for a future automatic forced cutoff, not
+wired to anything.
+
+Power cutoff itself reuses `PWR_12V_EN` (`gr6_pins.py`) - previously
+only ever driven high once at boot to latch the 12V rail on after the
+physical wake button is released. A new `P_OFF <seconds>` firmware
+command (`drive/protocol.py`'s `encode_power_off`, `drive/app.py`'s
+`POST /power-off`) arms a delayed `pwr_en.value(0)`, cutting that same
+rail — the same pin doubles as both "keep power on" and "cut power",
+just driven the opposite way. No cancel command exists once armed - by
+design, the only intended caller (`manager`'s power-off button, see
+manager-prd.md) is expected to already be committed to a real Pi
+shutdown by the time it sends this, so there's no case yet where
+changing its mind matters. The delay exists purely to give the Pi's own
+clean OS shutdown a runway before the hard cutoff happens regardless of
+whether that shutdown actually finished.
+
 ## Out of Scope (v1 of this service)
 
 - Path-following / waypoint navigation — future `navigate` service.

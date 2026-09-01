@@ -31,6 +31,12 @@
     {% endfor %}
   </tbody>
 </table>
+
+<hr>
+<p>
+  <button id="power-off-btn" class="btn btn-danger">Power off robot</button>
+  <span class="text-body-secondary small">Cleanly shuts down the Pi, then the pico physically cuts the 12V rail a short delay later as a backstop.</span>
+</p>
 {% endblock %}
 {% block scripts %}
 <script>
@@ -40,6 +46,11 @@ document.querySelectorAll("button[data-action]").forEach(btn => {
     const name = row.dataset.service;
     fetch(`/services/${name}/${btn.dataset.action}`, {method: "POST"});
   });
+});
+
+document.getElementById("power-off-btn").addEventListener("click", () => {
+  if (!confirm("Power off the robot now? This shuts down the Pi and then physically cuts power.")) return;
+  fetch("/power-off", {method: "POST"});
 });
 
 const proto = location.protocol === "https:" ? "wss" : "ws";

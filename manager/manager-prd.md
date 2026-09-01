@@ -154,6 +154,26 @@ requirement to bind a privileged port.
   - Per-service CPU/memory (as opposed to this whole-Pi view) is future
     work — see Out of Scope.
 
+## Power off (added 2026-09-01)
+
+A "Power off robot" button on the Services page, separate from the
+per-service start/stop/restart controls — confirmed via a plain
+`confirm()` dialog before it does anything, given how final it is.
+`POST /power-off`: arms drive's pico-side hard cutoff first (`POWER_OFF_DELAY_S`
+= 20s — see drive-prd.md's "Battery voltage and power-off"), *then*
+runs `sudo shutdown -h now`, in that order deliberately — the pico's
+cutoff is the real backstop, so it needs to be armed before the Pi
+starts winding itself down, not after. Requires `sudo shutdown`
+permitted in sudoers for this user, same as `sudo systemctl` already is
+for the existing service controls — not something this app can set up
+for itself; the button silently no-ops on the shutdown half until
+that's done (drive's cutoff still arms regardless, since that call
+happens first and independently).
+
+No "power on" counterpart — once a shutdown is underway there's no way
+to send a "cancel"/"power on" command back, so there's nothing
+meaningful to build there.
+
 ## Testing Decisions
 
 - Test the Flask routes for start/stop/restart against a couple of

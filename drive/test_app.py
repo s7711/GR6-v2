@@ -47,8 +47,11 @@ class DriveAppTestCase(unittest.TestCase):
         resp = self.client.post("/command/manual", json={"left_mps": 0.2, "right_mps": -0.2})
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.get_json(), {"accepted": True})
-        # 0.2 m/s * 120 counts/m = 24 counts/s
-        self.assertEqual(self.fake_serial.written, [b"SV 24 -24\n"])
+        # Derived from the live counts_per_metre, not hardcoded - this
+        # went stale twice before (120 -> 250 -> ...) as the real config
+        # got recalibrated, see drive-prd.md's counts_per_metre history.
+        counts_s = round(app.mps_to_counts_s(0.2))
+        self.assertEqual(self.fake_serial.written, [f"SV {counts_s} {-counts_s}\n".encode()])
         self.assertEqual(app.arbiter.calls, ["manual"])
 
     def test_auto_command_rejected_is_not_forwarded(self):
@@ -73,14 +76,21 @@ class DriveAppTestCase(unittest.TestCase):
         self.assertEqual(resp.status_code, 400)
         self.assertEqual(self.fake_serial.written, [])
 
+    def test_power_off(self):
+        resp = self.client.post("/power-off", json={"delay_s": 20})
+        self.assertEqual(resp.status_code, 204)
+        self.assertEqual(self.fake_serial.written, [b"P_OFF 20\n"])
+
     def test_snapshot_converts_to_physical_units(self):
-        self.fake_serial.queue.put(b"EN 250 500\n")  # counts_per_metre=120 in config -> 250/120, 500/120 m
-        self.fake_serial.queue.put(b"SV 100 -100\n")  # SV is wire-scaled x100 (see protocol.py) -> 1.0, -1.0 counts/s -> /120 m/s
+        # Derived from the live counts_per_metre, not hardcoded - see
+        # test_manual_command_accepted_and_forwarded's own note.
+        self.fake_serial.queue.put(b"EN 250 500\n")
+        self.fake_serial.queue.put(b"SV 100 -100\n")  # SV is wire-scaled x100 (see protocol.py) -> 1.0, -1.0 counts/s
         self.assertTrue(wait_until(lambda: app.link.snapshot().get("LM_position") == 250))
         snap = app._snapshot()
-        self.assertAlmostEqual(snap["LM_position_m"], 250 / 120)
-        self.assertAlmostEqual(snap["RM_position_m"], 500 / 120)
-        self.assertAlmostEqual(snap["LM_setvel_mps"], 1.0 / 120)
+        self.assertAlmostEqual(snap["LM_position_m"], app.counts_s_to_mps(250))
+        self.assertAlmostEqual(snap["RM_position_m"], app.counts_s_to_mps(500))
+        self.assertAlmostEqual(snap["LM_setvel_mps"], app.counts_s_to_mps(1.0))
         self.assertIn("control", snap)
         self.assertIn("firmware", snap)
 
