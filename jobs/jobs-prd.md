@@ -199,6 +199,26 @@ button. `fill`'s duration options are drawn from `waterbutt`'s own
 same fixed set offered for `pause`/`water` — a duration `waterbutt`
 would just reject isn't offered as a choice in the first place.
 
+**Water priming (added 2026-09-01):** the pump is always emptied
+between uses, so it has air in it at the start of every `water` step —
+without doing anything about it, where the water actually lands for the
+first couple of seconds is close to random. Found live that an on(2s)/
+off(2s)/on(2s)/off(2s) cycle reliably clears the air, so every `water`
+step now runs that fixed 4-phase sequence (`WATER_PRIME_PHASES` in
+`control.py`) before its own `duration_s` of continuous watering
+begins — implemented as a single phase list (`(True, 2.0), (False,
+2.0), (True, 2.0), (False, 2.0), (True, duration_s)`) that `_tick_timed`
+walks through uniformly, rather than treating priming as a special case
+bolted onto the existing single-deadline logic. Adds a fixed 8s to every
+`water` step's real elapsed time (of which 4s is the pump actually
+running) — negligible next to the 50-60s durations actually in use so
+far; acknowledged as a real, non-negligible ~4s of extra watering on a
+short (e.g. 5s) one, accepted rather than solved (e.g. by shortening the
+real duration to compensate) since only the long duration is in use
+today. An operator **Stop** mid-priming behaves the same as
+mid-real-watering — turns the pump off immediately, regardless of which
+phase it was in.
+
 **Fill step refusal (added 2026-08-15, generalised 2026-08-18):** if
 `waterbutt` itself refuses the fill — its QC check marker isn't
 visible, unconfigured, unreachable, or too far from ideal (see

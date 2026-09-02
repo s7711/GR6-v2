@@ -28,6 +28,16 @@ NAVIGATE_STEP_TYPES = ("run_path", "turn_to_heading")  # both polled via _tick_n
 
 NAVIGATE_STEP_FEED_GRACE_S = 1.0  # see _tick_navigate_step's comment
 
+# On/off phases run before every "water" step's own duration_s, to clear
+# air from the pump (always emptied between uses) before real watering
+# starts - found live 2026-09-01, without this the water lands almost
+# randomly for the first couple of seconds. Fixed at 4 phases/8s total
+# regardless of duration_s: negligible next to a 50-60s water (the only
+# duration actually in use so far), acknowledged as a real ~4s of extra
+# watering time on a short one (duration_s + the two "on" phases here) -
+# see jobs-prd.md's "Water priming".
+WATER_PRIME_PHASES = ((True, 2.0), (False, 2.0), (True, 2.0), (False, 2.0))
+
 
 class JobRunner:
     def __init__(self, load_path, start_path, stop_path, start_turn, navigate_status,
@@ -54,6 +64,8 @@ class JobRunner:
         self.step_deadline = None  # self.now() value a pause/water/fill step completes at
         self._navigate_step_seen_running = False  # see _tick_navigate_step's comment
         self._navigate_step_started_at = None
+        self._water_phases = None  # the current "water" step's full (pump_on, duration_s) phase list - WATER_PRIME_PHASES then (True, duration_s) - see _start_current_step/_tick_timed
+        self._water_phase_index = None
 
     def go(self, job_name: str, steps: list, start_index: int = 0):
         """Starts (or resumes, from start_index) a job."""
@@ -78,6 +90,8 @@ class JobRunner:
             self.state = "idle"
             self.abort_reason = None
             self.step_deadline = None
+            self._water_phases = None
+            self._water_phase_index = None
         self.stop_path()
         if step_type == "water":
             self.pump_on(False)
@@ -111,12 +125,15 @@ class JobRunner:
             with self.lock:
                 self.step_deadline = self.now() + step["duration_s"]
         elif step_type == "water":
-            result = self.pump_on(True)
+            phases = (*WATER_PRIME_PHASES, (True, step["duration_s"]))
+            result = self.pump_on(phases[0][0])
             if not result.get("ok"):
                 self._fail_step(step_index, "failed_to_start", result.get("reason", "couldn't start the pump"))
                 return
             with self.lock:
-                self.step_deadline = self.now() + step["duration_s"]
+                self._water_phases = phases
+                self._water_phase_index = 0
+                self.step_deadline = self.now() + phases[0][1]
         elif step_type == "fill":
             result = self.waterbutt_go(step["duration_s"])
             if not result.get("ok"):
@@ -266,15 +283,36 @@ class JobRunner:
 
         if deadline is None or self.now() < deadline:
             if step_type == "water":
-                # Resend every tick, not just once at step start - drive's
-                # own firmware watchdog turns the pump off after 2000ms of
-                # silence (see navigate-prd.md's own pump-resend fix,
-                # navigate/control.py's step()), and job_status_hz's
-                # tick period is comfortably under that.
-                self.pump_on(True)
+                # Resend every tick, not just once at the current phase's
+                # start - drive's own firmware watchdog turns the pump
+                # off after 2000ms of silence (see navigate-prd.md's own
+                # pump-resend fix, navigate/control.py's step()), and
+                # job_status_hz's tick period is comfortably under that.
+                # Whichever phase we're actually in right now (priming
+                # on/off, or the real watering duration) - see
+                # WATER_PRIME_PHASES/_start_current_step.
+                with self.lock:
+                    phase_on = self._water_phases[self._water_phase_index][0]
+                self.pump_on(phase_on)
             return
 
         if step_type == "water":
+            next_phase_index = None
+            with self.lock:
+                if self.state == "running" and self.current_step_index == step_index:
+                    next_phase_index = self._water_phase_index + 1
+            if next_phase_index is not None and next_phase_index < len(self._water_phases):
+                # Priming (or the real watering duration - same
+                # mechanism either way) isn't finished - move to the
+                # next phase rather than ending the step.
+                pump_state, phase_duration = self._water_phases[next_phase_index]
+                self.pump_on(pump_state)
+                with self.lock:
+                    if self.state != "running" or self.current_step_index != step_index:
+                        return
+                    self._water_phase_index = next_phase_index
+                    self.step_deadline = self.now() + phase_duration
+                return
             self.pump_on(False)
         # fill needs no explicit stop here - waterbutt's own valve
         # controller self-terminates at the same duration (see
@@ -286,6 +324,8 @@ class JobRunner:
             if self.state != "running" or self.current_step_index != step_index:
                 return
             self.step_deadline = None
+            self._water_phases = None
+            self._water_phase_index = None
             self.step_log.append({"index": step_index, **self._step_summary(step_index), "outcome": "ok"})
             next_step_index = self._advance(step_index)
 

@@ -384,23 +384,40 @@ class TestWaterStep(unittest.TestCase):
         runner.go("m", [{"type": "water", "duration_s": 60}])
         self.assertEqual(hw.pump_calls, [True])
 
-    def test_water_resends_pump_on_each_tick_until_done(self):
+    def test_water_resends_pump_on_each_tick_within_a_phase(self):
         # Drive's own firmware watchdog turns the pump off after 2000ms
         # of silence - the pump command must be resent well within that,
-        # not just fired once at step start.
+        # not just fired once at a phase's start. Stays inside the first
+        # priming phase's 2s (see WATER_PRIME_PHASES) - phase transitions
+        # are covered by test_priming_sequence_runs_before_the_real_duration.
         clock = FakeClock()
         runner, stub, hw = make_runner(clock)
         runner.go("m", [{"type": "water", "duration_s": 60}])
-        clock.advance(1)
+        clock.advance(0.5)
         runner.tick()
-        clock.advance(1)
+        clock.advance(0.5)
         runner.tick()
         self.assertEqual(hw.pump_calls, [True, True, True])
 
-    def test_water_turns_pump_off_once_duration_elapses(self):
+    def test_priming_sequence_runs_before_the_real_duration(self):
+        # Found live 2026-09-01: the pump always has air in it (emptied
+        # between uses), which makes the first couple of seconds of real
+        # watering land almost randomly - an on/off/on/off priming cycle
+        # clears it. See WATER_PRIME_PHASES.
         clock = FakeClock()
         runner, stub, hw = make_runner(clock)
         runner.go("m", [{"type": "water", "duration_s": 60}, {"type": "pause", "duration_s": 1}])
+
+        # go() above already fired the first phase's pump_on(True) - each
+        # of these 4 ticks crosses one more phase boundary: the 3
+        # remaining priming phases (off/on/off), then into the real
+        # 60s duration (on).
+        for on in (False, True, False, True):
+            clock.advance(2)
+            runner.tick()
+        self.assertEqual(hw.pump_calls, [True, False, True, False, True])
+        self.assertEqual(runner.status()["current_step_index"], 0)  # still on the water step - now in the real duration, not priming
+
         clock.advance(60)
         runner.tick()
         self.assertEqual(hw.pump_calls[-1], False)
