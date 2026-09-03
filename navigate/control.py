@@ -242,7 +242,9 @@ class PathRunner:
                 self.config["heading_gain"], self.config["cte_gain"],
                 self.config["lookahead_distance_m"],
             )
-            left, right = geometry.differential_drive(result.speed_mps, turn, self.config["wheel_base_m"])
+            left, right = geometry.differential_drive(
+                result.speed_mps, turn, self.config["wheel_base_m"], self.config["max_speed_mps"]
+            )
             self.send_velocity(left, right)
             # Every step, not just on change — the firmware's WP watchdog
             # turns the pump off if no WP command arrives within 2000ms

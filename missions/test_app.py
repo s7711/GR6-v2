@@ -9,6 +9,9 @@ saved missions.
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+import requests
 
 import app
 import missions as missions_module
@@ -108,6 +111,55 @@ class MissionsAppTestCase(unittest.TestCase):
         self.client.post("/control/start", json={"name": "flowerbeds"})
         resp = self.client.get("/control/status")
         self.assertEqual(resp.get_json()["state"], "running")
+
+
+class FakeJobsResponse:
+    """Stand-in for requests.post's return value - just enough for
+    start_job()'s resp.json() call."""
+
+    def __init__(self, data):
+        self._data = data
+
+    def json(self):
+        return self._data
+
+
+class StartJobTestCase(unittest.TestCase):
+    """Tests app.start_job() itself - the thin wrapper around jobs'
+    /control/start that MissionRunner is built over in production (the
+    tests above replace it with JobsStub, so never exercise the real
+    thing). Found live 2026-09-03: a single-step job whose only step is
+    legitimately skipped (e.g. a "fill" refused by waterbutt) finishes
+    synchronously inside jobs' own go() call, so jobs' /control/start
+    response already carries state "stopped_ok" rather than "running" -
+    this used to be treated as a failed start, aborting the whole
+    mission over what jobs itself considers a normal, non-fatal outcome.
+    """
+
+    def test_running_is_a_successful_start(self):
+        with patch.object(app.requests, "post", return_value=FakeJobsResponse({"state": "running"})):
+            self.assertEqual(app.start_job("Water kitchen bed"), {"ok": True})
+
+    def test_stopped_ok_is_a_successful_start_not_a_failure(self):
+        with patch.object(app.requests, "post", return_value=FakeJobsResponse({"state": "stopped_ok"})):
+            self.assertEqual(app.start_job("Fill with water"), {"ok": True})
+
+    def test_aborted_surfaces_the_jobs_abort_reason_as_a_failure(self):
+        response = FakeJobsResponse({"state": "aborted", "abort_reason": "couldn't reach navigate"})
+        with patch.object(app.requests, "post", return_value=response):
+            self.assertEqual(
+                app.start_job("Water kitchen bed"),
+                {"ok": False, "reason": "couldn't reach navigate"},
+            )
+
+    def test_refused_before_starting_is_passed_through(self):
+        response = FakeJobsResponse({"ok": False, "reason": "no such job"})
+        with patch.object(app.requests, "post", return_value=response):
+            self.assertEqual(app.start_job("nonexistent"), {"ok": False, "reason": "no such job"})
+
+    def test_unreachable_jobs_is_a_failure(self):
+        with patch.object(app.requests, "post", side_effect=requests.exceptions.ConnectionError):
+            self.assertEqual(app.start_job("Water kitchen bed"), {"ok": False, "reason": "couldn't reach jobs"})
 
 
 if __name__ == "__main__":

@@ -187,6 +187,33 @@ the upcoming-job preview logic (`updateUpcomingJobPreview`, keyed off
 `start-step`) is unchanged, only the separate list rendering
 (`renderJobList`) is gone.
 
+## A job finishing synchronously was mistaken for a failed start (fixed 2026-09-03)
+
+Found live: a `run_job` step for a job whose *only* step is a `fill`
+(e.g. the standalone "Fill with water" job) that gets refused by
+`waterbutt` (QC marker not visible, or not confident the butt is empty
+- see waterbutt-prd.md) finishes the whole job synchronously, inside
+`jobs`' own `go()` call — `jobs`' `_skip_refused_fill()` (added
+2026-08-18, see jobs-prd.md) logs it as `"skipped_no_water"` and
+advances past it, and since it's the job's only step that immediately
+lands the job in `"stopped_ok"`.
+
+`app.start_job()` only treated `state == "running"` as a successful
+start; anything else (including a job that had, correctly, already
+finished) was surfaced as `{"ok": False, "reason": "jobs is
+unexpectedly 'stopped_ok'"}`, aborting the whole mission over what
+`jobs` itself considers a normal, non-fatal outcome. Every refused fill
+was taking out the rest of the mission with it, not just skipping the
+one watering.
+
+Fixed by treating `"stopped_ok"` the same as `"running"` in
+`start_job()` — both count as `{"ok": True}`; `MissionRunner`'s own
+`tick()` then polls `jobs`' status on the next tick same as always, sees
+`"stopped_ok"` already, and advances normally. `"aborted"` (a genuine
+synchronous failure, e.g. the job's own first step couldn't even load)
+is unchanged - still surfaced as a real failure, since that carries its
+own `abort_reason`.
+
 ## Deferred
 
 - **Cross-job continuity checking.** `jobs`' own save-time continuity

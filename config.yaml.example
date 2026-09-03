@@ -98,6 +98,7 @@ services:
     turn_gain: 1.0                     # proportional heading control for turn-in-place — rad/s of turn rate per rad of heading error
     turn_max_rate_rad_s: 0.5           # cap on commanded turn rate (~29deg/s) — untested live yet, start slow
     turn_max_mps: 0.15                 # cap on either wheel's speed while turning in place
+    max_speed_mps: 0.4                 # global cap on either wheel's speed while path-following
     turn_tolerance_deg: 10.0           # default heading tolerance for a turn_to_heading job step that doesn't specify its own
 
   network:

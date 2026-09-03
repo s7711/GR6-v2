@@ -490,6 +490,28 @@ as every other in-run failure — see "Abort reason logged to the journal"
 below — so a stale feed shows up in the journal and on the Run page the
 same way a stall or an accuracy breach would.
 
+## Global speed cap: `max_speed_mps` (added 2026-09-03)
+
+The new drive electronics can't track requested speeds much above 0.4m/s -
+found live from a run where `drive`'s own `LM_out` (PID output, PWM scale
+0-255, `MotorMax`=250) was spiking to ~300 and `setvel` was oscillating
+hard, both symptoms of the control loop being asked for more than the
+motor/gearbox can actually deliver. Considered and rejected a more
+elaborate adaptive governor (watch `LM_out`/`RM_out`, temporarily reduce
+the speed target on sustained saturation) — decided against it as too much
+complexity to trust or debug later for what boils down to "this robot has
+a top speed."
+
+Fixed with a single config value, `max_speed_mps` (0.4 for now), passed as
+the existing `max_mps` parameter of `geometry.differential_drive()` in
+`PathRunner.step()` — the same clamp `TurnRunner` already used for
+`turn_max_mps` (see "Turn in place" below). Scales both wheels together
+so the L/R ratio (and therefore the commanded turn) is preserved, rather
+than clipping one wheel and steering the robot off-line. This caps the
+*output* speed regardless of what a path's own `speed_mps` points ask for,
+so existing/future path files don't each need editing by hand - a faster
+robot later just needs a higher config value.
+
 ## Abort reason logged to the journal
 
 Every abort (real path-following runs and `/record/forward`'s mini-path

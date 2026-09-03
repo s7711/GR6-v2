@@ -66,6 +66,7 @@ CONTROL_CONFIG = {
     "wheel_base_m": drive_cfg["wheel_base_m"],
     "stall_check_window_s": service_cfg["stall_check_window_s"],
     "stall_min_distance_m": service_cfg["stall_min_distance_m"],
+    "max_speed_mps": service_cfg["max_speed_mps"],
 }
 
 TURN_CONFIG = {

@@ -57,6 +57,16 @@ def start_job(name):
         return {"ok": False, "reason": "couldn't reach jobs"}
     if data.get("ok") is False:
         return data
+    if data.get("state") == "stopped_ok":
+        # The job finished synchronously, inside this same call - e.g. a
+        # single-step job whose only step was legitimately skipped (a
+        # "fill" refused by waterbutt - see jobs-prd.md's "Water butt
+        # fill refusal") rather than run. Not a failure to start: let
+        # MissionRunner's own tick() pick this up as a normal completed
+        # step, same as if it had watched the job run and finish. Found
+        # live 2026-09-03 - "Fill with water" is exactly this shape, and
+        # every refusal was aborting the whole mission over it.
+        return {"ok": True}
     if data.get("state") != "running":
         # The job's own first step (or its own continuity/entry check)
         # already failed synchronously inside jobs' go() - surface that

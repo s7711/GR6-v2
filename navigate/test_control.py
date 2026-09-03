@@ -13,6 +13,7 @@ CONFIG = {
     "wheel_base_m": 0.42,
     "stall_check_window_s": 5.0,
     "stall_min_distance_m": 0.10,
+    "max_speed_mps": None,
 }
 
 # A short straight path running due north from a fixed lat/lon, generated
@@ -191,6 +192,20 @@ class TestStep(unittest.TestCase):
         # speed, no significant turn.
         self.assertAlmostEqual(left, 0.5, delta=0.05)
         self.assertAlmostEqual(right, 0.5, delta=0.05)
+
+    def test_max_speed_mps_clamps_both_wheels_preserving_turn_ratio(self):
+        recorder = Recorder()
+        config = {**CONFIG, "max_speed_mps": 0.2}
+        runner = PathRunner(config, recorder.send_velocity, recorder.send_pump)
+        runner.load_path(STRAIGHT_NORTH_PATH)
+        runner.start(robot_lat=52.200000, robot_lon=-1.500000, robot_heading_deg=0)
+        runner.step(robot_lat=52.200000, robot_lon=-1.500000, robot_heading_deg=0, horizontal_accuracy_m=0.1)
+        left, right = recorder.velocity_calls[0]
+        # Uncapped this step would be ~0.5/0.5 (straight, on-path) - both
+        # wheels scaled down to the 0.2 cap rather than just clipped, which
+        # would otherwise turn the robot by distorting the L/R ratio.
+        self.assertLessEqual(max(abs(left), abs(right)), 0.2 + 1e-9)
+        self.assertAlmostEqual(left, right, delta=0.01)
 
     def test_pump_command_resent_every_step_not_just_on_change(self):
         # The firmware's WP watchdog turns the pump off if no WP command
