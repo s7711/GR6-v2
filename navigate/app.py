@@ -55,6 +55,19 @@ DRIVE_BASE_URL = f"http://localhost:{drive_cfg['port']}"  # server-to-server, sa
 OXTSNAV_BASE_URL = f"http://localhost:{oxtsnav_cfg['port']}"  # same — see "Aruco priority" in navigate-prd.md
 LOGS_DIR = PATHS_DIR / "logs"  # one retained file per run — see jobs'/missions' identical convention; viewed via the "viewer" service now, see viewer-prd.md
 
+# A separate, never-swept file (unlike LOGS_DIR's log_retention_days) - one
+# line per detected control-loop stall, so "how often does this happen" can
+# be answered weeks later. journald can't do this (Storage=volatile - wiped
+# every reboot) and LOGS_DIR's per-run logs only last a couple of days.
+# Found live 2026-09-07: a 1.43s gap in a run's debug log (no "no position"
+# abort, so not oxts-nav feed loss - see _current_position()) coincided with
+# a heading-error abort, most likely because drive kept executing its last
+# commanded turn the whole time navigate itself wasn't ticking (drive has
+# its own independent 2s command timeout - see pico/main.py's
+# CMD_TIMEOUT_MS), sailing the robot straight through the target heading.
+STALL_LOG_PATH = PATHS_DIR / "control_stall_log.jsonl"
+STALL_THRESHOLD_S = 0.5  # 5x control_hz's own 0.1s period - well above normal scheduling jitter
+
 CONTROL_CONFIG = {
     "entry_max_distance_m": service_cfg["entry_max_distance_m"],
     "entry_max_heading_deg": service_cfg["entry_max_heading_deg"],
@@ -202,6 +215,19 @@ def _current_position():
         "horizontal_speed_mps": horizontal_speed_mps,
         "wheel_left_mps": drive_state.get("LM_vel_filt_mps"),
         "wheel_right_mps": drive_state.get("RM_vel_filt_mps"),
+        # Raw fix-status fields, logged alongside the derived accuracy above
+        # because horizontal_accuracy_m (the xNAV's own NorthAcc/EastAcc
+        # covariance) lags behind a real GnssPosMode/InsNavMode drop - a
+        # brief loss that recovers before the covariance grows is otherwise
+        # invisible in the debug log (see 2026-09-04 RTK-under-load
+        # investigation: motor current suspected, but no run's debug log
+        # showed more than ~0.15m of accuracy degradation).
+        "InsNavMode": nav.get("InsNavMode"),
+        "GnssPosMode": status.get("GnssPosMode"),
+        "GpsPrimaryPosMode": status.get("GpsPrimaryPosMode"),
+        "GpsSecondaryPosMode": status.get("GpsSecondaryPosMode"),
+        "GnssPosNumSats": status.get("GnssPosNumSats"),
+        "SupplyVolt": status.get("SupplyVolt"),
     }
 
 
@@ -327,10 +353,23 @@ def _control_tick():
     _control_loop_last_state = state
 
 
+def _record_stall(gap_s):
+    logging.warning("[navigate] Control loop stalled for %.2fs (expected ~%.2fs)", gap_s, 1.0 / service_cfg["control_hz"])
+    entry = {"t": time.time(), "gap_s": gap_s, "state": _control_loop_last_state}
+    with open(STALL_LOG_PATH, "a") as f:
+        f.write(json.dumps(entry) + "\n")
+
+
 def _control_loop():
     period = 1.0 / service_cfg["control_hz"]
+    last_tick = time.monotonic()
     while True:
         _control_tick()
+        now = time.monotonic()
+        gap = now - last_tick
+        if gap > STALL_THRESHOLD_S:
+            _record_stall(gap)
+        last_tick = now
         time.sleep(period)
 
 

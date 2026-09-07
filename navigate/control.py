@@ -91,11 +91,23 @@ class PathRunner:
                     robot_north, robot_east, a.north, a.east, b.north, b.east
                 )
                 if best is None or dist < best[1]:
-                    px, py, _t, _dist = geometry.project_onto_segment(
-                        robot_north, robot_east, a.north, a.east, b.north, b.east
+                    # Heading error against the *lookahead point* (what
+                    # find_entry_segment actually checks), not the raw
+                    # projected point on the segment - close to the path,
+                    # bearing to a point almost beside you is dominated by
+                    # the cross-track direction and swings towards +/-90deg
+                    # regardless of true heading alignment (see
+                    # find_entry_segment's docstring). Using the same
+                    # lookahead-based measure here keeps this diagnostic
+                    # message consistent with what actually gated entry.
+                    lookahead = geometry.find_lookahead_point(
+                        self.path, i, robot_north, robot_east, self.config["lookahead_distance_m"]
                     )
-                    point_bearing = geometry.bearing(robot_north, robot_east, px, py)
-                    heading_err = geometry.angle_diff(point_bearing, robot_heading_deg)
+                    if lookahead is None:
+                        continue
+                    heading_err = geometry.heading_error_deg(
+                        robot_heading_deg, robot_north, robot_east, lookahead.north, lookahead.east
+                    )
                     best = (i, dist, heading_err)
             return {
                 "ok": False,
