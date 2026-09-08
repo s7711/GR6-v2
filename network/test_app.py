@@ -92,10 +92,59 @@ class TestApplyBatch(unittest.TestCase):
         with patch("nm.is_hotspot", return_value=True), \
              patch("nm.set_autoconnect_priority"), \
              patch("nm.set_managed") as mock_managed, \
-             patch("nm.activate_connection") as mock_activate:
+             patch("nm.activate_connection") as mock_activate, \
+             patch("app.scanner_state") as mock_scanner_state:
+            mock_scanner_state.get_device.return_value = None
             app._apply_batch(iface_by_device, desired)
         mock_managed.assert_called_once_with("wlan1", False)
         mock_activate.assert_not_called()
+        mock_scanner_state.set_device.assert_not_called()
+
+    def test_scanner_value_turns_off_managed_and_records_device(self):
+        # Same underlying nmcli action as OFF_VALUE — scanner_state.py is
+        # the only thing telling them apart, see its own docstring.
+        iface_by_device = {"wlan0": _iface("wlan0", "wifi", "CoffeebeanWifi", matching=["CoffeebeanWifi"])}
+        desired = {"wlan0": app.SCANNER_VALUE}
+        with patch("nm.is_hotspot", return_value=False), \
+             patch("nm.set_autoconnect_priority"), \
+             patch("nm.set_managed") as mock_managed, \
+             patch("nm.activate_connection") as mock_activate, \
+             patch("app.scanner_state") as mock_scanner_state:
+            mock_scanner_state.get_device.return_value = None
+            app._apply_batch(iface_by_device, desired)
+        mock_managed.assert_called_once_with("wlan0", False)
+        mock_activate.assert_not_called()
+        mock_scanner_state.set_device.assert_called_once_with("wlan0")
+        mock_scanner_state.clear.assert_not_called()
+
+    def test_moving_a_device_away_from_scanner_clears_it(self):
+        # wlan0 was the scanner; this batch picks a real profile for it
+        # instead — the recorded scanner choice must not linger stale.
+        iface_by_device = {"wlan0": _iface("wlan0", "wifi", None, state="unmanaged", matching=["CoffeebeanWifi"])}
+        desired = {"wlan0": "CoffeebeanWifi"}
+        with patch("nm.is_hotspot", return_value=False), \
+             patch("nm.set_autoconnect_priority"), \
+             patch("nm.set_managed"), \
+             patch("nm.activate_connection"), \
+             patch("app.scanner_state") as mock_scanner_state:
+            mock_scanner_state.get_device.return_value = "wlan0"
+            app._apply_batch(iface_by_device, desired)
+        mock_scanner_state.clear.assert_called_once()
+
+    def test_scanner_on_a_different_device_is_left_alone(self):
+        iface_by_device = {
+            "wlan0": _iface("wlan0", "wifi", "CoffeebeanWifi", matching=["CoffeebeanWifi"]),
+            "wlan1": _iface("wlan1", "wifi", None, state="unmanaged", matching=[]),
+        }
+        desired = {"wlan0": "CoffeebeanWifi"}  # wlan1 (the real scanner) isn't in this batch at all
+        with patch("nm.is_hotspot", return_value=False), \
+             patch("nm.set_autoconnect_priority"), \
+             patch("nm.set_managed"), \
+             patch("nm.activate_connection"), \
+             patch("app.scanner_state") as mock_scanner_state:
+            mock_scanner_state.get_device.return_value = "wlan1"
+            app._apply_batch(iface_by_device, desired)
+        mock_scanner_state.clear.assert_not_called()
 
 
 if __name__ == "__main__":

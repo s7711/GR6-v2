@@ -5,11 +5,17 @@ service separately — there's only one Pi, so one reader is enough, and
 every service's shared header just watches the manager's `/ws/system`.
 """
 
+import json
 import subprocess
 import time
 from pathlib import Path
 
 _WIRELESS_PROC = Path("/proc/net/wireless")
+# network/scanner_state.py's own persisted file — read directly rather
+# than over the network, since a plain boolean doesn't need its own
+# feed/websocket and this is the only other process that needs it (the
+# shared header's "Wifi"/"Wifi+" badge — see sysstatus.js).
+_SCANNER_STATE_PATH = Path(__file__).resolve().parent.parent / "network" / "data" / "scanner.json"
 
 _prev_cpu_total = None
 _prev_cpu_idle = None
@@ -131,10 +137,20 @@ def read_cpu_percent() -> float | None:
     return percent
 
 
+def read_wifi_scanning() -> bool:
+    """Whether a wifi device is currently set to Scanner mode — see
+    network/scanner_state.py. Drives the header's "Wifi"/"Wifi+" text."""
+    try:
+        return json.loads(_SCANNER_STATE_PATH.read_text()).get("device") is not None
+    except (FileNotFoundError, json.JSONDecodeError):
+        return False
+
+
 def snapshot() -> dict:
     return {
         "brownout": read_brownout(),
         "wifi_percent": read_wifi_percent(),
+        "wifi_scanning": read_wifi_scanning(),
         "cpu_percent": read_cpu_percent(),
         "temp": read_temp(),
     }

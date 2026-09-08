@@ -44,6 +44,7 @@
         <span id="sys-cpu" class="badge text-bg-secondary" title="CPU load">&mdash;</span>
         <span id="sys-gnss" class="badge text-bg-secondary" title="GPS position mode">&mdash;</span>
         <span id="sys-aruco" class="badge text-bg-secondary" title="Aruco marker status">&mdash;</span>
+        <span id="sys-wheelspeed" class="badge text-bg-secondary" title="Wheelspeed GAD sending">&mdash;</span>
         {% endblock %}
       </div>
     </div>
@@ -61,6 +62,7 @@
     const ARUCO_WS_URL = "{{ aruco_ws_url|default('') }}";
     const MAP_MANAGER_WS_URL = "{{ map_manager_ws_url|default('') }}";
     const DRIVE_WS_URL = "{{ drive_ws_url|default('') }}";
+    const WHEELSPEED_WS_URL = "{{ wheelspeed_ws_url|default('') }}";
   </script>
   <script src="/static/ncom-strings.js"></script>
   <script src="/static/sysstatus.js"></script>

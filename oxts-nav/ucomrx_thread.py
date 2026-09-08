@@ -63,6 +63,7 @@ class UcomRxThread(threading.Thread):
                 self.nrx[addr] = {
                     'recentPackets': collections.deque(maxlen=200),
                     'decoder': ucomrx.UcomRx(),
+                    'logfile': None,
                     }
                 # Add IP address to connection, useful for user
                 self.nrx[addr]['decoder'].connection['ip'] = addr
@@ -92,6 +93,15 @@ class UcomRxThread(threading.Thread):
                     # And process all possible data
                     while self.nrx[addr]['decoder'].decode(b'', machineTime=myTime):
                         pass
+                    # Same raw-logging hook as ncomrx_thread.py, kept
+                    # inside the same lock as the write - see its comment
+                    # and data_log.py.
+                    if self.nrx[addr]['logfile'] is not None:
+                        self.nrx[addr]['logfile'].write(nb)
+                        if 'loggedBytes' in self.nrx[addr]['decoder'].connection:
+                            self.nrx[addr]['decoder'].connection['loggedBytes'] += len(nb)
+                        else:
+                            self.nrx[addr]['decoder'].connection['loggedBytes'] = len(nb)
             else:
                 self.nrx[addr]['decoder'].connection['repeatedUdp'] += 1
 

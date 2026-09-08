@@ -33,6 +33,7 @@ import ncomrx_thread  # noqa: E402
 import ucomrx_thread  # noqa: E402
 import nav_feed  # noqa: E402
 import gnss_mode  # noqa: E402
+import data_log  # noqa: E402
 
 XNAV_COMMAND_PORT = 3001
 # mobile.rd is the xNAV's raw data recording, not a config file — it's
@@ -65,6 +66,19 @@ nav_feed_server = nav_feed.NavFeedServer(
     nrxs=nrxs,
     xnav_ip=xnav_ip,
     hz=service_cfg["nav_feed_hz"],
+    stale_after_s=service_cfg["stale_after_s"],
+)
+
+DATA_DIR = Path(__file__).resolve().parent / "data"
+data_logger = data_log.DataLogger(
+    nrxs=nrxs,
+    xnav_ip=xnav_ip,
+    protocol=protocol,
+    data_dir=DATA_DIR,
+    decoded_fields=service_cfg["decoded_log_fields"],
+    rotate_s=service_cfg["log_rotate_s"],
+    retention_days=service_cfg["log_retention_days"],
+    decoded_hz=service_cfg["decoded_log_hz"],
     stale_after_s=service_cfg["stale_after_s"],
 )
 
@@ -140,6 +154,7 @@ def inject_manager_url():
         "aruco_ws_url": service_url(browser_host, "aruco", scheme="ws") + "/ws/aruco",
         "map_manager_ws_url": service_url(browser_host, "map-manager", scheme="ws") + "/ws/map-manager",
         "drive_ws_url": service_url(browser_host, "drive", scheme="ws") + "/ws/drive",  # battery badge - see sysstatus.js
+        "wheelspeed_ws_url": service_url(browser_host, "wheelspeed", scheme="ws") + "/ws/wheelspeed",  # "W" badge - see sysstatus.js
     }
 
 
@@ -217,6 +232,7 @@ if __name__ == "__main__":
     threading.Thread(target=download_xnav_config, daemon=True).start()
     nav_feed_server.start()
     gnss_controller.start()
+    data_logger.start()
     # threaded=True: without it, Flask's dev server handles one connection
     # at a time, and /ws/nav's handler never returns (infinite loop) — so
     # a second simultaneous connection just hangs forever. Every page now

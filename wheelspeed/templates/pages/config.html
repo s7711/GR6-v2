@@ -3,9 +3,21 @@
 {% block title %}GR6 — Wheelspeed Config{% endblock %}
 
 {% block content %}
+<div class="card mb-3">
+  <div class="card-body d-flex align-items-center gap-3">
+    <div class="form-check form-switch mb-0">
+      <input class="form-check-input" type="checkbox" role="switch" id="gad-switch" {{ "checked" if gad_enabled }}>
+      <label class="form-check-label" for="gad-switch">Send GAD to the xNAV650</label>
+    </div>
+    <div id="gad-switch-status" class="text-body-secondary small"></div>
+  </div>
+</div>
 <p class="text-body-secondary small">
-  Read-only — edit these via the manager's Config page (<code>wheelspeed:</code>
-  in the shared config file), not here.
+  Everything below is read-only — edit via the manager's Config page (<code>wheelspeed:</code>
+  in the shared config file), not here. The switch above is the one exception: it's a live,
+  persisted-but-restart-independent toggle (see gad_switch.py), not a config.yaml value —
+  logging (this page's own home page, and wheelspeed's own <code>data/logs/</code>) keeps
+  running either way.
 </p>
 <div class="card">
   <div class="card-body">
@@ -40,4 +52,26 @@
     </table>
   </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.getElementById("gad-switch").addEventListener("change", async (e) => {
+  const statusEl = document.getElementById("gad-switch-status");
+  statusEl.textContent = "Saving...";
+  try {
+    const resp = await fetch("/gad-switch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: e.target.checked }),
+    });
+    const data = await resp.json();
+    e.target.checked = data.enabled;
+    statusEl.textContent = data.enabled ? "GAD is on" : "GAD is off";
+  } catch (err) {
+    statusEl.textContent = "Couldn't save — try again";
+    e.target.checked = !e.target.checked;
+  }
+});
+</script>
 {% endblock %}

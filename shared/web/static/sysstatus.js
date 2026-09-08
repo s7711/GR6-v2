@@ -67,7 +67,12 @@
     const WIFI_AMBER_PERCENT = 50;
 
     const wifi = document.getElementById("sys-wifi");
-    wifi.textContent = "Wifi";
+    // "+" whenever a wifi device is set to Scanner mode (network's own
+    // signal-strength logging — see network/scanner_state.py) - a plain
+    // visible reminder so it's never silently left on, per Ben's own
+    // worry 2026-09-08 about "forgetting" a device is dedicated to
+    // scanning instead of its normal job.
+    wifi.textContent = msg.wifi_scanning ? "Wifi+" : "Wifi";
     if (msg.wifi_percent === null) {
       wifi.className = "badge text-bg-secondary";
     } else {
@@ -130,6 +135,19 @@
         : hasVisible ? "text-bg-success"
         : "text-bg-secondary"
       );
+    });
+  }
+
+  // Wheelspeed GAD switch ("W"): green if the switch is on, grey if
+  // off - deliberately just "whatever the switch says", not a third
+  // "on but not actually sending" state (e.g. no GPS time yet) - see
+  // Ben's spec 2026-09-08: wheelspeed isn't a priority when there's no
+  // valid time, so that gap isn't worth a badge colour of its own.
+  if (WHEELSPEED_WS_URL) {
+    connectWsUrl(WHEELSPEED_WS_URL, (msg) => {
+      const wheelspeed = document.getElementById("sys-wheelspeed");
+      wheelspeed.textContent = "W";
+      wheelspeed.className = "badge " + (msg.gad_enabled ? "text-bg-success" : "text-bg-secondary");
     });
   }
 })();

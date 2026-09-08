@@ -77,14 +77,18 @@ class NcomRxThread(threading.Thread):
                     # And process all possible data
                     while self.nrx[addr]['decoder'].decode(b'', machineTime=myTime):
                         pass
-                # Check if a log file is currently open for this IP address
-                if self.nrx[addr]['logfile'] is not None:
-                    # Write the raw UDP packet's binary data to the file
-                    self.nrx[addr]['logfile'].write(nb)
-                    if 'loggedBytes' in self.nrx[addr]['decoder'].connection:
-                        self.nrx[addr]['decoder'].connection['loggedBytes'] += len(nb)
-                    else:
-                        self.nrx[addr]['decoder'].connection['loggedBytes'] = len(nb)
+                    # Check if a log file is currently open for this IP
+                    # address - inside the same lock as the write below,
+                    # not just the assignment, so data_log.py's rotator
+                    # (running on another thread) can never close/replace
+                    # the file handle mid-write here. See data_log.py.
+                    if self.nrx[addr]['logfile'] is not None:
+                        # Write the raw UDP packet's binary data to the file
+                        self.nrx[addr]['logfile'].write(nb)
+                        if 'loggedBytes' in self.nrx[addr]['decoder'].connection:
+                            self.nrx[addr]['decoder'].connection['loggedBytes'] += len(nb)
+                        else:
+                            self.nrx[addr]['decoder'].connection['loggedBytes'] = len(nb)
 
             else:
                 self.nrx[addr]['decoder'].connection['repeatedUdp'] += 1

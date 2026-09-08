@@ -12,6 +12,7 @@ NetworkManager directly.
 
 import json
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -20,12 +21,19 @@ from flask_sock import Sock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from shared.config import load_config  # noqa: E402
+from shared.feed_client import FeedClient  # noqa: E402
+from shared.rotating_jsonl_log import RotatingJsonlLog  # noqa: E402
 from shared.web import manager_url, use_shared_static, use_shared_templates  # noqa: E402
 
 import nm  # noqa: E402
+import scanner  # noqa: E402
+from scanner_state import ScannerState  # noqa: E402
 
 cfg = load_config()
 service_cfg = cfg["services"]["network"]
+oxtsnav_cfg = cfg["services"]["oxts-nav"]
+
+DATA_DIR = Path(__file__).resolve().parent / "data"
 
 app = Flask(__name__)
 app.secret_key = "gr6-network"  # only used for flash() error messages — trusted LAN, no auth, see manager-prd.md
@@ -38,6 +46,14 @@ STATUS_HZ = 1
 # Form values for the "Set to" dropdown's non-profile options.
 NONE_VALUE = "__none__"   # ethernet: nmcli device disconnect
 OFF_VALUE = "__off__"     # wifi: nmcli device set managed no — see network-prd.md's "Turn off this interface"
+# Same underlying nmcli action as OFF_VALUE (managed no) — scanner_state.py
+# is the only thing distinguishing "just off" from "deliberately the wifi
+# signal-mapping scanner" — see its own docstring and scanner.py.
+SCANNER_VALUE = "__scanner__"
+
+scanner_state = ScannerState(DATA_DIR / "scanner.json")
+nav_client = FeedClient(oxtsnav_cfg["nav_feed_socket"], default={"nav": {}, "status": {}, "connection": {}})
+scan_log = RotatingJsonlLog(DATA_DIR / "logs", service_cfg["scan_log_rotate_s"], service_cfg["scan_log_retention_days"])
 
 # Autoconnect-priority scheme — see network-prd.md's "Wifi profile
 # choice becomes priority-based, not exclusive-activate".
@@ -81,6 +97,8 @@ def index():
         connection_descriptions=connection_descriptions,
         none_value=NONE_VALUE,
         off_value=OFF_VALUE,
+        scanner_value=SCANNER_VALUE,
+        scanner_device=scanner_state.get_device(),
     )
 
 
@@ -106,7 +124,7 @@ def _validate_batch(desired: dict[str, str]) -> list[str]:
     swap look like a conflict, since of course the target was "in use"
     — by the very device it was about to be freed from."""
     errors = []
-    real_choices = {d: c for d, c in desired.items() if c not in (NONE_VALUE, OFF_VALUE)}
+    real_choices = {d: c for d, c in desired.items() if c not in (NONE_VALUE, OFF_VALUE, SCANNER_VALUE)}
 
     seen = {}
     for device, chosen in real_choices.items():
@@ -143,7 +161,7 @@ def _apply_batch(iface_by_device: dict[str, dict], desired: dict[str, str]) -> N
     for iface in iface_by_device.values():
         if iface["type"] == "wifi":
             wifi_profiles.update(iface["matching_connections"])
-    chosen_profiles = {c for c in desired.values() if c not in (NONE_VALUE, OFF_VALUE)}
+    chosen_profiles = {c for c in desired.values() if c not in (NONE_VALUE, OFF_VALUE, SCANNER_VALUE)}
     for name in wifi_profiles:
         if name in chosen_profiles:
             priority = PRIORITY_SELECTED
@@ -153,12 +171,21 @@ def _apply_batch(iface_by_device: dict[str, dict], desired: dict[str, str]) -> N
             priority = PRIORITY_NORMAL
         nm.set_autoconnect_priority(name, priority)
 
+    current_scanner = scanner_state.get_device()
     for device, chosen in desired.items():
         iface = iface_by_device[device]
 
-        if iface["type"] == "wifi" and chosen == OFF_VALUE:
+        # Whatever this device is becoming, it isn't the scanner any more
+        # unless it's explicitly chosen again this batch.
+        if current_scanner == device and chosen != SCANNER_VALUE:
+            scanner_state.clear()
+            current_scanner = None
+
+        if iface["type"] == "wifi" and chosen in (OFF_VALUE, SCANNER_VALUE):
             if iface["state"] != "unmanaged":
                 nm.set_managed(device, False)
+            if chosen == SCANNER_VALUE:
+                scanner_state.set_device(device)
             continue
 
         if chosen == NONE_VALUE:
@@ -258,4 +285,11 @@ def ws_status(ws):
 
 
 if __name__ == "__main__":
+    nav_client.start()
+    scan_log.start()
+    threading.Thread(
+        target=scanner.run_scan_loop,
+        args=(scanner_state, nav_client, service_cfg["scan_ssid_filter"], scan_log),
+        daemon=True,
+    ).start()
     app.run(host=service_cfg["host"], port=service_cfg["port"], threaded=True)

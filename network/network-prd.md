@@ -638,3 +638,43 @@ discussion (NetworkManager-vs-hand-rolled tradeoff, the self-lockout
 risk, and why recovery ended up per-interface rather than its own
 page). Update this document as real hardware testing surfaces anything
 the design got wrong — expected, not a sign the plan was bad.
+
+### Future fix: pin wifi profiles by MAC address, not interface name (2026-09-08)
+
+Found live: `wlan0`/`wlan1` are plain kernel-assigned names, not fixed to
+a specific chip by any udev/systemd rule (checked — none exists). In
+practice `wlan0` has consistently been the onboard Broadcom chip
+(`brcmfmac`) and `wlan1` the USB dongle (Ralink RT5370, `rt2800usb`)
+across every check made this session, most likely because the onboard
+driver reliably finishes probing (device-tree, no enumeration needed)
+before the USB dongle enumerates — but this is an observed pattern, not
+a guarantee anything in this project actually enforces.
+
+Separately, a real incident this session: a pre-existing, unmanaged
+connection profile (`id=CoffeebeanWifi`, file `preconfigured.nmconnection`,
+same SSID as the properly-pinned `CoffeebeanWifiSpare` but with no
+`interface-name` pin and `autoconnect-priority=10` — same priority as
+`AmundsenHotspot`, higher than `CoffeebeanWifiSpare`'s deliberate `0`)
+was found racing for whichever wifi device came up first at boot,
+displacing the intended pinned profile. It predates this project's own
+device-pinning scheme (its filename doesn't match this app's own
+naming convention, e.g. `coffeebean-wlan1-test.nmconnection`) and was
+never cleaned up. Not removed yet — Ben's call, since fixing wifi
+config on this robot always risks a self-lockout requiring a physical
+ethernet-and-reconfigure-a-laptop recovery, and this wasn't the moment
+for that.
+
+Two follow-ups, next time there's appetite for this (with the ethernet
+fallback ready):
+- Retire or fix `preconfigured.nmconnection`/`CoffeebeanWifi` — either
+  delete it (its job is already done properly by `CoffeebeanWifiSpare`)
+  or at minimum pin its `interface-name` and drop its priority so it
+  can't win the device race even left in place.
+- Pin `CoffeebeanWifiSpare` (and any future per-device profile) by
+  `802-11-wireless.mac-address` instead of `connection.interface-name`
+  — MAC-address binding ties a profile to the actual physical chip
+  regardless of what name the kernel assigns it that boot, which
+  `interface-name` binding does not guarantee, even though it's held up
+  in practice so far. The dongle's MAC is `1c:bf:ce:f3:e1:94`; the
+  onboard chip's is `dc:a6:32:db:96:32` (both as of 2026-09-08 — a
+  replaced dongle would need this re-checked).

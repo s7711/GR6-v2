@@ -37,6 +37,32 @@ services:
     stale_after_s: 2.0  # blank nav/status/connection once nothing's been decoded for this long — see oxts-nav-prd.md's "Staleness"
     hpr_ib: [-90, 90, 0]  # IMU-to-body mounting (mobile.vat) — read by aruco too, for GAD lever-arm/alignment frames
     aruco_priority_timeout_s: 3.0  # "Aruco priority" mode falls back to GNSS if no marker's been seen for this long — see navigate-prd.md
+    log_rotate_s: 3600  # both raw and decoded logs rotate to a new file this often — see data_log.py
+    log_retention_days: 2  # matches drive/navigate/jobs/missions/waterbutt's own convention
+    decoded_log_hz: 2  # matches nav_update_hz — see data_log.py
+    decoded_log_fields:  # subset worth glancing at without opening the raw log — see data_log.py
+      - lat   # degrees, not NCOM's own radians — see data_log.py's _add_derived_fields
+      - lon
+      - Alt
+      - Heading
+      - Pitch
+      - Roll
+      - HorizontalSpeed  # hypot(Vn, Ve) — NCOM has no speed field of its own, see _add_derived_fields
+      - InsNavMode
+      - GnssPosMode
+      - GnssVelMode
+      - GnssAttMode
+      - GpsPrimaryPosMode
+      - GpsSecondaryPosMode
+      - GnssPosNumSats
+      - GnssPosNumSatsUsed
+      - NorthAcc
+      - EastAcc
+      - AltAcc
+      - HeadingAcc
+      - GpsPrimarySupplyVolt
+      - GpsSecondarySupplyVolt
+      - GnssDiffAge
 
   camera:
     unit: robot-camera.service
@@ -71,7 +97,8 @@ services:
     drive_feed_socket: /tmp/gr6-drive-feed.sock  # Unix domain socket — see "Feed naming" in drive-prd.md
     drive_feed_hz: 20
     tuning: {}                        # optional, e.g. {Kp: [1.0, 1.0], Ki: [3.0, 3.0]} — pushed to the microcontroller each time drive starts
-    log_retention_days: 2              # self-triggered per-burst-of-activity debug logs (drive/data/logs/) — same convention/value as navigate/jobs/missions/waterbutt, see viewer-prd.md
+    log_rotate_s: 3600  # continuous, hour-aligned logging (2026-09-08, was self-triggered "only while moving") — see app.py's _log_loop
+    log_retention_days: 2              # continuous debug logs (drive/data/logs/) — same convention/value as navigate/jobs/missions/waterbutt, see viewer-prd.md
     battery_low_voltage_v: 12.9          # header battery badge (shared/web/static/sysstatus.js) goes red below this, green at/above
     battery_power_off_voltage_v: 11.0    # NOT enforced yet - no code reads this for an automatic cutoff; a placeholder for a future forced power-off, needs a deliberate real value first
 
@@ -106,6 +133,9 @@ services:
     host: 0.0.0.0
     port: 8007
     web_ui: true
+    scan_ssid_filter: ["Coffeebean"]  # only these SSIDs get logged in Scanner mode — empty list logs every AP seen, see scanner.py
+    scan_log_rotate_s: 3600
+    scan_log_retention_days: 2
 
   wheelspeed:
     unit: robot-wheelspeed.service
@@ -119,6 +149,12 @@ services:
     right_wheel:
       lever_arm_i: [0.0, 0.0, 0.0]  # IMU -> right wheel, IMU frame, metres — unmeasured placeholder, MEASURE AND SET
       scale: 1.0                     # fudge factor on top of drive's own m/s velocity; normally 1.0
+    log_hz: 5  # rate the always-on jsonl log samples at — see app.py's _log_loop
+    log_rotate_s: 3600
+    log_retention_days: 2
+    scale_factor_distance_m: 1.0  # re-estimate the wheel-vs-INS scale factor every ~this many metres of travel — see scale_factor.py
+    scale_factor_min_wheel_ratio: 0.9  # reject (skip logging, start again) if left/right wheel distances disagree by more than this — a tight turn/spin has no single meaningful scale factor
+    scale_factor_min_wheel_ins_ratio: 0.1  # reject if wheel-vs-INS distance disagree by more than this — catches the robot being carried (INS moves, wheels don't) or a free-spinning wheel
 
   waterbutt:
     unit: robot-waterbutt.service

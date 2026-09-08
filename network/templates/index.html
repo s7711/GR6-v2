@@ -30,7 +30,8 @@
       <div class="col-auto">
         <select name="set_{{ iface.device }}" class="form-select form-select-sm{% if iface.type == 'wifi' %} off-select{% endif %}">
           {% if iface.type == 'wifi' %}
-          <option value="{{ off_value }}" {{ "selected" if iface.state == "unmanaged" }}>Off (stop managing this interface)</option>
+          <option value="{{ off_value }}" {{ "selected" if iface.state == "unmanaged" and iface.device != scanner_device }}>Off (stop managing this interface)</option>
+          <option value="{{ scanner_value }}" {{ "selected" if iface.device == scanner_device }}>Scanner (wifi signal-strength logging — see network-prd.md)</option>
           {% else %}
           <option value="{{ none_value }}" {{ "selected" if not iface.connection }}>None (disconnected)</option>
           {% endif %}
@@ -76,7 +77,7 @@ connectWs("/ws/status", (data) => {
 // page used to have.
 document.getElementById("network-form").addEventListener("submit", (event) => {
   const turningOff = Array.from(document.querySelectorAll(".off-select"))
-    .some((select) => select.value === "{{ off_value }}");
+    .some((select) => select.value === "{{ off_value }}" || select.value === "{{ scanner_value }}");
   if (turningOff && !confirm("This will stop NetworkManager managing at least one wifi interface. Continue?")) {
     event.preventDefault();
   }

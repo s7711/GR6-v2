@@ -6,10 +6,8 @@ stub so tests don't depend on real wall-clock timing.
 """
 
 import json
-import os
 import shutil
 import tempfile
-import time
 import unittest
 from pathlib import Path
 
@@ -130,81 +128,27 @@ class DriveAppTestCase(unittest.TestCase):
 
 
 class DriveLoggingTestCase(unittest.TestCase):
-    """Tests for the self-triggered debug log (see _log_loop) - same
-    "redirect the module-level dir constant" pattern as navigate's own
-    debug-log tests. _log_loop's infinite loop itself is never started
-    here; each test drives its building blocks (_is_active,
-    _start_new_debug_log, _append_debug_log) directly, deterministically."""
+    """Continuous logging (see _log_loop) is now just app's own
+    RotatingJsonlLog instance (`debug_log`) - the rotation/retention/
+    write mechanics themselves are shared/test_rotating_jsonl_log.py's
+    job to cover, not re-tested per consumer service. These tests only
+    confirm drive wires it up correctly: pointed at LOGS_DIR, and
+    _log_loop's body actually appends a real snapshot to it."""
 
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
         app.LOGS_DIR = self.tmp / "logs"
-        app._debug_log_path = None
-        app._last_active_monotonic = None
+        app.debug_log = app.RotatingJsonlLog(
+            app.LOGS_DIR, app.service_cfg["log_rotate_s"], app.service_cfg["log_retention_days"]
+        )
+        app.debug_log.start()
 
-    def test_is_active_true_when_any_speed_field_exceeds_epsilon(self):
-        self.assertFalse(app._is_active({}))
-        self.assertFalse(app._is_active({"LM_setvel_mps": 0.0, "RM_vel_filt_mps": 0.005}))
-        self.assertTrue(app._is_active({"LM_setvel_mps": 0.3}))
-        self.assertTrue(app._is_active({"RM_vel_filt_mps": -0.02}))
-
-    def test_append_debug_log_before_any_activity_is_a_no_op(self):
-        app._append_debug_log({"LM_setvel_mps": 0.3})
-        self.assertFalse(app.LOGS_DIR.exists())
-
-    def test_start_then_append_writes_one_json_line_with_state_and_t(self):
-        app._start_new_debug_log()
-        app._append_debug_log({"LM_setvel_mps": 0.3, "RM_setvel_mps": 0.3})
-        lines = app._debug_log_path.read_text().splitlines()
-        self.assertEqual(len(lines), 1)
-        entry = json.loads(lines[0])
-        self.assertEqual(entry["LM_setvel_mps"], 0.3)
+    def test_log_loop_body_appends_a_real_snapshot(self):
+        app.debug_log.append(app._snapshot())
+        files = list(app.LOGS_DIR.glob("*.jsonl"))
+        self.assertEqual(len(files), 1)
+        entry = json.loads(files[0].read_text().splitlines()[0])
         self.assertIn("t", entry)
-
-    def test_start_new_debug_log_avoids_collisions_within_the_same_second(self):
-        app._start_new_debug_log()
-        first = app._debug_log_path
-        app._start_new_debug_log()
-        second = app._debug_log_path
-        self.assertNotEqual(first, second)
-        self.assertTrue(first.exists())
-        self.assertTrue(second.exists())
-
-    def test_log_loop_body_closes_after_idle_tail_elapses(self):
-        # One manual iteration of _log_loop's own body, run "active" then
-        # "idle past the tail", without the real thread/sleep.
-        active_state = {"LM_setvel_mps": 0.3}
-        idle_state = {"LM_setvel_mps": 0.0}
-
-        now = time.monotonic()
-        app._last_active_monotonic = now
-        app._start_new_debug_log()
-        app._append_debug_log(active_state)
-        self.assertIsNotNone(app._debug_log_path)
-
-        # Still within the idle tail - stays open.
-        app._append_debug_log(idle_state)
-        self.assertIsNotNone(app._debug_log_path)
-
-        # Simulate the tail having elapsed, same check _log_loop makes.
-        app._last_active_monotonic = now - (app.LOG_IDLE_TAIL_S + 1.0)
-        if time.monotonic() - app._last_active_monotonic > app.LOG_IDLE_TAIL_S:
-            app._debug_log_path = None
-        self.assertIsNone(app._debug_log_path)
-
-    def test_sweep_old_debug_logs_deletes_only_files_past_retention(self):
-        app.LOGS_DIR.mkdir(parents=True)
-        old_file = app.LOGS_DIR / "250101_000000.jsonl"
-        new_file = app.LOGS_DIR / "260101_000000.jsonl"
-        old_file.write_text("{}\n")
-        new_file.write_text("{}\n")
-        old_time = time.time() - (app.service_cfg["log_retention_days"] + 1) * 86400
-        os.utime(old_file, (old_time, old_time))
-
-        app._sweep_old_debug_logs()
-
-        self.assertFalse(old_file.exists())
-        self.assertTrue(new_file.exists())
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)

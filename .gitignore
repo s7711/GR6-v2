@@ -42,6 +42,18 @@ map-manager/data/
 # see drive-prd.md's "Debug logging"
 drive/data/
 
+# Raw NCOM/UCOM + decoded GNSS/nav logs — this robot's real run data,
+# see oxts-nav-prd.md's "Logging"
+oxts-nav/data/
+
+# Wheelspeed's own logs + persisted GAD on/off switch — this robot's
+# real run data / runtime state, see wheelspeed-prd.md
+wheelspeed/data/
+
+# Network's wifi-scan logs + persisted Scanner-device choice — this
+# robot's real run data / runtime state, see network-prd.md
+network/data/
+
 # Compiled firmware artifacts — a build output, not source; the .ino is
 # the source of truth, see drive-prd.md
 drive/firmware/arduino/*.hex

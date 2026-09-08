@@ -192,7 +192,15 @@ def _current_position():
     drive-prd.md/wheelspeed's counts_per_metre calibration question;
     note PathRunner.status()'s left_mps/right_mps below are the
     differential-drive *command*, not a measurement - don't confuse
-    the two when reading a log). Not used for control."""
+    the two when reading a log). Not used for control.
+
+    Raw GNSS fix-status fields (InsNavMode, GnssPosMode, etc) briefly
+    lived here too (2026-09-07) as a stopgap while oxts-nav had no
+    logging of its own — removed 2026-09-08 now that oxts-nav logs them
+    continuously itself (see data_log.py); cross-reference that service's
+    own log instead of expecting them in this one. The viewer's
+    timescale/legend features were added the same day specifically to
+    make that cross-referencing easy."""
     payload = nav_client.latest()
     nav = payload.get("nav", {})
     status = payload.get("status", {})
@@ -215,19 +223,6 @@ def _current_position():
         "horizontal_speed_mps": horizontal_speed_mps,
         "wheel_left_mps": drive_state.get("LM_vel_filt_mps"),
         "wheel_right_mps": drive_state.get("RM_vel_filt_mps"),
-        # Raw fix-status fields, logged alongside the derived accuracy above
-        # because horizontal_accuracy_m (the xNAV's own NorthAcc/EastAcc
-        # covariance) lags behind a real GnssPosMode/InsNavMode drop - a
-        # brief loss that recovers before the covariance grows is otherwise
-        # invisible in the debug log (see 2026-09-04 RTK-under-load
-        # investigation: motor current suspected, but no run's debug log
-        # showed more than ~0.15m of accuracy degradation).
-        "InsNavMode": nav.get("InsNavMode"),
-        "GnssPosMode": status.get("GnssPosMode"),
-        "GpsPrimaryPosMode": status.get("GpsPrimaryPosMode"),
-        "GpsSecondaryPosMode": status.get("GpsSecondaryPosMode"),
-        "GnssPosNumSats": status.get("GnssPosNumSats"),
-        "SupplyVolt": status.get("SupplyVolt"),
     }
 
 
@@ -384,6 +379,7 @@ def inject_urls():
         "aruco_ws_url": service_url(browser_host, "aruco", scheme="ws") + "/ws/aruco",
         "map_manager_ws_url": service_url(browser_host, "map-manager", scheme="ws") + "/ws/map-manager",
         "drive_ws_url": service_url(browser_host, "drive", scheme="ws") + "/ws/drive",  # battery badge - see sysstatus.js
+        "wheelspeed_ws_url": service_url(browser_host, "wheelspeed", scheme="ws") + "/ws/wheelspeed",  # "W" badge - see sysstatus.js
     }
 
 

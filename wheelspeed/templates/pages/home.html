@@ -18,7 +18,10 @@
       <tbody>
         <tr><td>Left wheel speed</td><td id="stat-left_mps">&mdash;</td><td>m/s</td></tr>
         <tr><td>Right wheel speed</td><td id="stat-right_mps">&mdash;</td><td>m/s</td></tr>
-        <tr><td>INS forward velocity</td><td id="stat-forward_mps">&mdash;</td><td>m/s</td></tr>
+        <tr><td>INS forward velocity (centreline)</td><td id="stat-forward_mps">&mdash;</td><td>m/s</td></tr>
+        <tr><td>Left wheel — INS predicted</td><td id="stat-left_ins_mps">&mdash;</td><td>m/s</td></tr>
+        <tr><td>Right wheel — INS predicted</td><td id="stat-right_ins_mps">&mdash;</td><td>m/s</td></tr>
+        <tr><td>GAD sending</td><td id="stat-gad_enabled">&mdash;</td><td></td></tr>
         <tr><td>GAD packets sent</td><td id="stat-packets_sent">&mdash;</td><td></td></tr>
       </tbody>
     </table>
@@ -40,7 +43,9 @@ const MAX_POINTS = HISTORY_SECONDS * GRAPH_HZ;
 const SERIES = [
   { label: "Left wheel", stroke: "red", field: "left_mps" },
   { label: "Right wheel", stroke: "blue", field: "right_mps" },
-  { label: "INS forward", stroke: "green", field: "forward_mps" },
+  { label: "INS forward (centreline)", stroke: "green", field: "forward_mps" },
+  { label: "Left wheel — INS predicted", stroke: "#ff9999", field: "left_ins_mps" },
+  { label: "Right wheel — INS predicted", stroke: "#9999ff", field: "right_ins_mps" },
 ];
 
 const el = document.getElementById("graph");
@@ -57,6 +62,7 @@ window.addEventListener("resize", () => plot.setSize({ width: el.clientWidth, he
 
 connectWs("/ws/wheelspeed", (msg) => {
   fillFields("stat-", msg);
+  document.getElementById("stat-gad_enabled").textContent = msg.gad_enabled ? "On" : "Off";
   const t = Date.now() / 1000;
   data[0].push(t);
   SERIES.forEach((s, i) => data[i + 1].push(msg[s.field]));

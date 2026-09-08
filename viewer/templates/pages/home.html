@@ -9,8 +9,11 @@
   pick shows up under "Suggested" so runs that happened together are easy to find. Tick
   quantities per file (each file gets its own tab), then Load. The chart's x-axis is
   seconds since the earliest loaded file's own start (fixed for the whole loaded set, not
-  per file), so files covering the same real event stay aligned. Hover the chart to see
-  the matching position on the map, or the map to jump the chart there.
+  per file), so files covering the same real event stay aligned — unless you pick one
+  selected file as the timescale below, in which case the chart is clipped to that file's
+  own span (handy for a short run alongside a continuously-logged file that covers far
+  more than you need). Hover the chart to see the matching position on the map, the map
+  to jump the chart there, or the chart to read exact values + time under it.
 </p>
 
 <div class="row g-3 mb-3">
@@ -41,8 +44,11 @@
 </div>
 
 <div class="card mb-3">
-  <div class="card-body d-flex justify-content-between align-items-center flex-wrap gap-3">
-    <div id="selection-summary" class="text-body-secondary small">No files selected</div>
+  <div class="card-body d-flex justify-content-between align-items-start flex-wrap gap-3">
+    <div>
+      <div id="selection-summary" class="text-body-secondary small mb-2">No files selected</div>
+      <div id="timescale-list" class="d-flex flex-column gap-1"></div>
+    </div>
     <div class="d-flex gap-2">
       <button id="clear-btn" class="btn btn-outline-secondary btn-sm">Clear selection</button>
       <button id="load-btn" class="btn btn-primary">Load selected</button>
@@ -62,6 +68,7 @@
   <div class="card-body">
     <div class="text-body-secondary small mb-2">Chart</div>
     <div id="chart"></div>
+    <div id="chart-legend" class="small mt-2"></div>
   </div>
 </div>
 
@@ -110,6 +117,10 @@ let currentFolder = null;
 let selected = []; // [{source, filename, start_t, end_t, line_count, path_name}]
 let loaded = []; // [{source, filename, label, lines: [...]}]
 let selectedQuantities = new Set(); // "source__filename__key"
+// Which selected file's own span sets the chart's timescale — null means
+// the old "union of everything selected" behaviour. Chosen from
+// `selected` (pre-Load) so it's visible/changeable before you commit.
+let timescaleRef = null; // {source, filename} or null
 
 function fmtTime(t) {
   if (t === null || t === undefined) return "—";
@@ -133,6 +144,7 @@ function toggleSelection(source, entry, on) {
     selected = selected.filter((s) => !(s.source === source && s.filename === entry.filename));
   }
   renderSelectionSummary();
+  renderTimescaleChoice();
   renderSuggested();
   renderFileList();
 }
@@ -212,6 +224,33 @@ function renderSuggested() {
   if (!any) container.innerHTML = '<div class="text-body-secondary small">(none)</div>';
 }
 
+function renderTimescaleChoice() {
+  const container = document.getElementById("timescale-list");
+  container.innerHTML = "";
+  if (!selected.length) return;
+  // A ref file dropped from selection (unticked) can't stay the ref.
+  if (timescaleRef && !selected.some((s) => s.source === timescaleRef.source && s.filename === timescaleRef.filename)) {
+    timescaleRef = null;
+  }
+  const makeRadio = (id, label, isChecked, onPick) => {
+    const div = document.createElement("div");
+    div.className = "form-check";
+    div.innerHTML = `
+      <input class="form-check-input" type="radio" name="timescale-ref" id="${id}" ${isChecked ? "checked" : ""}>
+      <label class="form-check-label small" for="${id}">${label}</label>
+    `;
+    div.querySelector("input").addEventListener("change", onPick);
+    container.appendChild(div);
+  };
+  makeRadio("ts-none", "Timescale: union of all selected (default)", !timescaleRef, () => { timescaleRef = null; });
+  for (const s of selected) {
+    const isRef = !!timescaleRef && timescaleRef.source === s.source && timescaleRef.filename === s.filename;
+    makeRadio(`ts-${s.source}__${s.filename}`, `Timescale: ${s.source}: ${fileLabel(s.source, s)}`, isRef, () => {
+      timescaleRef = { source: s.source, filename: s.filename };
+    });
+  }
+}
+
 function renderSelectionSummary() {
   const el = document.getElementById("selection-summary");
   if (!selected.length) {
@@ -233,7 +272,9 @@ function renderSelectionSummary() {
 
 document.getElementById("clear-btn").addEventListener("click", () => {
   selected = [];
+  timescaleRef = null;
   renderSelectionSummary();
+  renderTimescaleChoice();
   renderSuggested();
   renderFileList();
 });
@@ -320,6 +361,17 @@ let chart = null;
 // simultaneous).
 let timebaseT0 = 0;
 let combinedX = [];
+// [minX, maxX] (relative to timebaseT0) to clip combinedX to when a
+// timescaleRef file is chosen — null means no clipping (the old
+// union-of-everything behaviour). Set alongside timebaseT0 in
+// loadSelected(), see its own comment.
+let timescaleWindow = null;
+// Series currently plotted, in the same order as redrawChart()'s own
+// `series`/`finalData` arrays (offset by 1 for uPlot's x-placeholder) —
+// kept so the cursor-readout legend can label/colour-match each value
+// without recomputing activeQuantityPairs() (selectedQuantities could
+// have moved on since the chart was last drawn).
+let lastPairs = [];
 
 function activeQuantityPairs() {
   const pairs = [];
@@ -363,6 +415,7 @@ function interpolateAtX(points, xs) {
 
 function redrawChart() {
   const pairs = activeQuantityPairs();
+  lastPairs = pairs;
   const series = [{}];
   let colourIndex = 0;
   let allTimes = [];
@@ -382,6 +435,9 @@ function redrawChart() {
   // uPlot needs one shared x-array; build one combined, sorted,
   // de-duplicated axis from every series' own real sample times.
   combinedX = Array.from(new Set(allTimes)).sort((a, b) => a - b);
+  if (timescaleWindow) {
+    combinedX = combinedX.filter((x) => x >= timescaleWindow[0] && x <= timescaleWindow[1]);
+  }
   const finalData = [combinedX];
   for (const points of pointsByPair) {
     finalData.push(interpolateAtX(points, combinedX));
@@ -398,7 +454,11 @@ function redrawChart() {
       width: el.clientWidth || 800,
       height: 320,
       scales: { x: { time: false } },
-      axes: [{ label: "seconds since the earliest loaded file's start" }],
+      axes: [{
+        label: timescaleRef
+          ? `seconds since ${timescaleRef.source}: ${timescaleRef.filename}'s own start`
+          : "seconds since the earliest loaded file's start",
+      }],
       series,
       hooks: { setCursor: [onChartCursorMove] },
     },
@@ -441,8 +501,39 @@ function clearCursorLayers() {
   window._geoMap.draw();
 }
 
+// t (unix seconds) -> "HH:MM:SS.mmm" — date is never needed here (see
+// Ben's ask 2026-09-08): the point is confirming two cursors on
+// different files are reading the same moment, not which day it was.
+function fmtTimeOnly(t) {
+  if (t === null || t === undefined) return "—";
+  const d = new Date(t * 1000);
+  return d.toLocaleTimeString([], { hour12: false }) + "." + String(d.getMilliseconds()).padStart(3, "0");
+}
+
+function updateLegendReadout(u, idx) {
+  const el = document.getElementById("chart-legend");
+  if (idx === null || idx === undefined || combinedX[idx] === undefined) {
+    el.innerHTML = "";
+    return;
+  }
+  const targetT = combinedX[idx] + timebaseT0;
+  const rows = lastPairs
+    .map((p, i) => {
+      const val = u.data[i + 1][idx];
+      const valStr = typeof val === "number" ? val.toFixed(4) : "—";
+      const colour = COLOURS[i % COLOURS.length];
+      return `<span class="me-3">
+        <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${colour};margin-right:4px;"></span>
+        ${p.file.label}: ${p.key} = <strong>${valStr}</strong>
+      </span>`;
+    })
+    .join("");
+  el.innerHTML = `<div class="mb-1">Time: <strong>${fmtTimeOnly(targetT)}</strong></div><div class="d-flex flex-wrap">${rows}</div>`;
+}
+
 function onChartCursorMove(u) {
   const idx = u.cursor.idx;
+  updateLegendReadout(u, idx);
   if (idx === null || idx === undefined || combinedX[idx] === undefined) {
     clearCursorLayers();
     return;
@@ -486,8 +577,17 @@ async function loadSelected() {
     const lines = text.trim().length ? text.trim().split("\n").map((l) => JSON.parse(l)) : [];
     loaded.push({ source: s.source, filename: s.filename, label: `${s.source}: ${fileLabel(s.source, s)}`, lines });
   }
-  const starts = loaded.filter((f) => f.lines.length).map((f) => f.lines[0].t);
-  timebaseT0 = starts.length ? Math.min(...starts) : 0;
+  const refFile = timescaleRef
+    ? loaded.find((f) => f.source === timescaleRef.source && f.filename === timescaleRef.filename)
+    : null;
+  if (refFile && refFile.lines.length) {
+    timebaseT0 = refFile.lines[0].t;
+    timescaleWindow = [0, refFile.lines[refFile.lines.length - 1].t - timebaseT0];
+  } else {
+    const starts = loaded.filter((f) => f.lines.length).map((f) => f.lines[0].t);
+    timebaseT0 = starts.length ? Math.min(...starts) : 0;
+    timescaleWindow = null;
+  }
   refreshQuantityTabs();
   redraw();
 }
@@ -499,5 +599,18 @@ window._geoMap.setZoom("auto");
 window._geoMap.onHover(onMapHover);
 
 refreshSources();
+// A continuously-logging file (oxts-nav, wheelspeed, network, and now
+// any per-run log still actively being written to) keeps growing after
+// this page's first load - without a periodic re-fetch, the file list's
+// own line_count/end_t (and hence which files even show up as
+// "Suggested" for a given time range) silently goes stale. Found live
+// 2026-09-08: a mission log correctly showed only 2 lines when the page
+// was first opened, still showed 2 lines an hour later once the mission
+// had really written 13; a not-yet-rotated oxts-nav file simply didn't
+// exist yet at first load and so never appeared at all. Doesn't touch
+// `selected`/`loaded` - only the folder/file/suggested lists re-render
+// from fresh data, same as refreshSources() already does on its own.
+const SOURCES_REFRESH_MS = 5000;
+setInterval(refreshSources, SOURCES_REFRESH_MS);
 </script>
 {% endblock %}
