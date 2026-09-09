@@ -32,6 +32,7 @@ import socket
 import ucomrx
 import collections
 import threading
+import queue
 
 UCOM_PORT = 50487
 
@@ -47,9 +48,21 @@ class UcomRxThread(threading.Thread):
         # Guards each decoder's nav/status/connection dicts against being
         # read (e.g. by a publisher thread) mid-write. See oxts-nav-prd.md.
         self.lock = threading.Lock()
+        # Guards each entry's 'logfile' handle only - deliberately
+        # separate from self.lock, same reasoning as ncomrx_thread.py's
+        # identical field (2026-09-09 fix): a slow disk write must never
+        # be able to block run() from decoding the next packet.
+        self.log_lock = threading.Lock()
+        self._log_queue = queue.Queue()
         self.start()
+        threading.Thread(target=self._log_writer_loop, daemon=True).start()
 
     def run(self):
+        # CRITICAL THREAD: see ncomrx_thread.py's run() for why - same
+        # reasoning applies here (last_packet_at feeds the same
+        # staleness check). No disk I/O, no HTTP, nothing slower than
+        # memory in this loop - raw-byte logging happens in
+        # _log_writer_loop instead.
         while(self.keepGoing):
             # Get data from socket
             nb, addrport = self.sock.recvfrom(1500) # New bytes - UCOM caps a message at 1452 bytes to avoid IPv4 fragmentation, see the manual
@@ -93,17 +106,28 @@ class UcomRxThread(threading.Thread):
                     # And process all possible data
                     while self.nrx[addr]['decoder'].decode(b'', machineTime=myTime):
                         pass
-                    # Same raw-logging hook as ncomrx_thread.py, kept
-                    # inside the same lock as the write - see its comment
-                    # and data_log.py.
-                    if self.nrx[addr]['logfile'] is not None:
-                        self.nrx[addr]['logfile'].write(nb)
-                        if 'loggedBytes' in self.nrx[addr]['decoder'].connection:
-                            self.nrx[addr]['decoder'].connection['loggedBytes'] += len(nb)
-                        else:
-                            self.nrx[addr]['decoder'].connection['loggedBytes'] = len(nb)
+                # Same raw-logging hook as ncomrx_thread.py - handed off
+                # to _log_writer_loop instead of written here. See its
+                # CRITICAL THREAD note above.
+                self._log_queue.put((addr, nb))
             else:
                 self.nrx[addr]['decoder'].connection['repeatedUdp'] += 1
+
+    def _log_writer_loop(self):
+        # Not critical - see ncomrx_thread.py's identical method.
+        while True:
+            addr, nb = self._log_queue.get()
+            with self.log_lock:
+                entry = self.nrx.get(addr)
+                logfile = entry.get('logfile') if entry else None
+                if logfile is None:
+                    continue
+                try:
+                    logfile.write(nb)
+                except (OSError, ValueError):
+                    continue
+                connection = entry['decoder'].connection
+                connection['loggedBytes'] = connection.get('loggedBytes', 0) + len(nb)
 
     def stop(self):
         self.keepGoing = False

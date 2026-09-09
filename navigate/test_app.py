@@ -78,6 +78,18 @@ class RecordingPost:
         return resp
 
 
+class SyncDebugLogQueue:
+    """Stand-in for app._debug_log_queue that writes synchronously on
+    put() instead of queuing for _debug_log_writer_loop (which these
+    tests never start as a background thread) — keeps
+    _append_debug_log()/_control_tick()'s effects on disk immediately
+    observable, matching the old inline-write behaviour these tests
+    were written against. See app.py's 2026-09-09 fix."""
+
+    def put(self, item):
+        app._write_debug_log_line(*item)
+
+
 class NavigateAppTestCase(unittest.TestCase):
     def setUp(self):
         app.PATHS_DIR = Path(tempfile.mkdtemp())
@@ -86,6 +98,7 @@ class NavigateAppTestCase(unittest.TestCase):
         # so tests never touch this robot's real debug logs.
         app.LOGS_DIR = app.PATHS_DIR / "logs"
         app._debug_log_path = None
+        app._debug_log_queue = SyncDebugLogQueue()
         self.recorder = Recorder()
         app.runner = PathRunner(app.CONTROL_CONFIG, self.recorder.send_velocity, self.recorder.send_pump)
         app.turn_runner = TurnRunner(app.TURN_CONFIG, self.recorder.send_velocity)

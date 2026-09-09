@@ -125,7 +125,8 @@ services:
     turn_gain: 1.0                     # proportional heading control for turn-in-place — rad/s of turn rate per rad of heading error
     turn_max_rate_rad_s: 0.5           # cap on commanded turn rate (~29deg/s) — untested live yet, start slow
     turn_max_mps: 0.15                 # cap on either wheel's speed while turning in place
-    max_speed_mps: 0.4                 # global cap on either wheel's speed while path-following
+    motor_max_speed_mps: 0.4           # hard per-wheel cap, applied after path_max_speed_mps/turn - see navigate-prd.md's "Max speed"
+    path_max_speed_mps: 0.4            # caps the input speed to the turn/differential-drive calc, so a heading correction rides on top of a steady baseline instead of reducing it - see navigate-prd.md's "Max speed"
     turn_tolerance_deg: 10.0           # default heading tolerance for a turn_to_heading job step that doesn't specify its own
 
   network:

@@ -184,6 +184,12 @@ def _wait_for_calibration():
 
 
 def _detection_loop():
+    # Not hard-real-time the way drive/oxts-nav's own critical threads
+    # are (a late GAD send just means a slightly stale marker-position
+    # aid, not a stuck motor command), but checked 2026-09-09 anyway
+    # alongside them: no disk I/O here, and none should ever be added -
+    # this loop's whole job is to notice a marker and call
+    # gad_sender.send() promptly.
     camera_matrix, dist_coeffs = _wait_for_calibration()
     frame_reader = _get_frame_reader(wait=True)
     # Detection (and the GAD sends it triggers) is deliberately capped

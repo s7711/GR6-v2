@@ -512,6 +512,48 @@ than clipping one wheel and steering the robot off-line. This caps the
 so existing/future path files don't each need editing by hand - a faster
 robot later just needs a higher config value.
 
+### Split into two caps (2026-09-09)
+
+Live testing at higher speeds showed the robot "swinging" left-right -
+suspected cause: because `turn` is computed as `curvature * speed_mps`
+(see `turn_command()`), it's linear in `speed_mps` for a given curvature,
+which makes the single `max_speed_mps` clamp above mathematically
+equivalent to solving for whatever *reduced average speed* would bring
+the outer wheel under the cap, and using that for the whole tick - not
+just capping the outer wheel. So every time a heading correction was
+needed while already at/near the cap (normal pure-pursuit dither, more
+pronounced at higher speed since the correction itself scales with
+speed), the robot's average forward progress dipped along with it, then
+recovered once the correction passed - a plausible mechanism for the
+observed swinging.
+
+Split into two independently-tunable values instead of picking new
+numbers by guesswork:
+
+- `path_max_speed_mps`: clamps `speed_mps` itself, *before*
+  `turn_command()` is even called (`PathRunner.step()`). Behaves exactly
+  as if the path's own point had asked for a lower speed - the baseline
+  stays steady regardless of curvature, and the turn differential rides
+  on top of it rather than eating into it.
+- `motor_max_speed_mps`: the same hard per-wheel clamp `max_speed_mps`
+  used to be (still `geometry.differential_drive()`'s `max_mps`,
+  post-turn) - now a safety net for whatever a turn's differential adds
+  on top of `path_max_speed_mps`, rather than the everyday binding
+  constraint.
+
+Trade-off, deliberately accepted rather than solved for: with
+`path_max_speed_mps` doing the everyday clamping, the outer wheel can
+now legitimately exceed `path_max_speed_mps` during a turn (by up to
+`turn * wheel_base_m / 2`) before `motor_max_speed_mps` catches it - the
+exact thing the original single cap was designed to prevent entirely.
+Accepted because a normal pure-pursuit correction's differential is
+small relative to either cap; `motor_max_speed_mps` remains as the hard
+line if that assumption turns out to be wrong. Both values start equal
+(0.35) so behaviour only changes in the "correcting while at the cap"
+case discussed above - tune `path_max_speed_mps` down if swinging
+persists, or `motor_max_speed_mps` up if turns feel clipped, without
+needing a code change either way.
+
 ## Abort reason logged to the journal
 
 Every abort (real path-following runs and `/record/forward`'s mini-path

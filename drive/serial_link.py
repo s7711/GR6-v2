@@ -27,6 +27,13 @@ class SerialLink:
         threading.Thread(target=self._read_loop, daemon=True).start()
 
     def _read_loop(self):
+        # CRITICAL THREAD: the only place motor/battery telemetry is
+        # ever received, and drive's control-arbitration timing depends
+        # on it staying prompt. Already clean (checked 2026-09-09,
+        # alongside the oxts-nav/navigate logging-stall fixes) - this
+        # loop does no disk I/O and never will: app.py's own logging
+        # runs on a separate _log_loop thread, appending a periodic
+        # snapshot rather than anything from in here. Keep it that way.
         while True:
             try:
                 raw = self._serial.readline()
@@ -53,6 +60,10 @@ class SerialLink:
                     self._state.update(updates)
 
     def send(self, command: str):
+        # CRITICAL: called directly from whichever thread issues a drive
+        # command (navigate's control loop, a manual jog request, ...) -
+        # must stay a pure serial write, never anything that could block
+        # on disk/network.
         self._serial.write(command.encode("utf-8"))
 
     def snapshot(self) -> dict:

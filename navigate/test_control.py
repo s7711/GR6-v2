@@ -13,7 +13,8 @@ CONFIG = {
     "wheel_base_m": 0.42,
     "stall_check_window_s": 5.0,
     "stall_min_distance_m": 0.10,
-    "max_speed_mps": None,
+    "path_max_speed_mps": None,
+    "motor_max_speed_mps": None,
 }
 
 # A short straight path running due north from a fixed lat/lon, generated
@@ -193,9 +194,9 @@ class TestStep(unittest.TestCase):
         self.assertAlmostEqual(left, 0.5, delta=0.05)
         self.assertAlmostEqual(right, 0.5, delta=0.05)
 
-    def test_max_speed_mps_clamps_both_wheels_preserving_turn_ratio(self):
+    def test_motor_max_speed_mps_clamps_both_wheels_preserving_turn_ratio(self):
         recorder = Recorder()
-        config = {**CONFIG, "max_speed_mps": 0.2}
+        config = {**CONFIG, "motor_max_speed_mps": 0.2}
         runner = PathRunner(config, recorder.send_velocity, recorder.send_pump)
         runner.load_path(STRAIGHT_NORTH_PATH)
         runner.start(robot_lat=52.200000, robot_lon=-1.500000, robot_heading_deg=0)
@@ -206,6 +207,29 @@ class TestStep(unittest.TestCase):
         # would otherwise turn the robot by distorting the L/R ratio.
         self.assertLessEqual(max(abs(left), abs(right)), 0.2 + 1e-9)
         self.assertAlmostEqual(left, right, delta=0.01)
+
+    def test_path_max_speed_mps_clamps_the_input_not_the_output(self):
+        # Unlike motor_max_speed_mps above, this clamps speed_mps *before*
+        # turn_command()/differential_drive() run - so a turn's
+        # differential rides on top of the clamped baseline rather than
+        # eating into it. Start a little off-heading (but still within
+        # entry tolerance) so turn_command() actually returns something
+        # nonzero - see navigate-prd.md's "Split into two caps".
+        recorder = Recorder()
+        config = {**CONFIG, "path_max_speed_mps": 0.2}
+        runner = PathRunner(config, recorder.send_velocity, recorder.send_pump)
+        runner.load_path(STRAIGHT_NORTH_PATH)
+        runner.start(robot_lat=52.200000, robot_lon=-1.500000, robot_heading_deg=20)
+        runner.step(robot_lat=52.200000, robot_lon=-1.500000, robot_heading_deg=20, horizontal_accuracy_m=0.1)
+        left, right = recorder.velocity_calls[0]
+        # The turn differential is symmetric around the clamped speed, so
+        # the average stays pinned at the cap regardless of how much
+        # correction is applied - this is the property motor_max_speed_mps
+        # (scaling both wheels down together) does NOT preserve.
+        self.assertAlmostEqual((left + right) / 2, 0.2, delta=1e-9)
+        # And with no motor_max_speed_mps to catch it, the outer wheel is
+        # allowed to ride above the 0.2 cap - the deliberate trade-off.
+        self.assertGreater(max(left, right), 0.2)
 
     def test_pump_command_resent_every_step_not_just_on_change(self):
         # The firmware's WP watchdog turns the pump off if no WP command

@@ -8,6 +8,7 @@ import datetime
 import json
 import logging
 import math
+import queue
 import sys
 import threading
 import time
@@ -79,7 +80,8 @@ CONTROL_CONFIG = {
     "wheel_base_m": drive_cfg["wheel_base_m"],
     "stall_check_window_s": service_cfg["stall_check_window_s"],
     "stall_min_distance_m": service_cfg["stall_min_distance_m"],
-    "max_speed_mps": service_cfg["max_speed_mps"],
+    "path_max_speed_mps": service_cfg["path_max_speed_mps"],
+    "motor_max_speed_mps": service_cfg["motor_max_speed_mps"],
 }
 
 TURN_CONFIG = {
@@ -264,6 +266,43 @@ def _start_new_debug_log():
     _debug_log_path.write_text("")
 
 
+# Every debug/stall log write funnels through this queue instead of
+# opening/writing a file inline - found live 2026-09-09: this used to
+# write to disk directly from _control_tick() (the same loop that also
+# steps PathRunner/TurnRunner and sends drive commands), and a real SD
+# card write stall there is indistinguishable, from the control loop's
+# own perspective, from any other cause of a stalled tick. See
+# _debug_log_writer_loop and control_stall_log.jsonl's own history of
+# "Control loop stalled" warnings - some of those were probably this,
+# not oxts-nav/wifi.
+_debug_log_queue = queue.Queue()
+
+
+def _write_debug_log_line(path, line):
+    try:
+        with open(path, "a") as f:
+            f.write(line)
+    except OSError as e:
+        logging.warning("[navigate] Couldn't write debug log %s: %s", path, e)
+
+
+def _debug_log_writer_loop():
+    # Not critical - this thread exists so a slow disk write can never
+    # delay _control_tick(). See _control_loop()'s CRITICAL THREAD note.
+    while True:
+        path, line = _debug_log_queue.get()
+        _write_debug_log_line(path, line)
+
+
+def _drain_debug_log_queue():
+    """Synchronously flushes any pending debug/stall-log lines. Only
+    used by tests: they call _append_debug_log()/_control_tick()
+    directly without _debug_log_writer_loop running as a background
+    thread, and need deterministic file contents right afterwards."""
+    while not _debug_log_queue.empty():
+        _write_debug_log_line(*_debug_log_queue.get_nowait())
+
+
 def _append_debug_log(position):
     if _debug_log_path is None:
         return
@@ -271,8 +310,10 @@ def _append_debug_log(position):
         entry = {"t": time.time(), "path_name": None, **position, **turn_runner.status()}
     else:
         entry = {"t": time.time(), "path_name": _current_path_name, **position, **runner.status()}
-    with open(_debug_log_path, "a") as f:
-        f.write(json.dumps(entry, default=str) + "\n")
+    # _debug_log_path is captured here, at enqueue time, so a run
+    # starting a fresh log immediately after this tick can't redirect an
+    # already-queued line onto the new file.
+    _debug_log_queue.put((_debug_log_path, json.dumps(entry, default=str) + "\n"))
 
 
 def _sweep_old_debug_logs():
@@ -351,11 +392,24 @@ def _control_tick():
 def _record_stall(gap_s):
     logging.warning("[navigate] Control loop stalled for %.2fs (expected ~%.2fs)", gap_s, 1.0 / service_cfg["control_hz"])
     entry = {"t": time.time(), "gap_s": gap_s, "state": _control_loop_last_state}
-    with open(STALL_LOG_PATH, "a") as f:
-        f.write(json.dumps(entry) + "\n")
+    # Through the same queue/writer as the debug log - the whole point
+    # of this stall log is to catch the control loop blocking on
+    # something it shouldn't; writing it inline here would be exactly
+    # that mistake, in the code whose entire job is to detect it.
+    _debug_log_queue.put((STALL_LOG_PATH, json.dumps(entry) + "\n"))
 
 
 def _control_loop():
+    # CRITICAL THREAD: this loop calls PathRunner/TurnRunner.step(),
+    # which sends the actual drive commands (see control.py's
+    # send_velocity -> requests.post to drive's /command/auto) - a
+    # stalled tick here means the robot keeps whatever velocity was last
+    # commanded for that long (drive has no watchdog of its own for
+    # "auto" commands - see _control_tick()'s "no position" comment).
+    # Nothing slower than memory belongs directly in this loop or in
+    # _control_tick(): all logging is queued to _debug_log_writer_loop
+    # instead (found live 2026-09-09 - this used to write debug-log
+    # lines to disk inline, on every tick, from here).
     period = 1.0 / service_cfg["control_hz"]
     last_tick = time.monotonic()
     while True:
@@ -746,6 +800,7 @@ if __name__ == "__main__":
     nav_client.start()
     drive_client.start()
     threading.Thread(target=_control_loop, daemon=True).start()
+    threading.Thread(target=_debug_log_writer_loop, daemon=True).start()
 
     feed = NavigateFeedServer(service_cfg["navigate_feed_socket"], _snapshot, service_cfg["navigate_feed_hz"])
     feed.start()

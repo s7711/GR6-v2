@@ -106,6 +106,11 @@ def _wheel_ins_mps(nav):
 
 
 def _update_loop():
+    # CRITICAL THREAD: this is what sends GAD wheelspeed aiding to the
+    # xNAV (see gad_wheelspeed.update() below) - already clean (checked
+    # 2026-09-09, alongside the oxts-nav/navigate logging-stall fixes),
+    # and must stay that way: no disk I/O in this loop. Persistent
+    # logging runs on the separate _log_loop thread below instead.
     # Event-driven off drive's own FV_timestamp (real arrival time of
     # each filtered-velocity telemetry line — see serial_link.py), not a
     # fixed poll rate: this loop just needs to notice a new timestamp

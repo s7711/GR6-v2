@@ -20,7 +20,9 @@ fixed sleep.
 
 import logging
 import math
+import queue
 import subprocess
+import threading
 import time
 
 _SCAN_TIMEOUT_S = 15  # generous — a real scan took ~3.7s in testing, this is just a safety net
@@ -84,7 +86,18 @@ def run_scan_loop(scanner_state, nav_client, ssid_filter: list[str], log) -> Non
     """Runs forever — scans whichever device scanner_state currently
     names, logs one row per scan, and just waits (polling scanner_state
     at _IDLE_POLL_S) whenever nothing's set. `log` is a
-    shared.rotating_jsonl_log.RotatingJsonlLog, already start()ed."""
+    shared.rotating_jsonl_log.RotatingJsonlLog, already start()ed.
+
+    The actual `log.append()` disk write happens on a separate thread
+    (see _scan_log_writer_loop) - not because a scan loop is timing-
+    critical the way a control/receive loop is, but per Ben's 2026-09-09
+    call: once one thread's inline logging was found to be able to stall
+    a control loop (see oxts-nav's ncomrx_thread.py/navigate's
+    _control_loop), the rule became "all logging is a separate thread",
+    everywhere, rather than judging each spot as safe or not on its own."""
+    record_queue: "queue.Queue" = queue.Queue()
+    threading.Thread(target=_scan_log_writer_loop, args=(record_queue, log), daemon=True).start()
+
     while True:
         device = scanner_state.get_device()
         if device is None:
@@ -104,7 +117,12 @@ def run_scan_loop(scanner_state, nav_client, ssid_filter: list[str], log) -> Non
             record["lat"] = math.degrees(nav["Lat"])
             record["lon"] = math.degrees(nav["Lon"])
         if record:
-            log.append(record)
+            record_queue.put(record)
         # No sleep — the scan call itself (~3.5-4s observed) is the loop's
         # own pacing, same reasoning as wheelspeed's event-driven update
         # loop not needing a fixed rate of its own.
+
+
+def _scan_log_writer_loop(record_queue: "queue.Queue", log) -> None:
+    while True:
+        log.append(record_queue.get())

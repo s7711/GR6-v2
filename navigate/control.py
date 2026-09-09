@@ -249,13 +249,33 @@ class PathRunner:
                 self._abort(f"heading error {heading_err:.1f}deg exceeds limit {max_heading:.1f}deg")
                 return
 
+            # Two separate caps, deliberately not one (2026-09-09, at
+            # Ben's request) - path_max_speed_mps clamps the *input* to
+            # turn_command()/differential_drive(), i.e. behaves exactly
+            # like the path itself had asked for a lower speed_mps here,
+            # so a heading correction rides on top of a steady baseline
+            # instead of eating into it (see navigate-prd.md's "Max
+            # speed" for the analysis of why clamping the wheel outputs
+            # afterward - the old single max_speed_mps - let the average
+            # forward speed dip every time a correction was needed at
+            # the cap, which is suspected as a cause of "swinging" at
+            # higher speeds). motor_max_speed_mps is the same hard
+            # per-wheel safety net the old max_speed_mps was (avoiding
+            # firmware PID saturation - see its own config comment) and
+            # still applies on top, in case a turn's differential pushes
+            # the outer wheel above path_max_speed_mps. Two knobs so this
+            # can be tuned live without a code change if the trade-off
+            # (the outer wheel may now briefly exceed path_max_speed_mps
+            # during a turn) needs adjusting either way.
+            path_max = self.config["path_max_speed_mps"]
+            speed_mps = result.speed_mps if path_max is None else min(result.speed_mps, path_max)
             turn = geometry.turn_command(
-                heading_err, result.cross_track_error_m, result.speed_mps,
+                heading_err, result.cross_track_error_m, speed_mps,
                 self.config["heading_gain"], self.config["cte_gain"],
                 self.config["lookahead_distance_m"],
             )
             left, right = geometry.differential_drive(
-                result.speed_mps, turn, self.config["wheel_base_m"], self.config["max_speed_mps"]
+                speed_mps, turn, self.config["wheel_base_m"], self.config["motor_max_speed_mps"]
             )
             self.send_velocity(left, right)
             # Every step, not just on change — the firmware's WP watchdog

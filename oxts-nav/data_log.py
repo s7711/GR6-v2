@@ -98,10 +98,15 @@ class DataLogger:
             next_boundary = (int(now) // self.rotate_s + 1) * self.rotate_s
             path = self.raw_dir / f"{self._timestamp()}{self.raw_suffix}"
             fp = open(path, "wb")
-            with self.nrxs.lock:
+            # log_lock, not lock - this only swaps the 'logfile' handle
+            # that ncomrx_thread.py's/ucomrx_thread.py's own log-writer
+            # threads read (see their 2026-09-09 fix); using the decoder
+            # lock here would serialise this against the receive
+            # thread's own packet decoding for no reason.
+            with self.nrxs.log_lock:
                 entry["logfile"] = fp
             time.sleep(max(0.0, next_boundary - time.time()))
-            with self.nrxs.lock:
+            with self.nrxs.log_lock:
                 entry["logfile"] = None
             fp.close()
             self._sweep(self.raw_dir, f"*{self.raw_suffix}")
