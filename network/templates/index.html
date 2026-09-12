@@ -21,7 +21,8 @@
       {% if iface.mode %} | Mode: {{ iface.mode }}{% endif %}
       {% if iface.ssid %} | SSID: {{ iface.ssid }}{% endif %}
       | IPv4: {{ iface.ipv4_method or '—' }}{% if iface.ipv4_address %} ({{ iface.ipv4_address }}){% endif %}
-      {% if iface.type == 'wifi' %} | Signal: <span id="{{ iface.device }}-signal_dbm">{{ iface.link_stats.signal_dbm if iface.link_stats.signal_dbm is not none else '—' }}</span> dBm{% endif %}
+      {% if iface.type == 'wifi' %} | Connected to: <span id="{{ iface.device }}-bssid">{{ iface.link_stats.bssid if iface.link_stats.bssid is not none else '—' }}</span>
+      | Signal: <span id="{{ iface.device }}-signal_dbm">{{ iface.link_stats.signal_dbm if iface.link_stats.signal_dbm is not none else '—' }}</span> dBm{% endif %}
       | Lost packets: <span id="{{ iface.device }}-lost_packets">{{ iface.link_stats.lost_packets if iface.link_stats.lost_packets is not none else '—' }}</span>
     </div>
 
@@ -35,8 +36,17 @@
           {% else %}
           <option value="{{ none_value }}" {{ "selected" if not iface.connection }}>None (disconnected)</option>
           {% endif %}
+          {# `and iface.device != scanner_device` (added 2026-09-11): if NetworkManager has
+             re-managed/reconnected a Scanner-mode device behind our back (e.g. after a
+             reboot - see app.py's _restore_scanner_state), iface.connection can equal one of
+             these names again even though scanner_state.json still calls this device the
+             scanner. Without this guard, a browser marks the LAST matching <option> selected
+             when more than one carries `selected` - here, a real profile - silently
+             outranking the Scanner option above and showing that profile as chosen instead;
+             hitting Apply for any unrelated reason would then submit it and clear Scanner
+             mode without anyone touching this device's own dropdown. #}
           {% for name in iface.matching_connections %}
-          <option value="{{ name }}" {{ "selected" if name == iface.connection }}>
+          <option value="{{ name }}" {{ "selected" if name == iface.connection and iface.device != scanner_device }}>
             {{ name }} — {{ connection_descriptions[name] }}
             {%- if name in iface.connections_active_elsewhere %} (currently active on {{ iface.connections_active_elsewhere[name] }}){% endif -%}
           </option>

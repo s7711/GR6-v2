@@ -33,17 +33,31 @@ from control import JobRunner  # noqa: E402
 PAGES_DIR = Path(__file__).resolve().parent / "templates" / "pages"
 JOBS_STATUS_HZ = 2
 NAVIGATE_TIMEOUT_S = 2.0
+# Waterbutt's /go doesn't just ack the request - it blocks synchronously
+# on send_open() reaching the ESP8266 valve (see waterbutt/app.py's
+# VALVE_TIMEOUT_S=3.0) before it responds. A timeout here shorter than
+# that just means jobs gives up on a perfectly good fill because the
+# valve's first /open ping was slow, not because waterbutt or the valve
+# actually failed (seen live 2026-09-10: jobs reported "couldn't reach
+# waterbutt" and aborted the mission while the valve went on to open
+# fine a few seconds later). Needs to comfortably clear
+# VALVE_TIMEOUT_S, not match NAVIGATE_TIMEOUT_S which is sized for
+# navigate's much faster control-endpoint responses.
+WATERBUTT_TIMEOUT_S = 5.0
 
 cfg = load_config()
 service_cfg = cfg["services"]["jobs"]
 navigate_cfg = cfg["services"]["navigate"]
 waterbutt_cfg = cfg["services"]["waterbutt"]
+oxtsnav_cfg = cfg["services"]["oxts-nav"]
 
 JOBS_DIR = Path(__file__).resolve().parent.parent / service_cfg["jobs_dir"]
 LOGS_DIR = JOBS_DIR / "logs"
 NAVIGATE_PATHS_DIR = Path(__file__).resolve().parent.parent / navigate_cfg["paths_dir"]
 NAVIGATE_BASE_URL = f"http://localhost:{navigate_cfg['port']}"  # server-to-server, see navigate/app.py's own DRIVE_BASE_URL comment
 WATERBUTT_BASE_URL = f"http://localhost:{waterbutt_cfg['port']}"  # server-to-server - "fill" steps talk to waterbutt directly, it's a peer service like navigate, not owned by navigate the way drive is
+OXTSNAV_BASE_URL = f"http://localhost:{oxtsnav_cfg['port']}"  # server-to-server - a `pause` step's own aruco_priority flag calls oxts-nav's /gnss endpoints directly, same peer-service reasoning as WATERBUTT_BASE_URL above (oxts-nav, not navigate, is the sole owner of the actual GNSS state - see navigate/app.py's own "Aruco priority" comment)
+OXTSNAV_TIMEOUT_S = 0.5  # matches navigate/app.py's own OXTSNAV_TIMEOUT_S for the same calls
 
 app = Flask(__name__)
 use_shared_templates(app)
@@ -115,7 +129,7 @@ def waterbutt_go(duration_s):
     selector of its own yet, so waterbutt's own default applies (see
     waterbutt-prd.md's "QC gating on fill")."""
     try:
-        resp = requests.post(f"{WATERBUTT_BASE_URL}/go", json={"duration_s": duration_s}, timeout=NAVIGATE_TIMEOUT_S)
+        resp = requests.post(f"{WATERBUTT_BASE_URL}/go", json={"duration_s": duration_s}, timeout=WATERBUTT_TIMEOUT_S)
         if resp.status_code != 200:
             # e.g. the QC marker check refusing, or (added 2026-08-18)
             # the tank-level estimate saying it isn't confident the
@@ -135,18 +149,49 @@ def waterbutt_go(duration_s):
                 "refused": resp.status_code == 409,
             }
         return {"ok": True}
-    except requests.exceptions.RequestException:
+    except requests.exceptions.RequestException as e:
+        # The step log only ever showed this same fixed string
+        # regardless of what actually happened (timeout, connection
+        # refused, DNS failure, ...) - logging the real exception here
+        # too, so the next occurrence is diagnosable instead of another
+        # guess (seen live 2026-09-12: a "couldn't reach waterbutt"
+        # whose timing ruled out WATERBUTT_TIMEOUT_S being too short -
+        # waterbutt's own log showed it handling a /go call successfully
+        # within 50ms of this failure, so it was something else).
+        logging.warning("[jobs] Couldn't reach waterbutt to start filling: %s", e)
         return {"ok": False, "reason": "couldn't reach waterbutt"}
 
 
 def waterbutt_stop():
     try:
-        requests.post(f"{WATERBUTT_BASE_URL}/stop", timeout=NAVIGATE_TIMEOUT_S)
+        requests.post(f"{WATERBUTT_BASE_URL}/stop", timeout=WATERBUTT_TIMEOUT_S)
+    except requests.exceptions.RequestException as e:
+        logging.warning("[jobs] Couldn't reach waterbutt to stop: %s", e)
+
+
+def gnss_aruco_priority():
+    """For a `pause` step's own aruco_priority flag - best-effort, same
+    as navigate/app.py's _maybe_enter_aruco_priority: oxts-nav owns the
+    actual GNSS state and already guarantees it can't be left off
+    indefinitely (see its gnss_mode.py watchdog), so a pause never fails
+    the job just because this couldn't be reached."""
+    try:
+        requests.post(f"{OXTSNAV_BASE_URL}/gnss/aruco-priority", timeout=OXTSNAV_TIMEOUT_S)
     except requests.exceptions.RequestException:
-        logging.warning("[jobs] Couldn't reach waterbutt to stop")
+        logging.warning("[jobs] Couldn't reach oxts-nav to enter aruco-priority mode")
 
 
-runner = JobRunner(load_path, start_path, stop_path, start_turn, navigate_status, pump_on, waterbutt_go, waterbutt_stop)
+def gnss_normal():
+    try:
+        requests.post(f"{OXTSNAV_BASE_URL}/gnss/normal", timeout=OXTSNAV_TIMEOUT_S)
+    except requests.exceptions.RequestException:
+        logging.warning("[jobs] Couldn't reach oxts-nav to restore normal GNSS")
+
+
+runner = JobRunner(
+    load_path, start_path, stop_path, start_turn, navigate_status,
+    pump_on, waterbutt_go, waterbutt_stop, gnss_aruco_priority, gnss_normal,
+)
 
 _log_lock = threading.Lock()
 _log_path = None

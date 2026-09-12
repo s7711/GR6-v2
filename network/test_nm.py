@@ -246,12 +246,12 @@ class TestLinkStats(unittest.TestCase):
             _completed(link_out), _completed(station_out),
         ]):
             stats = nm.link_stats("wlan0", "wifi")
-        self.assertEqual(stats, {"signal_dbm": -58, "lost_packets": 3})
+        self.assertEqual(stats, {"signal_dbm": -58, "bssid": "aa:bb:cc:dd:ee:ff", "lost_packets": 3})
 
     def test_wifi_not_connected(self):
         with patch("subprocess.run", side_effect=[_completed("Not connected.\n"), _completed("")]):
             stats = nm.link_stats("wlan1", "wifi")
-        self.assertEqual(stats, {"signal_dbm": None, "lost_packets": None})
+        self.assertEqual(stats, {"signal_dbm": None, "bssid": None, "lost_packets": None})
 
     def test_ethernet(self):
         out = (
@@ -264,7 +264,7 @@ class TestLinkStats(unittest.TestCase):
         )
         with patch("subprocess.run", return_value=_completed(out)):
             stats = nm.link_stats("eth0", "ethernet")
-        self.assertEqual(stats, {"signal_dbm": None, "lost_packets": 1 + 2 + 3 + 4})
+        self.assertEqual(stats, {"signal_dbm": None, "bssid": None, "lost_packets": 1 + 2 + 3 + 4})
 
     def test_wifi_survives_a_wedged_iw_call(self):
         # Live incident 2026-07-30: the wlan1 USB dongle's firmware
@@ -276,13 +276,40 @@ class TestLinkStats(unittest.TestCase):
         import subprocess as _subprocess
         with patch("subprocess.run", side_effect=_subprocess.TimeoutExpired(cmd="iw", timeout=5)):
             stats = nm.link_stats("wlan1", "wifi")
-        self.assertEqual(stats, {"signal_dbm": None, "lost_packets": None})
+        self.assertEqual(stats, {"signal_dbm": None, "bssid": None, "lost_packets": None})
 
     def test_ethernet_survives_a_wedged_ip_call(self):
         import subprocess as _subprocess
         with patch("subprocess.run", side_effect=_subprocess.TimeoutExpired(cmd="ip", timeout=5)):
             stats = nm.link_stats("eth0", "ethernet")
-        self.assertEqual(stats, {"signal_dbm": None, "lost_packets": None})
+        self.assertEqual(stats, {"signal_dbm": None, "bssid": None, "lost_packets": None})
+
+
+class TestConnectedWifiBssid(unittest.TestCase):
+    # Regression coverage for the 2026-09-10 fix: this must ask whichever
+    # wifi device is actually a client connection, NOT the device a
+    # caller happens to be scanning (a Scanner-mode device is
+    # deliberately unmanaged/disconnected - see scanner_state.py - so
+    # its own link state is always "not connected").
+    def test_returns_the_connected_wifi_devices_bssid(self):
+        interfaces = [
+            {"device": "wlan0", "type": "wifi", "state": "unmanaged", "connection": None},
+            {"device": "wlan1", "type": "wifi", "state": "connected", "connection": "CoffeebeanWifi"},
+            {"device": "eth0", "type": "ethernet", "state": "connected", "connection": "OXTS xnav"},
+        ]
+        with patch("nm.list_interfaces", return_value=interfaces), \
+             patch("nm._wifi_link_stats", return_value={"signal_dbm": -58, "bssid": "aa:bb:cc:dd:ee:ff", "lost_packets": 0}) as link_stats:
+            result = nm.connected_wifi_bssid()
+        link_stats.assert_called_once_with("wlan1")
+        self.assertEqual(result, "aa:bb:cc:dd:ee:ff")
+
+    def test_none_when_no_wifi_device_is_connected(self):
+        interfaces = [
+            {"device": "wlan0", "type": "wifi", "state": "unmanaged", "connection": None},
+            {"device": "eth0", "type": "ethernet", "state": "connected", "connection": "OXTS xnav"},
+        ]
+        with patch("nm.list_interfaces", return_value=interfaces):
+            self.assertIsNone(nm.connected_wifi_bssid())
 
 
 class TestCreateEthernetSpeed(unittest.TestCase):

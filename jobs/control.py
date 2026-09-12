@@ -2,22 +2,35 @@
 API (load/start/stop/turn/status), never drive or the control loop
 directly. Mirrors navigate/control.py's PathRunner shape: no
 networking of its own (load_path/start_path/stop_path/start_turn/
-navigate_status/pump_on/waterbutt_go/waterbutt_stop are injected, so
-this is testable without a real navigate/waterbutt running — see
-test_control.py), driven by repeated tick() calls from app.py's
-background loop. See jobs-prd.md's "Job execution".
+navigate_status/pump_on/waterbutt_go/waterbutt_stop/gnss_aruco_priority/
+gnss_normal are injected, so this is testable without a real
+navigate/waterbutt/oxts-nav running — see test_control.py), driven by
+repeated tick() calls from app.py's background loop. See
+jobs-prd.md's "Job execution".
 
 Five step types: `run_path` and `turn_to_heading` (added 2026-08-18 -
 both watch navigate's own status until stopped_ok/aborted, since
 navigate's own /control/stop stops whichever of the two it's actually
 doing - see navigate-prd.md's "Turn in place"), and three timed steps
 added 2026-08-08 for single-plant watering - `pause` (wait, nothing
-else), `water` (pump on, stationary, for duration_s), `fill`
-(waterbutt's valve open for duration_s). The timed steps don't have
-anything external to poll like navigate's state, so completion is
-tracked with an injected `now` clock instead (defaults to
-time.monotonic, overridable in tests so they don't need to sleep in
-wall-clock time).
+else, optionally with `aruco_priority: true` — see below), `water`
+(pump on, stationary, for duration_s), `fill` (waterbutt's valve open
+for duration_s). The timed steps don't have anything external to poll
+like navigate's state, so completion is tracked with an injected `now`
+clock instead (defaults to time.monotonic, overridable in tests so
+they don't need to sleep in wall-clock time).
+
+A `pause` step's own `aruco_priority` flag (added 2026-09-10) mirrors
+navigate's per-path flag (see navigate/app.py's
+_maybe_enter_aruco_priority/_end_aruco_priority_if_active): entering on
+this step's own start and leaving on its own end (natural completion or
+an operator stop()), so GNSS is already off and settling on the aruco
+marker *before* a following aruco-priority return path even starts,
+not just once that path itself starts. Symmetric and best-effort on
+purpose - oxts-nav is the sole authority on the actual GNSS state and
+already guarantees it can't be left off indefinitely on its own (see
+gnss_mode.py's watchdog), so a pause here never fails/aborts the job
+just because oxts-nav couldn't be reached.
 """
 
 import threading
@@ -41,7 +54,7 @@ WATER_PRIME_PHASES = ((True, 2.0), (False, 2.0), (True, 2.0), (False, 2.0))
 
 class JobRunner:
     def __init__(self, load_path, start_path, stop_path, start_turn, navigate_status,
-                 pump_on, waterbutt_go, waterbutt_stop, now=time.monotonic):
+                 pump_on, waterbutt_go, waterbutt_stop, gnss_aruco_priority, gnss_normal, now=time.monotonic):
         self.load_path = load_path              # (path_name) -> {"ok": bool, "reason": ...}
         self.start_path = start_path            # () -> {"ok": bool, "reason": ...}
         self.stop_path = stop_path              # () -> None - also stops a turn_to_heading step, see navigate's /control/stop
@@ -50,6 +63,8 @@ class JobRunner:
         self.pump_on = pump_on                  # (bool) -> {"ok": bool, "reason": ...}
         self.waterbutt_go = waterbutt_go        # (duration_s) -> {"ok": bool, "reason": ...}
         self.waterbutt_stop = waterbutt_stop    # () -> None
+        self.gnss_aruco_priority = gnss_aruco_priority  # () -> None - best-effort, see class docstring
+        self.gnss_normal = gnss_normal                  # () -> None - best-effort, see class docstring
         self.now = now
         self.lock = threading.RLock()
         self._reset()
@@ -86,7 +101,9 @@ class JobRunner:
         whatever a timed step turned on - an operator stop must not
         leave the pump or the water butt's valve running unattended."""
         with self.lock:
+            step_index = self.current_step_index
             step_type = self._current_step_type()
+            step = self.steps[step_index] if step_type is not None else None
             self.state = "idle"
             self.abort_reason = None
             self.step_deadline = None
@@ -97,6 +114,8 @@ class JobRunner:
             self.pump_on(False)
         elif step_type == "fill":
             self.waterbutt_stop()
+        elif step_type == "pause" and step.get("aruco_priority"):
+            self.gnss_normal()
 
     def _current_step_type(self):
         """Call while holding self.lock."""
@@ -122,6 +141,8 @@ class JobRunner:
         elif step_type == "turn_to_heading":
             self._start_turn_step(step_index, step)
         elif step_type == "pause":
+            if step.get("aruco_priority"):
+                self.gnss_aruco_priority()
             with self.lock:
                 self.step_deadline = self.now() + step["duration_s"]
         elif step_type == "water":
@@ -314,6 +335,8 @@ class JobRunner:
                     self.step_deadline = self.now() + phase_duration
                 return
             self.pump_on(False)
+        elif step_type == "pause" and self.steps[step_index].get("aruco_priority"):
+            self.gnss_normal()
         # fill needs no explicit stop here - waterbutt's own valve
         # controller self-terminates at the same duration (see
         # ValveController.tick()); an explicit stop only matters for an

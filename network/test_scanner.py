@@ -1,6 +1,8 @@
+import queue
 import unittest
+from unittest.mock import patch
 
-from scanner import _parse_scan
+from scanner import _parse_scan, _scan_tick
 
 # A trimmed real `iw dev wlan0 scan` excerpt (see the live 2026-09-08 test
 # that this feature is based on) — four BSS blocks (one is the same
@@ -52,6 +54,56 @@ class TestParseScan(unittest.TestCase):
 
     def test_empty_output(self):
         self.assertEqual(_parse_scan("", ["Coffeebean"]), {})
+
+
+class NavClientStub:
+    def __init__(self, nav=None):
+        self._nav = nav or {}
+
+    def latest(self):
+        return {"nav": self._nav}
+
+
+class TestScanTick(unittest.TestCase):
+    def test_translates_per_ap_field_names_to_their_friendly_names(self):
+        record_queue = queue.Queue()
+        with patch("scanner.scan_device", return_value={"b4:fb:e4:c7:f1:96": -64, "aa:aa:aa:aa:aa:aa": -80}), \
+             patch("scanner.nm.connected_wifi_bssid", return_value=None):
+            _scan_tick("wlan0", ["Coffeebean"], NavClientStub(), {"b4:fb:e4:c7:f1:96": "Front hall"}, record_queue)
+        record = record_queue.get()
+        self.assertEqual(record["Front hall"], -64)
+        self.assertEqual(record["aa:aa:aa:aa:aa:aa"], -80)  # unlisted - stays as its raw BSSID
+        self.assertNotIn("b4:fb:e4:c7:f1:96", record)
+
+    def test_records_connected_bssid_translated_to_its_friendly_name(self):
+        record_queue = queue.Queue()
+        with patch("scanner.scan_device", return_value={"b4:fb:e4:c7:f1:96": -64}), \
+             patch("scanner.nm.connected_wifi_bssid", return_value="b4:fb:e4:c7:f1:96"):
+            ok = _scan_tick("wlan0", ["Coffeebean"], NavClientStub(), {"b4:fb:e4:c7:f1:96": "Stables"}, record_queue)
+        self.assertTrue(ok)
+        self.assertEqual(record_queue.get()["connected_bssid"], "Stables")
+
+    def test_records_raw_bssid_when_not_in_the_name_list(self):
+        record_queue = queue.Queue()
+        with patch("scanner.scan_device", return_value={"b4:fb:e4:c7:f1:96": -64}), \
+             patch("scanner.nm.connected_wifi_bssid", return_value="b4:fb:e4:c7:f1:96"):
+            _scan_tick("wlan0", ["Coffeebean"], NavClientStub(), {}, record_queue)
+        self.assertEqual(record_queue.get()["connected_bssid"], "b4:fb:e4:c7:f1:96")
+
+    def test_omits_connected_bssid_when_not_associated(self):
+        record_queue = queue.Queue()
+        with patch("scanner.scan_device", return_value={"b4:fb:e4:c7:f1:96": -64}), \
+             patch("scanner.nm.connected_wifi_bssid", return_value=None):
+            _scan_tick("wlan0", ["Coffeebean"], NavClientStub(), {}, record_queue)
+        self.assertNotIn("connected_bssid", record_queue.get())
+
+    def test_returns_false_and_queues_nothing_on_a_failed_scan(self):
+        record_queue = queue.Queue()
+        with patch("scanner.scan_device", side_effect=RuntimeError("boom")), \
+             patch("scanner.nm.connected_wifi_bssid", return_value=None):
+            ok = _scan_tick("wlan0", ["Coffeebean"], NavClientStub(), {}, record_queue)
+        self.assertFalse(ok)
+        self.assertTrue(record_queue.empty())
 
 
 if __name__ == "__main__":

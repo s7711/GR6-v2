@@ -47,6 +47,7 @@ class HardwareStub:
         self.pump_calls = []       # [True, False, True, ...] in call order
         self.waterbutt_go_calls = []
         self.waterbutt_stop_calls = 0
+        self.gnss_calls = []       # ["aruco_priority", "normal", ...] in call order
         self.pump_result = {"ok": True}
         self.waterbutt_go_result = {"ok": True}
 
@@ -60,6 +61,12 @@ class HardwareStub:
 
     def waterbutt_stop(self):
         self.waterbutt_stop_calls += 1
+
+    def gnss_aruco_priority(self):
+        self.gnss_calls.append("aruco_priority")
+
+    def gnss_normal(self):
+        self.gnss_calls.append("normal")
 
 
 class FakeClock:
@@ -82,7 +89,7 @@ def make_runner(clock=None):
     kwargs = {"now": clock} if clock is not None else {}
     runner = JobRunner(
         stub.load_path, stub.start_path, stub.stop_path, stub.start_turn, stub.navigate_status,
-        hw.pump_on, hw.waterbutt_go, hw.waterbutt_stop, **kwargs,
+        hw.pump_on, hw.waterbutt_go, hw.waterbutt_stop, hw.gnss_aruco_priority, hw.gnss_normal, **kwargs,
     )
     return runner, stub, hw
 
@@ -376,6 +383,23 @@ class TestPauseStep(unittest.TestCase):
         self.assertEqual(hw.pump_calls, [])
         self.assertEqual(hw.waterbutt_go_calls, [])
 
+    def test_pause_without_aruco_priority_never_touches_gnss(self):
+        clock = FakeClock()
+        runner, stub, hw = make_runner(clock)
+        runner.go("m", [{"type": "pause", "duration_s": 5}])
+        clock.advance(5)
+        runner.tick()
+        self.assertEqual(hw.gnss_calls, [])
+
+    def test_pause_with_aruco_priority_enters_on_start_and_leaves_on_completion(self):
+        clock = FakeClock()
+        runner, stub, hw = make_runner(clock)
+        runner.go("m", [{"type": "pause", "duration_s": 5, "aruco_priority": True}])
+        self.assertEqual(hw.gnss_calls, ["aruco_priority"])
+        clock.advance(5)
+        runner.tick()
+        self.assertEqual(hw.gnss_calls, ["aruco_priority", "normal"])
+
 
 class TestWaterStep(unittest.TestCase):
     def test_water_turns_pump_on_immediately(self):
@@ -507,6 +531,14 @@ class TestStopDuringTimedStep(unittest.TestCase):
         runner.stop()
         self.assertEqual(hw.pump_calls, [])
         self.assertEqual(hw.waterbutt_stop_calls, 0)
+        self.assertEqual(hw.gnss_calls, [])
+
+    def test_stop_during_aruco_priority_pause_restores_normal_gnss(self):
+        clock = FakeClock()
+        runner, stub, hw = make_runner(clock)
+        runner.go("m", [{"type": "pause", "duration_s": 60, "aruco_priority": True}])
+        runner.stop()
+        self.assertEqual(hw.gnss_calls, ["aruco_priority", "normal"])
 
 
 if __name__ == "__main__":

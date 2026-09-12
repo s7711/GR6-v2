@@ -58,5 +58,26 @@ class PowerOffTestCase(unittest.TestCase):
         run.assert_called_once()
 
 
+class SysstatsSamplerTestCase(unittest.TestCase):
+    # Regression coverage for the 2026-09-10 fix: sysstats_snapshot()
+    # (specifically its CPU-percent diff) used to be called directly by
+    # every open /ws/system connection - with several browser tabs open,
+    # each tab's own polling thread raced the others over
+    # shared/sysstats.py's module-level "previous sample" globals, so
+    # tabs disagreed and jumped around. Now there's exactly one caller
+    # (_sample_sysstats_once, from manager's own background thread) and
+    # every ws connection just reads the cached result.
+    def test_caches_the_snapshot_for_ws_system_to_read(self):
+        app._latest_sysstats = None
+        with patch.object(app, "sysstats_snapshot", return_value={"cpu_percent": 12.3}):
+            app._sample_sysstats_once()
+        self.assertEqual(app._latest_sysstats, {"cpu_percent": 12.3})
+
+    def test_only_calls_sysstats_snapshot_once_per_sample(self):
+        with patch.object(app, "sysstats_snapshot", return_value={"cpu_percent": 1.0}) as snap:
+            app._sample_sysstats_once()
+        snap.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

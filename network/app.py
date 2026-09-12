@@ -11,6 +11,7 @@ NetworkManager directly.
 """
 
 import json
+import logging
 import sys
 import threading
 import time
@@ -32,6 +33,8 @@ from scanner_state import ScannerState  # noqa: E402
 cfg = load_config()
 service_cfg = cfg["services"]["network"]
 oxtsnav_cfg = cfg["services"]["oxts-nav"]
+
+BSSID_NAMES = service_cfg.get("bssid_names", {})  # {bssid: friendly name} - an unlisted BSSID just shows/logs as itself
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 
@@ -84,8 +87,18 @@ def _interfaces_with_detail() -> list[dict]:
             name: dev for name, dev in active.items()
             if dev != iface["device"] and name in iface["matching_connections"]
         }
-        iface["link_stats"] = nm.link_stats(iface["device"], iface["type"])
+        iface["link_stats"] = _labelled_link_stats(iface["device"], iface["type"])
     return interfaces, connection_descriptions
+
+
+def _labelled_link_stats(device: str, device_type: str) -> dict:
+    """nm.link_stats(), with a wifi BSSID translated to its configured
+    friendly name (BSSID_NAMES) where there is one — see config.yaml's
+    network.bssid_names comment."""
+    stats = nm.link_stats(device, device_type)
+    if stats.get("bssid"):
+        stats["bssid"] = BSSID_NAMES.get(stats["bssid"], stats["bssid"])
+    return stats
 
 
 @app.route("/")
@@ -279,17 +292,40 @@ def ws_status(ws):
     — see network-prd.md's "Live link-quality display"."""
     period = 1.0 / STATUS_HZ
     while True:
-        snapshot = {iface["device"]: nm.link_stats(iface["device"], iface["type"]) for iface in nm.list_interfaces()}
+        snapshot = {iface["device"]: _labelled_link_stats(iface["device"], iface["type"]) for iface in nm.list_interfaces()}
         ws.send(json.dumps(snapshot))
         time.sleep(period)
 
 
+def _restore_scanner_state():
+    """Re-applies `managed no` for whichever device scanner_state.json
+    says is in Scanner mode, if any — found live 2026-09-10: `nmcli
+    device set <dev> managed no` is a NetworkManager runtime setting,
+    not something it persists across a reboot (unlike scanner_state.json
+    itself, a plain file). So after a Pi power-cycle, NetworkManager
+    forgets and quietly re-manages/reconnects the device on its own
+    (autoconnect priority, same as any other device) before this service
+    even starts - the device just looks like an ordinary connected
+    interface again, Scanner mode silently lost, with nothing in the log
+    to say so. A `network` service *restart* alone never hits this
+    (nmcli's own runtime state survives that fine) - only an actual
+    reboot does."""
+    device = scanner_state.get_device()
+    if device is None:
+        return
+    try:
+        nm.set_managed(device, False)
+    except nm.NmError as e:
+        logging.warning("[network] Couldn't restore Scanner mode on %s after startup: %s", device, e)
+
+
 if __name__ == "__main__":
+    _restore_scanner_state()
     nav_client.start()
     scan_log.start()
     threading.Thread(
         target=scanner.run_scan_loop,
-        args=(scanner_state, nav_client, service_cfg["scan_ssid_filter"], scan_log),
+        args=(scanner_state, nav_client, service_cfg["scan_ssid_filter"], scan_log, BSSID_NAMES),
         daemon=True,
     ).start()
     app.run(host=service_cfg["host"], port=service_cfg["port"], threaded=True)

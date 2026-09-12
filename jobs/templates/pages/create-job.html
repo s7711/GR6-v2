@@ -55,6 +55,12 @@
           <label class="form-label">Duration</label>
           <select id="step-duration" class="form-select"></select>
         </div>
+        <div id="step-aruco-priority-field" class="form-check mt-3 d-none">
+          <input id="step-aruco-priority" type="checkbox" class="form-check-input">
+          <label class="form-check-label" for="step-aruco-priority">
+            Aruco priority (turn GNSS off for this pause, so it's already settled on the marker before the next path starts)
+          </label>
+        </div>
         <div id="step-turn-fields" class="d-none">
           <div class="row g-2">
             <div class="col-6">
@@ -142,6 +148,13 @@ function stepCellHtml(step) {
     const tolerance = step.tolerance_deg !== undefined ? `&plusmn;${step.tolerance_deg}` : "default tolerance";
     return `${STEP_LABELS[step.type]} &mdash; ${step.heading_deg}&deg; (${tolerance})`;
   }
+  if (step.type === "pause") {
+    return `${STEP_LABELS[step.type]} &mdash; ${step.duration_s}s
+      <div class="form-check form-check-inline ms-2">
+        <input type="checkbox" class="form-check-input step-aruco-priority" ${step.aruco_priority ? "checked" : ""}>
+        <label class="form-check-label small text-muted">aruco priority</label>
+      </div>`;
+  }
   return `${STEP_LABELS[step.type]} &mdash; ${step.duration_s}s`;
 }
 
@@ -165,6 +178,17 @@ function renderSteps() {
         steps[i].path = e.target.value;
         dirty = true;
         updateMap();
+      });
+    }
+    const arucoCheckbox = tr.querySelector(".step-aruco-priority");
+    if (arucoCheckbox) {
+      arucoCheckbox.addEventListener("change", (e) => {
+        if (e.target.checked) {
+          steps[i].aruco_priority = true;
+        } else {
+          delete steps[i].aruco_priority;
+        }
+        dirty = true;
       });
     }
     tr.querySelector(".step-up").addEventListener("click", () => {
@@ -226,8 +250,11 @@ const stepDurationSelect = document.getElementById("step-duration");
 
 function fillStepDurationOptions() {
   const isTurn = stepTypeSelect.value === "turn_to_heading";
+  const isPause = stepTypeSelect.value === "pause";
   document.getElementById("step-duration-fields").classList.toggle("d-none", isTurn);
   document.getElementById("step-turn-fields").classList.toggle("d-none", !isTurn);
+  document.getElementById("step-aruco-priority-field").classList.toggle("d-none", !isPause);
+  if (!isPause) document.getElementById("step-aruco-priority").checked = false;
   if (isTurn) return;
   const options = DURATION_OPTIONS_S[stepTypeSelect.value];
   stepDurationSelect.innerHTML = options.map((s) => `<option value="${s}">${s}s</option>`).join("");
@@ -246,7 +273,11 @@ document.getElementById("step-modal-add").addEventListener("click", () => {
     if (tolerance !== "") step.tolerance_deg = parseFloat(tolerance);
     steps.push(step);
   } else {
-    steps.push({ type: stepTypeSelect.value, duration_s: parseInt(stepDurationSelect.value, 10) });
+    const step = { type: stepTypeSelect.value, duration_s: parseInt(stepDurationSelect.value, 10) };
+    if (stepTypeSelect.value === "pause" && document.getElementById("step-aruco-priority").checked) {
+      step.aruco_priority = true;
+    }
+    steps.push(step);
   }
   dirty = true;
   stepModal.hide();

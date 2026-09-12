@@ -56,6 +56,7 @@ services:
       - GpsSecondaryPosMode
       - GnssPosNumSats
       - GnssPosNumSatsUsed
+      - GnssInt2_NumSats  # secondary antenna's own tracked-satellite count - independent of GnssAttMode/the heading solution, see oxts-nav's home.html "Secondary antenna sats"
       - NorthAcc
       - EastAcc
       - AltAcc
@@ -137,6 +138,12 @@ services:
     scan_ssid_filter: ["Coffeebean"]  # only these SSIDs get logged in Scanner mode — empty list logs every AP seen, see scanner.py
     scan_log_rotate_s: 3600
     scan_log_retention_days: 2
+    # BSSID -> friendly name, for the home page's live "Connected to"
+    # display and the scan log's `connected_bssid` field (see
+    # scanner.py) - an unlisted BSSID just shows/logs as its raw
+    # address.
+    bssid_names:
+      "aa:bb:cc:dd:ee:ff": "Example AP"
 
   wheelspeed:
     unit: robot-wheelspeed.service

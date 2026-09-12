@@ -68,6 +68,12 @@ class NavigateStub:
     def waterbutt_stop(self):
         pass
 
+    def gnss_aruco_priority(self):
+        pass
+
+    def gnss_normal(self):
+        pass
+
 
 class JobsAppTestCase(unittest.TestCase):
     def setUp(self):
@@ -78,6 +84,7 @@ class JobsAppTestCase(unittest.TestCase):
         app.runner = JobRunner(
             self.stub.load_path, self.stub.start_path, self.stub.stop_path, self.stub.start_turn,
             self.stub.navigate_status, self.stub.pump_on, self.stub.waterbutt_go, self.stub.waterbutt_stop,
+            self.stub.gnss_aruco_priority, self.stub.gnss_normal,
         )
         self.client = app.app.test_client()
 

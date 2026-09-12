@@ -9,7 +9,24 @@ selectable series with signal strength as the y-axis, no viewer changes
 needed. SSID is deliberately not logged — the whole point of
 `scan_ssid_filter` is to only keep the APs worth keeping, so by the time
 a line is written its SSID is already known/filtered, not worth storing
-again per line.
+again per line. Each BSSID field name is itself translated through
+config.yaml's network.bssid_names where possible (added 2026-09-11) - an
+unlisted BSSID still logs/displays as its raw address.
+
+Also logs `connected_bssid` (added 2026-09-10) — whichever BSSID this
+Pi's *actual* wifi client connection is associated to right now
+(nm.connected_wifi_bssid()), translated to its configured friendly name
+(config.yaml's network.bssid_names) same as the home page's live
+display, or left as the raw BSSID if it isn't in that list. Deliberately
+NOT the scanned device's own link state - the scanned device is usually
+the one dedicated to Scanner mode, which is left unmanaged/disconnected
+on purpose (see scanner_state.py), so it's never itself "connected" to
+anything (found live 2026-09-10: the first version asked the scanned
+device, so this field silently never appeared at all). A string, not a
+number, on purpose - the whole point is a human-readable name in
+viewer's legend, not a chart value; see
+viewer/templates/pages/home.html's categoricalKeysOf/categoryLevelsOf
+for how a string field still ends up plottable.
 
 Uses `iw dev <device> scan` directly (not nmcli) — confirmed live
 2026-09-08 that this works even while the device is actively connected
@@ -24,6 +41,8 @@ import queue
 import subprocess
 import threading
 import time
+
+import nm
 
 _SCAN_TIMEOUT_S = 15  # generous — a real scan took ~3.7s in testing, this is just a safety net
 _IDLE_POLL_S = 2.0  # how often to check whether a device has been set to Scanner mode
@@ -82,7 +101,7 @@ def scan_device(device: str, ssid_filter: list[str]) -> dict[str, int]:
     return _parse_scan(result.stdout, ssid_filter)
 
 
-def run_scan_loop(scanner_state, nav_client, ssid_filter: list[str], log) -> None:
+def run_scan_loop(scanner_state, nav_client, ssid_filter: list[str], log, bssid_names: dict[str, str]) -> None:
     """Runs forever — scans whichever device scanner_state currently
     names, logs one row per scan, and just waits (polling scanner_state
     at _IDLE_POLL_S) whenever nothing's set. `log` is a
@@ -103,24 +122,41 @@ def run_scan_loop(scanner_state, nav_client, ssid_filter: list[str], log) -> Non
         if device is None:
             time.sleep(_IDLE_POLL_S)
             continue
-
-        try:
-            readings = scan_device(device, ssid_filter)
-        except (subprocess.TimeoutExpired, RuntimeError) as e:
-            logging.warning("[network] Wifi scan on %s failed: %s", device, e)
+        if not _scan_tick(device, ssid_filter, nav_client, bssid_names, record_queue):
             time.sleep(_IDLE_POLL_S)
-            continue
+        # Otherwise no sleep — the scan call itself (~3.5-4s observed) is
+        # the loop's own pacing, same reasoning as wheelspeed's
+        # event-driven update loop not needing a fixed rate of its own.
 
-        nav = nav_client.latest().get("nav", {})
-        record = dict(readings)
-        if "Lat" in nav and "Lon" in nav:
-            record["lat"] = math.degrees(nav["Lat"])
-            record["lon"] = math.degrees(nav["Lon"])
-        if record:
-            record_queue.put(record)
-        # No sleep — the scan call itself (~3.5-4s observed) is the loop's
-        # own pacing, same reasoning as wheelspeed's event-driven update
-        # loop not needing a fixed rate of its own.
+
+def _scan_tick(device: str, ssid_filter: list[str], nav_client, bssid_names: dict[str, str], record_queue) -> bool:
+    """One scan-and-log pass, factored out of run_scan_loop so it can be
+    tested directly without threads/an infinite loop - same reasoning as
+    gnss_mode.py's _watchdog_tick. Returns False on a failed scan (the
+    loop's cue to back off with _IDLE_POLL_S instead of retrying
+    immediately), True otherwise."""
+    try:
+        readings = scan_device(device, ssid_filter)
+    except (subprocess.TimeoutExpired, RuntimeError) as e:
+        logging.warning("[network] Wifi scan on %s failed: %s", device, e)
+        return False
+
+    nav = nav_client.latest().get("nav", {})
+    # Per-AP field names translated too (added 2026-09-11, Ben's ask) -
+    # same bssid_names lookup as connected_bssid below. If two different
+    # BSSIDs were ever given the same friendly name, one would overwrite
+    # the other here - a config mistake to fix in bssid_names, not
+    # something this loop tries to detect.
+    record = {bssid_names.get(bssid, bssid): signal for bssid, signal in readings.items()}
+    if "Lat" in nav and "Lon" in nav:
+        record["lat"] = math.degrees(nav["Lat"])
+        record["lon"] = math.degrees(nav["Lon"])
+    connected_bssid = nm.connected_wifi_bssid()
+    if connected_bssid:
+        record["connected_bssid"] = bssid_names.get(connected_bssid, connected_bssid)
+    if record:
+        record_queue.put(record)
+    return True
 
 
 def _scan_log_writer_loop(record_queue: "queue.Queue", log) -> None:

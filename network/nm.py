@@ -74,6 +74,22 @@ def list_interfaces() -> list[dict]:
     return interfaces
 
 
+def connected_wifi_bssid() -> str | None:
+    """The BSSID of whichever wifi device is currently an actual client
+    connection - None if none is (e.g. a Scanner-mode device is
+    deliberately left unmanaged/disconnected, see
+    network/scanner_state.py, so it never counts here even while it's
+    the one being scanned; likewise if the robot is on ethernet only).
+    Added 2026-09-10 for scanner.py's `connected_bssid` log field - the
+    first version wrongly asked the *scanned* device for its own BSSID,
+    which is always None precisely because Scanner mode keeps that
+    device unmanaged."""
+    for iface in list_interfaces():
+        if iface["type"] == "wifi" and iface["state"] == "connected":
+            return _wifi_link_stats(iface["device"]).get("bssid")
+    return None
+
+
 def connection_settings(name: str) -> dict:
     """Flat {field: value} for a connection profile, straight from
     `nmcli connection show <name>` — every field nmcli reports, not
@@ -257,17 +273,18 @@ def set_managed(device: str, managed: bool) -> None:
 
 def link_stats(device: str, device_type: str) -> dict:
     """Live link-quality figures for one interface — signal strength
-    (wifi only) and a lost-packets count, both None if unavailable
-    (e.g. device not connected). See network-prd.md's "Live
-    link-quality display": wifi's `tx failed` (from `iw ... station
-    dump`) is genuine lost packets, not `tx retries` (a retry that
-    eventually succeeds isn't lost) — this is the same figure that
+    and connected BSSID (wifi only) and a lost-packets count, all None
+    if unavailable (e.g. device not connected). See network-prd.md's
+    "Live link-quality display": wifi's `tx failed` (from `iw ...
+    station dump`) is genuine lost packets, not `tx retries` (a retry
+    that eventually succeeds isn't lost) — this is the same figure that
     surfaced the AP-not-hearing-the-Pi asymmetry investigated
-    2026-07-30. Ethernet has no signal strength; its lost-packets
-    figure is the sum of `ip -s link`'s RX/TX errors and drops."""
+    2026-07-30. Ethernet has no signal strength or BSSID; its
+    lost-packets figure is the sum of `ip -s link`'s RX/TX errors and
+    drops."""
     if device_type == "wifi":
         return _wifi_link_stats(device)
-    return {"signal_dbm": None, "lost_packets": _ethernet_lost_packets(device)}
+    return {"signal_dbm": None, "bssid": None, "lost_packets": _ethernet_lost_packets(device)}
 
 
 # `iw`/`ip` are local, normally-instant queries (unlike nmcli, which
@@ -295,12 +312,16 @@ def _run_local(args: list[str]) -> str | None:
 
 def _wifi_link_stats(device: str) -> dict:
     signal_dbm = None
+    bssid = None
     link_out = _run_local(["iw", "dev", device, "link"])
     for line in (link_out or "").splitlines():
         line = line.strip()
         if line.startswith("signal:"):
             # e.g. "signal: -58 dBm"
             signal_dbm = int(line.split(":", 1)[1].strip().split()[0])
+        elif line.startswith("Connected to "):
+            # e.g. "Connected to f0:9f:c2:2a:2b:80 (on wlan0)"
+            bssid = line.split()[2]
 
     tx_failed = None
     station_out = _run_local(["iw", "dev", device, "station", "dump"])
@@ -309,7 +330,7 @@ def _wifi_link_stats(device: str) -> dict:
         if line.startswith("tx failed:"):
             tx_failed = int(line.split(":", 1)[1].strip())
 
-    return {"signal_dbm": signal_dbm, "lost_packets": tx_failed}
+    return {"signal_dbm": signal_dbm, "bssid": bssid, "lost_packets": tx_failed}
 
 
 def _ethernet_lost_packets(device: str) -> int | None:

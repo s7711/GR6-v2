@@ -147,5 +147,32 @@ class TestApplyBatch(unittest.TestCase):
         mock_scanner_state.clear.assert_not_called()
 
 
+class TestRestoreScannerState(unittest.TestCase):
+    # Regression coverage for the 2026-09-10 fix: `nmcli device set
+    # managed no` doesn't survive a Pi reboot (NetworkManager just
+    # re-manages/reconnects the device on its own), unlike
+    # scanner_state.json - without re-applying it at startup, a device
+    # left in Scanner mode before a power-cycle silently comes back as
+    # an ordinary managed/connected interface, with no wifi-scan logging
+    # and nothing in the log to explain why.
+    def test_reapplies_managed_no_for_the_persisted_scanner_device(self):
+        with patch("app.scanner_state") as mock_scanner_state, patch("nm.set_managed") as set_managed:
+            mock_scanner_state.get_device.return_value = "wlan1"
+            app._restore_scanner_state()
+        set_managed.assert_called_once_with("wlan1", False)
+
+    def test_does_nothing_when_no_device_is_in_scanner_mode(self):
+        with patch("app.scanner_state") as mock_scanner_state, patch("nm.set_managed") as set_managed:
+            mock_scanner_state.get_device.return_value = None
+            app._restore_scanner_state()
+        set_managed.assert_not_called()
+
+    def test_survives_the_device_being_gone(self):
+        with patch("app.scanner_state") as mock_scanner_state, \
+             patch("nm.set_managed", side_effect=app.nm.NmError("no such device")):
+            mock_scanner_state.get_device.return_value = "wlan1"
+            app._restore_scanner_state()  # must not raise
+
+
 if __name__ == "__main__":
     unittest.main()

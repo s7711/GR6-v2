@@ -68,6 +68,7 @@
   <div class="card-body">
     <div class="text-body-secondary small mb-2">Chart</div>
     <div id="chart"></div>
+    <div id="chart-category-key" class="small text-body-secondary mt-2"></div>
     <div id="chart-legend" class="small mt-2"></div>
   </div>
 </div>
@@ -298,6 +299,44 @@ function numericKeysOf(lines) {
   return keys;
 }
 
+// String-valued fields (e.g. network's `connected_bssid`, already a
+// friendly name/BSSID string by the time it's logged - see
+// network/scanner.py) - plottable the same way as a numeric field, just
+// coded to small integers first (see categoryLevelsOf) since a chart
+// axis is numeric. Kept as a separate set from numericKeysOf, not
+// merged into it, so a field can never accidentally flip type key-by-key
+// depending on which lines happen to be in the loaded file.
+function categoricalKeysOf(lines) {
+  const keys = new Set();
+  for (const line of lines) {
+    for (const [k, v] of Object.entries(line)) {
+      if (k !== "t" && typeof v === "string") keys.add(k);
+    }
+  }
+  return keys;
+}
+
+function plottableKeysOf(lines) {
+  return new Set([...numericKeysOf(lines), ...categoricalKeysOf(lines)]);
+}
+
+// Distinct string values of file.lines[*][key], in first-appearance
+// order - the order becomes each value's plotted integer code (0, 1,
+// 2, ...), and the legend readout maps the code straight back to the
+// original string (see updateLegendReadout).
+function categoryLevelsOf(file, key) {
+  const levels = [];
+  const seen = new Set();
+  for (const line of file.lines) {
+    const v = line[key];
+    if (typeof v === "string" && !seen.has(v)) {
+      seen.add(v);
+      levels.push(v);
+    }
+  }
+  return levels;
+}
+
 function quantityKey(file, key) {
   return `${file.source}__${file.filename}__${key}`;
 }
@@ -312,7 +351,7 @@ function refreshQuantityTabs() {
   tabsEl.innerHTML = "";
   contentEl.innerHTML = "";
   loaded.forEach((file, i) => {
-    const keys = Array.from(numericKeysOf(file.lines)).sort();
+    const keys = Array.from(plottableKeysOf(file.lines)).sort();
     const prefix = `${file.source}__${file.filename}__`;
     const hasAnySelected = Array.from(selectedQuantities).some((sk) => sk.startsWith(prefix));
     if (!hasAnySelected) {
@@ -339,7 +378,7 @@ function refreshQuantityTabs() {
         </div>`;
       })
       .join("")}</div>`;
-    if (!keys.length) pane.innerHTML = '<div class="text-body-secondary small">(no numeric fields)</div>';
+    if (!keys.length) pane.innerHTML = '<div class="text-body-secondary small">(no plottable fields)</div>';
     contentEl.appendChild(pane);
   });
   contentEl.querySelectorAll(".quantity-checkbox").forEach((cb) => {
@@ -376,7 +415,7 @@ let lastPairs = [];
 function activeQuantityPairs() {
   const pairs = [];
   for (const file of loaded) {
-    for (const key of numericKeysOf(file.lines)) {
+    for (const key of plottableKeysOf(file.lines)) {
       if (selectedQuantities.has(quantityKey(file, key))) pairs.push({ file, key });
     }
   }
@@ -413,6 +452,29 @@ function interpolateAtX(points, xs) {
   return result;
 }
 
+// A static key for every categorical series currently plotted - "0 =
+// Front hall, 1 = Kitchen, ..." - always visible, unlike
+// updateLegendReadout's cursor-driven single-point readout. Added
+// 2026-09-11 (Ben): a hover readout only ever shows one instant: to
+// read the *shape* of a line that jumps between named levels over a
+// whole session (e.g. spotting when the robot roamed from one AP to
+// another), the reader needs the whole 0/1/2->name mapping up front,
+// not just "whatever's under the cursor right now".
+function updateCategoryKey(pairs) {
+  const el = document.getElementById("chart-category-key");
+  const withLevels = pairs.filter((p) => p.levels);
+  if (!withLevels.length) {
+    el.innerHTML = "";
+    return;
+  }
+  el.innerHTML = withLevels
+    .map((p) => {
+      const mapping = p.levels.map((name, i) => `${i} = ${name}`).join(", ");
+      return `<div><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${p.colour};margin-right:4px;"></span>${p.file.label}: ${p.key}: ${mapping}</div>`;
+    })
+    .join("");
+}
+
 function redrawChart() {
   const pairs = activeQuantityPairs();
   lastPairs = pairs;
@@ -421,16 +483,25 @@ function redrawChart() {
   let allTimes = [];
   const pointsByPair = [];
 
-  for (const { file, key } of pairs) {
+  for (const pair of pairs) {
+    const { file, key } = pair;
     const colour = COLOURS[colourIndex % COLOURS.length];
     colourIndex++;
-    const points = file.lines
-      .filter((l) => typeof l[key] === "number")
-      .map((l) => ({ x: l.t - timebaseT0, y: l[key] }));
+    const levels = categoricalKeysOf(file.lines).has(key) ? categoryLevelsOf(file, key) : null;
+    // Categorical values are coded to their index in `levels` so uPlot
+    // (numeric-only) can plot them at all - updateLegendReadout maps the
+    // code straight back via the same `levels` array stashed on the pair.
+    const points = levels
+      ? file.lines.filter((l) => typeof l[key] === "string").map((l) => ({ x: l.t - timebaseT0, y: levels.indexOf(l[key]) }))
+      : file.lines.filter((l) => typeof l[key] === "number").map((l) => ({ x: l.t - timebaseT0, y: l[key] }));
     pointsByPair.push(points);
     for (const p of points) allTimes.push(p.x);
-    series.push({ label: key, stroke: colour, width: 2, points: { show: false } });
+    pair.levels = levels;
+    pair.colour = colour;
+    series.push({ label: key, stroke: colour, width: 2, points: { show: !!levels } });
   }
+
+  updateCategoryKey(pairs);
 
   // uPlot needs one shared x-array; build one combined, sorted,
   // de-duplicated axis from every series' own real sample times.
@@ -465,6 +536,14 @@ function redrawChart() {
     finalData,
     el
   );
+  // Show the latest sample by default, not a blank legend until the
+  // reader happens to hover - found live 2026-09-11: a categorical
+  // series (e.g. network's connected_bssid) is coded to a small integer
+  // for the chart line itself (see the `levels` comment above), so
+  // without this a reader who never hovers just sees a flat "0" on the
+  // axis, with no obvious way to know what that means - the translated
+  // name was always right there in the (until-now hover-only) legend.
+  if (combinedX.length) updateLegendReadout(chart, combinedX.length - 1);
 }
 
 // geomap.js's layers are additive by name (no removeLayer) - remember
@@ -520,7 +599,9 @@ function updateLegendReadout(u, idx) {
   const rows = lastPairs
     .map((p, i) => {
       const val = u.data[i + 1][idx];
-      const valStr = typeof val === "number" ? val.toFixed(4) : "—";
+      const valStr = typeof val !== "number" ? "—"
+        : p.levels ? (p.levels[Math.round(val)] ?? "—")
+        : val.toFixed(4);
       const colour = COLOURS[i % COLOURS.length];
       return `<span class="me-3">
         <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${colour};margin-right:4px;"></span>

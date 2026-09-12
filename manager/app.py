@@ -11,6 +11,7 @@ import json
 import logging
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -201,19 +202,59 @@ def ws_status(ws):
         time.sleep(STATUS_POLL_SECONDS)
 
 
+_sysstats_lock = threading.Lock()
+_latest_sysstats = None  # {"brownout":..., "wifi_percent":..., "cpu_percent":..., ...} - see _sysstats_sampler_loop
+
+
+def _sysstats_sampler_loop():
+    """The one and only caller of sysstats_snapshot() - see its own
+    "one reader" comment. Before this, every open /ws/system connection
+    (one per browser tab watching the shared header) called
+    sysstats_snapshot() itself on its own timer; read_cpu_percent()
+    diffs /proc/stat against the *previous* call in shared module-level
+    globals, so with several tabs open, each tab's thread was
+    overwriting that baseline out from under the others - every tab's
+    cpu_percent ended up measuring "since whichever tab happened to
+    poll last", not a clean window of its own, which is why Ben saw
+    disagreeing/randomly-jumping CPU numbers across tabs (2026-09-10).
+    Sampling here, once, on manager's own clock, and having every
+    connection just hand back whatever's currently cached fixes that -
+    same "single owner" shape ws_status already has for unit_status."""
+    while True:
+        _sample_sysstats_once()
+        time.sleep(SYSSTATS_POLL_SECONDS)
+
+
+def _sample_sysstats_once():
+    """One sample, factored out of _sysstats_sampler_loop so it can be
+    tested directly without threads/sleep - same reasoning as
+    oxts-nav's gnss_mode.py's _watchdog_tick."""
+    global _latest_sysstats
+    snapshot = sysstats_snapshot()
+    with _sysstats_lock:
+        _latest_sysstats = snapshot
+
+
 @sock.route("/ws/system")
 def ws_system(ws):
     """Host-level status (brown-out, wifi, CPU) for every service's shared
-    header — see shared/sysstats.py. One reader for the one physical Pi,
-    watched cross-port by every other service via connectWsUrl (same
-    pattern aruco's Map page uses to read oxts-nav's /ws/nav directly)."""
+    header — see shared/sysstats.py. One reader for the one physical Pi
+    (_sysstats_sampler_loop), watched cross-port by every other service
+    via connectWsUrl (same pattern aruco's Map page uses to read
+    oxts-nav's /ws/nav directly) - this handler just relays whatever
+    that one reader most recently sampled, one connection per browser
+    tab."""
     while True:
-        ws.send(json.dumps(sysstats_snapshot()))
+        with _sysstats_lock:
+            snapshot = _latest_sysstats
+        if snapshot is not None:
+            ws.send(json.dumps(snapshot))
         time.sleep(SYSSTATS_POLL_SECONDS)
 
 
 if __name__ == "__main__":
     cfg = load_config()["services"]["manager"]
+    threading.Thread(target=_sysstats_sampler_loop, daemon=True).start()
     # threaded=True — see oxts-nav/app.py's app.run() comment. Every
     # service's shared header holds open its own /ws/system connection
     # to the manager, so more than one browser tab open at once already
