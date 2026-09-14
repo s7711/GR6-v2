@@ -34,16 +34,17 @@ PAGES_DIR = Path(__file__).resolve().parent / "templates" / "pages"
 JOBS_STATUS_HZ = 2
 NAVIGATE_TIMEOUT_S = 2.0
 # Waterbutt's /go doesn't just ack the request - it blocks synchronously
-# on send_open() reaching the ESP8266 valve (see waterbutt/app.py's
-# VALVE_TIMEOUT_S=3.0) before it responds. A timeout here shorter than
-# that just means jobs gives up on a perfectly good fill because the
-# valve's first /open ping was slow, not because waterbutt or the valve
-# actually failed (seen live 2026-09-10: jobs reported "couldn't reach
-# waterbutt" and aborted the mission while the valve went on to open
-# fine a few seconds later). Needs to comfortably clear
-# VALVE_TIMEOUT_S, not match NAVIGATE_TIMEOUT_S which is sized for
-# navigate's much faster control-endpoint responses.
-WATERBUTT_TIMEOUT_S = 5.0
+# on QC_SETTLE_S (waterbutt/app.py, 5s as of 2026-09-14) letting its QC
+# reading settle, then on send_open() reaching the ESP8266 valve (see
+# waterbutt/app.py's VALVE_TIMEOUT_S=3.0) before it responds. A timeout
+# here shorter than that just means jobs gives up on a perfectly good
+# fill because the valve's first /open ping was slow, not because
+# waterbutt or the valve actually failed (seen live 2026-09-10: jobs
+# reported "couldn't reach waterbutt" and aborted the mission while the
+# valve went on to open fine a few seconds later). Needs to comfortably
+# clear QC_SETTLE_S + VALVE_TIMEOUT_S, not match NAVIGATE_TIMEOUT_S
+# which is sized for navigate's much faster control-endpoint responses.
+WATERBUTT_TIMEOUT_S = 12.0
 
 cfg = load_config()
 service_cfg = cfg["services"]["jobs"]

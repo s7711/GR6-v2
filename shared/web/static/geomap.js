@@ -222,7 +222,12 @@ function createGeoMap(canvasEl, wrapperEl, zoomButtonsSelector) {
     const shortSide = Math.min(canvasEl.width, canvasEl.height);
     let metresAcross;
     if (zoomMode === "auto") {
-      const all = Object.values(offsetLayers).flat();
+      // background layers (e.g. a persistent context layer covering the
+      // whole garden, added 2026-09-14 for wheelspeed's scale-factor
+      // map) are context, not the thing being framed - included here
+      // they'd blow "auto" out to fit the whole layer even when looking
+      // at one small file's trail.
+      const all = Object.entries(offsetLayers).filter(([name]) => !layers[name].style.background).flatMap(([, pts]) => pts);
       if (currentOffset) all.push(currentOffset);
       const extent = all.reduce((m, p) => Math.max(m, Math.abs(p.north), Math.abs(p.east)), 1.0);
       metresAcross = Math.max(2.0, extent * 2 * 1.25);
@@ -251,10 +256,23 @@ function createGeoMap(canvasEl, wrapperEl, zoomButtonsSelector) {
     }
     ctx.stroke();
 
-    for (const name in offsetLayers) {
+    // Background layers first (so anything else drawn on top - a file's
+    // own trail, current position - is never hidden underneath one; see
+    // the auto-zoom comment above for why "background" exists), then
+    // ordered among themselves by zIndex ascending (added 2026-09-14 for
+    // multiple background point layers, e.g. viewer's wheelspeed
+    // scale-factor map - higher zIndex draws on top of lower).
+    const layerNames = Object.keys(offsetLayers).sort((a, b) => {
+      const bgA = layers[a].style.background, bgB = layers[b].style.background;
+      if (!!bgA !== !!bgB) return bgA ? -1 : 1;
+      if (bgA && bgB) return (layers[a].style.zIndex || 0) - (layers[b].style.zIndex || 0);
+      return 0;
+    });
+    for (const name of layerNames) {
       const style = layers[name].style;
       const pts = offsetLayers[name];
       const color = style.color || "#6c757d";
+      ctx.globalAlpha = style.opacity ?? 1;
       if (style.line !== false && pts.length > 1) {
         ctx.strokeStyle = color;
         ctx.lineWidth = style.lineWidth || 2;
@@ -268,7 +286,7 @@ function createGeoMap(canvasEl, wrapperEl, zoomButtonsSelector) {
       if (style.dots) {
         pts.forEach((p, i) => {
           const c = toCanvas(p);
-          ctx.fillStyle = color;
+          ctx.fillStyle = style.colorFn ? style.colorFn(p, i) : color;
           ctx.beginPath();
           ctx.arc(c.x, c.y, style.dotRadius || 4, 0, 2 * Math.PI);
           ctx.fill();
@@ -279,6 +297,7 @@ function createGeoMap(canvasEl, wrapperEl, zoomButtonsSelector) {
           }
         });
       }
+      ctx.globalAlpha = 1;
     }
 
     if (currentOffset) {

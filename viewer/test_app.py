@@ -9,6 +9,9 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+import requests
 
 import app
 
@@ -68,6 +71,51 @@ class ViewerAppTestCase(unittest.TestCase):
     def test_home_page_renders(self):
         resp = self.client.get("/")
         self.assertEqual(resp.status_code, 200)
+
+
+class ScaleFactorMapPseudoFileTestCase(unittest.TestCase):
+    """wheelspeed's scale-factor map (see app.py's own comment) shows up
+    as a pseudo-file "map" inside wheelspeed's own folder, proxied live
+    from wheelspeed rather than read off disk."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        app.REPO_ROOT = self.tmp
+        self.client = app.app.test_client()
+        (self.tmp / "wheelspeed" / "data" / "logs").mkdir(parents=True)
+        (self.tmp / "wheelspeed" / "data" / "logs" / "260914_1.jsonl").write_text('{"t": 1.0}\n')
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_api_logs_lists_the_map_pseudo_entry_first(self):
+        with patch.object(app, "_fetch_scale_factor_cells", return_value=[{"lat": 1.0, "lon": 2.0, "mean": 1.1}] * 3):
+            data = self.client.get("/api/logs").get_json()
+        entry = data["wheelspeed"][0]
+        self.assertEqual(entry["filename"], "map")
+        self.assertTrue(entry["is_map"])
+        self.assertEqual(entry["line_count"], 3)
+        self.assertIsNone(entry["start_t"])
+
+    def test_api_logs_lists_the_map_entry_with_zero_count_when_wheelspeed_unreachable(self):
+        with patch.object(app, "_fetch_scale_factor_cells", side_effect=requests.exceptions.ConnectionError()):
+            data = self.client.get("/api/logs").get_json()
+        entry = data["wheelspeed"][0]
+        self.assertEqual(entry["filename"], "map")
+        self.assertEqual(entry["line_count"], 0)
+
+    def test_api_log_file_proxies_the_map_as_jsonl(self):
+        cells = [{"lat": 1.0, "lon": 2.0, "mean": 1.1}, {"lat": 3.0, "lon": 4.0, "mean": 0.9}]
+        with patch.object(app, "_fetch_scale_factor_cells", return_value=cells):
+            resp = self.client.get("/api/logs/wheelspeed/map")
+        self.assertEqual(resp.status_code, 200)
+        lines = [json.loads(l) for l in resp.get_data(as_text=True).splitlines()]
+        self.assertEqual(lines, cells)
+
+    def test_api_log_file_502s_for_the_map_when_wheelspeed_unreachable(self):
+        with patch.object(app, "_fetch_scale_factor_cells", side_effect=requests.exceptions.ConnectionError()):
+            resp = self.client.get("/api/logs/wheelspeed/map")
+        self.assertEqual(resp.status_code, 502)
 
 
 if __name__ == "__main__":

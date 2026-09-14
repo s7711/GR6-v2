@@ -183,6 +183,72 @@ A separate **Config** page shows the current configuration read-only (
 every other service's Config page: a plain table plus a note that
 values are changed via the manager's Config page, not here.
 
+## Scale-factor map (added 2026-09-14)
+
+`scale_factor.py`'s tracker already logs one running scale-factor value,
+but Ben found it isn't one constant: it's noticeably different on grass
+(~1.2) vs the gravel path it was tuned on (~1.0), and may vary further
+with slope/ground condition even within one groundcover. `scale_factor_map.py`
+turns this into a sparse 2D grid (`ScaleFactorMap`, same
+sparse-dict-of-(i,j)-cell shape as `map-manager/grid.py`'s `MapGrid`,
+same fixed reference frame - `map-manager`'s own `map_origin_lat/lon` -
+so the two grids stay directly comparable), one cell per
+`scale_factor_distance_m` (1m) of travel, holding a running mean/stdev
+via Welford's algorithm with `n` capped at `scale_factor_map_max_n`
+(config) - below the cap it's an honest shrinking-uncertainty sample
+mean, above it the update behaves like a bounded-memory average so a
+real change (tyre wear, wet vs dry ground) keeps being tracked, without
+a separate "learning vs trusted" state machine or a residual-based
+retrigger (which risks not being independent of the very estimate it's
+checking).
+
+Deliberately not wired into `gad_wheelspeed.py` - same "observe first"
+reasoning as `scale_factor.py`'s own history. The map is built
+unconditionally, independent of the GAD switch.
+
+**GNSS-quality gate** (`scale_factor_gate.py`): once the map is ever
+fed back into GAD, the wheel-vs-INS comparison stops being independent
+- the INS solution would itself be partly shaped by the wheelspeed
+being checked. Gates on GNSS *velocity* quality, not position accuracy
+- some spots worth mapping (e.g. under a tree) have poor GNSS position
+from multipath while GNSS velocity (Doppler-derived) stays comparatively
+good. Uses `InnVelXFilt`/`InnVelYFilt` (not the raw instantaneous
+`InnVelX`/`InnVelY`) and `GnssVelReject`, deliberately: a bad GNSS
+velocity update disturbs the filter's state/covariance for a while
+after the event, not just for that one epoch (Ben), and the Filt
+fields' peak-hold-with-slow-decay behaviour (`ncomrx.py`'s
+`_updateInnovation`) is what captures that lingering effect. The
+threshold (`scale_factor_map_max_vel_innovation`) can't be assumed to
+be "1 sigma" - checked live against the 2026-09-14 mission,
+`InnVelXFilt`/`InnVelYFilt` sit around 1.5-2 (median) even during
+wholly ordinary driving with no GNSS problem at all (p95 ~3.2); a naive
+1.0 threshold rejected 96% of an otherwise-fine mission. Set to 3.5
+(roughly that mission's own p95).
+
+**Backfill**: seeded from the 2026-09-14 10:51:37 "Water garden (big)"
+mission (the first to complete the whole garden) via a one-off script
+(not committed - see session notes), reusing wheelspeed's own already-
+logged `scale_factor` samples cross-referenced against the raw NCOM
+archive (decoded fresh, since `InnVelXFilt`/`InnVelYFilt` weren't in
+`decoded_log_fields` yet at the time) for the gate. Result: 128 cells,
+mostly 5-20 samples each, spatially coherent - cells near the waterbutt
+approach/return path (gravel) came out 0.93-1.05, cells further out in
+the beds (grass) 1.3-1.8.
+
+**Visualisation**: `GET /api/scale-factor-map` returns `[{lat, lon, n,
+mean, stdev, t}, ...]` (lat/lon, not local north/east - it's consumed
+directly by `geomap.js` layers, which only know lat/lon). Shown in
+`viewer`'s map as a toggleable background layer (checkbox + opacity
+slider, since `viewer`'s per-run file list doesn't fit a perpetual,
+always-growing map) coloured by each cell's mean scale factor relative
+to 1.0 (blue = slower than expected, red = grass/slip, both scaled
+against the loaded data's own spread). Needed two small `geomap.js`
+additions: a `style.background` flag (excluded from "auto" zoom's
+extent calculation, and always drawn first, so a persistent whole-
+garden layer never dominates the view or hides a file's own trail) and
+`style.colorFn(point)` for per-point colour (previously one fixed
+colour per layer).
+
 ## Implementation Decisions
 
 - `GadWheelspeed` (in `gad_wheelspeed.py`) owns only the GAD-sending

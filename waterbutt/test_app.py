@@ -10,6 +10,7 @@ import os
 import tempfile
 import time
 import unittest
+import unittest.mock
 from pathlib import Path
 
 import app
@@ -36,6 +37,7 @@ class WaterbuttAppTestCase(unittest.TestCase):
         app.LOGS_DIR = Path(tempfile.mkdtemp()) / "logs"
         app._qc_log_path = None
         app._set_qc_reading({"state": "not_configured"})
+        app.QC_SETTLE_S = 0  # don't actually wait out the settle delay in tests
         # These tests are about QC gating specifically - start each one
         # already past the separate tank-level gate (see
         # TestTankLevelGating below for that gate's own tests) so it
@@ -87,6 +89,19 @@ class WaterbuttAppTestCase(unittest.TestCase):
         resp = self.client.post("/go", json={"duration_s": 7})
         self.assertEqual(resp.status_code, 400)
         self.assertEqual(self.valve_stub.go_calls, [])
+
+    def test_go_waits_out_the_qc_settle_delay_before_checking(self):
+        # Added 2026-09-14: used to be a "pause" step individual jobs had
+        # to remember to add before their fill step; now /go enforces it
+        # itself for every caller. QC_SETTLE_S is forced to 0 in setUp()
+        # so the other tests here don't actually sleep - undo that just
+        # for this one test.
+        app.QC_SETTLE_S = 3
+        app._set_qc_reading({"state": "ok", "marker_id": 12, "distance_m": 0.01})
+        with unittest.mock.patch.object(app.time, "sleep") as mock_sleep:
+            resp = self.client.post("/go", json={"duration_s": 5})
+        mock_sleep.assert_called_once_with(3)
+        self.assertEqual(resp.status_code, 200)
 
     def test_set_qc_reading_before_a_log_started_is_a_no_op(self):
         app._set_qc_reading({"state": "ok", "marker_id": 12, "distance_m": 0.01})
@@ -149,6 +164,7 @@ class TestTankLevelGating(unittest.TestCase):
         app.LOGS_DIR = Path(tempfile.mkdtemp()) / "logs"
         app._qc_log_path = None
         app._set_qc_reading({"state": "ok", "distance_m": 0.0})
+        app.QC_SETTLE_S = 0  # don't actually wait out the settle delay in tests
         self.client = app.app.test_client()
 
     def test_go_refused_when_not_believed_empty(self):

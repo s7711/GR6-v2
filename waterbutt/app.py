@@ -54,6 +54,7 @@ drive_cfg = cfg["services"]["drive"]
 # a code change. No longer operator-selectable in the UI (unused in
 # practice - see waterbutt-prd.md's "QC gating on fill").
 QC_THRESHOLD_M = service_cfg["qc_default_threshold_m"]
+QC_SETTLE_S = service_cfg["qc_settle_s"]
 
 VALVE_HOSTNAME = service_cfg["hostname"]
 QC_MARKER_PATH = Path(__file__).resolve().parent.parent / service_cfg["qc_marker_file"]
@@ -300,6 +301,15 @@ def go():
     duration_s = payload["duration_s"]
     if duration_s not in DURATIONS_S:
         abort(400)
+
+    # Give the aruco feed a moment to settle after the robot's last
+    # motion before trusting its QC reading - the marker can still read
+    # as displaced for a short while just after the robot stops (e.g.
+    # the turn-to-heading that precedes a fill isn't position-neutral).
+    # Used to be a "pause" step individual jobs had to remember to add
+    # before their fill step; that's inherent to every fill regardless
+    # of caller, so it belongs here instead (2026-09-14).
+    time.sleep(QC_SETTLE_S)
 
     # No QC marker means no fill - a missing/unreachable/out-of-range
     # check refuses the same as a too-far-away one, never silently

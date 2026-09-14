@@ -20,6 +20,7 @@ from flask_sock import Sock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from shared.config import load_config  # noqa: E402
 from shared.feed_client import FeedClient  # noqa: E402
+from shared.geodesy import lla_to_ned, ned_to_lla  # noqa: E402
 from shared.rotating_jsonl_log import RotatingJsonlLog  # noqa: E402
 from shared.web import manager_url, register_pages, service_url, use_shared_static, use_shared_templates  # noqa: E402
 
@@ -29,6 +30,8 @@ from ncomrx import machine_time_to_gps  # noqa: E402
 from gad_switch import GadSwitch  # noqa: E402
 from gad_wheelspeed import GadWheelspeed  # noqa: E402
 from scale_factor import ScaleFactorTracker  # noqa: E402
+from scale_factor_gate import gnss_velocity_trustworthy  # noqa: E402
+from scale_factor_map import ScaleFactorMap  # noqa: E402
 from timing import midpoint_time  # noqa: E402
 from velocity import forward_velocity, wheel_forward_velocity  # noqa: E402
 
@@ -41,6 +44,14 @@ service_cfg = cfg["services"]["wheelspeed"]
 drive_cfg = cfg["services"]["drive"]
 oxtsnav_cfg = cfg["services"]["oxts-nav"]
 xnav_ip = cfg["xnav_ip"]
+
+# Same fixed reference frame as map-manager's own persistent grid (see
+# map-manager/app.py's "Reference frame") - not this service's own
+# setting, so both grids stay directly comparable/overlayable.
+map_manager_cfg = cfg["services"]["map-manager"]
+MAP_ORIGIN_LAT = map_manager_cfg["map_origin_lat"]
+MAP_ORIGIN_LON = map_manager_cfg["map_origin_lon"]
+SCALE_FACTOR_MAP_PATH = DATA_DIR / "scale_factor_map.json"
 
 app = Flask(__name__)
 use_shared_templates(app)
@@ -66,8 +77,34 @@ gad_switch = GadSwitch(DATA_DIR / "gad_enabled.json")
 log = RotatingJsonlLog(DATA_DIR / "logs", service_cfg["log_rotate_s"], service_cfg["log_retention_days"])
 
 
+scale_factor_map = ScaleFactorMap(service_cfg["scale_factor_distance_m"], service_cfg["scale_factor_map_max_n"])
+
+# Set by _update_loop just before it calls scale_factor_tracker.update()
+# each tick, so _on_scale_factor_result (called synchronously from
+# inside that same update() call, whenever a sample completes) can see
+# the GNSS status current *at* that sample - see scale_factor_gate.py
+# for why this gates the map (not the always-on log below, which never
+# gates anything).
+_last_gnss_status = {}
+
+
 def _on_scale_factor_result(record):
     log.append({"event": "scale_factor", **record})
+
+    lat, lon = record.get("lat"), record.get("lon")
+    left_wheel, right_wheel = record.get("left_wheel_distance_m"), record.get("right_wheel_distance_m")
+    left_ins, right_ins = record.get("left_ins_distance_m"), record.get("right_ins_distance_m")
+    if lat is None or lon is None:
+        return
+    if not gnss_velocity_trustworthy(_last_gnss_status, service_cfg["scale_factor_map_max_vel_innovation"]):
+        return
+    # Combined scale factor from both wheels' totals, not an average of
+    # the two sides' own separate ratios - see wheelspeed-prd.md's
+    # "Scale-factor map" (boresight/differential effects are deliberately
+    # out of scope for this first pass, so one scalar per cell is enough).
+    scale_factor = (left_ins + right_ins) / (left_wheel + right_wheel)
+    north, east, _down = lla_to_ned(lat, lon, 0.0, MAP_ORIGIN_LAT, MAP_ORIGIN_LON, 0.0)
+    scale_factor_map.update(north, east, scale_factor, t=time.time())
 
 
 scale_factor_tracker = ScaleFactorTracker(
@@ -118,6 +155,7 @@ def _update_loop():
     # wheelspeed-prd.md's "Update rate / timing" — an update fires
     # exactly once per real new FV reading, at whatever rate that
     # actually arrives (GR6-v1 did this at ~20Hz and it worked fine).
+    global _last_gnss_status
     poll_period = 0.02
     last_fv_timestamp = None
     last_tick = time.monotonic()
@@ -162,6 +200,7 @@ def _update_loop():
         if None not in (left_pos_m, right_pos_m, left_ins_mps, right_ins_mps):
             lat = nav.get("Lat")
             lon = nav.get("Lon")
+            _last_gnss_status = nav_payload.get("status", {})
             scale_factor_tracker.update(
                 now, left_pos_m, right_pos_m, left_ins_mps, right_ins_mps, dt,
                 lat=math.degrees(lat) if lat is not None else None,
@@ -229,6 +268,45 @@ def ws_wheelspeed(ws):
         time.sleep(period)
 
 
+def _save_scale_factor_map():
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    tmp_path = SCALE_FACTOR_MAP_PATH.with_suffix(".json.tmp")
+    with open(tmp_path, "w") as f:
+        json.dump(scale_factor_map.dump_state(), f)
+    tmp_path.replace(SCALE_FACTOR_MAP_PATH)  # atomic — same reasoning as map-manager's _save_grid
+    scale_factor_map.dirty = False
+
+
+def _load_scale_factor_map():
+    if not SCALE_FACTOR_MAP_PATH.exists():
+        return
+    with open(SCALE_FACTOR_MAP_PATH) as f:
+        scale_factor_map.load_state(json.load(f))
+
+
+def _scale_factor_map_save_loop():
+    period = 5.0
+    last_save = time.monotonic()
+    while True:
+        if scale_factor_map.dirty and time.monotonic() - last_save > service_cfg["scale_factor_map_save_interval_s"]:
+            _save_scale_factor_map()
+            last_save = time.monotonic()
+        time.sleep(period)
+
+
+@app.route("/api/scale-factor-map")
+def api_scale_factor_map():
+    """{lat, lon, n, mean, stdev, t} per populated cell - lat/lon (not
+    local north/east) since this is consumed directly by geomap.js
+    layers (viewer's map, see wheelspeed-prd.md's "Scale-factor map"),
+    which only knows lat/lon."""
+    cells = []
+    for c in scale_factor_map.all_cells():
+        lat, lon, _alt = ned_to_lla(c["north"], c["east"], 0.0, MAP_ORIGIN_LAT, MAP_ORIGIN_LON, 0.0)
+        cells.append({"lat": lat, "lon": lon, "n": c["n"], "mean": c["mean"], "stdev": c["stdev"], "t": c["t"]})
+    return jsonify(cells)
+
+
 @app.route("/gad-switch", methods=["POST"])
 def gad_switch_route():
     payload = request.get_json(force=True)
@@ -259,6 +337,8 @@ if __name__ == "__main__":
     drive_client.start()
     nav_client.start()
     log.start()
+    _load_scale_factor_map()
     threading.Thread(target=_update_loop, daemon=True).start()
     threading.Thread(target=_log_loop, daemon=True).start()
+    threading.Thread(target=_scale_factor_map_save_loop, daemon=True).start()
     app.run(host=service_cfg["host"], port=service_cfg["port"], threaded=True)

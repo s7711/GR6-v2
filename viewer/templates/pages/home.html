@@ -87,6 +87,7 @@
         <button type="button" class="btn btn-sm zoom-btn" data-zoom="50">50 m</button>
       </div>
     </div>
+    <div id="map-legend" class="small mt-2"></div>
   </div>
 </div>
 
@@ -103,6 +104,25 @@ const COLOURS = [
   "#0d6efd", "#dc3545", "#198754", "#fd7e14", "#6f42c1",
   "#20c997", "#d63384", "#0dcaf0", "#ffc107", "#6610f2",
 ];
+
+// Point-layer ("map") files - e.g. wheelspeed's scale-factor map, added
+// 2026-09-14 - pick one of these as their base colour: white at the
+// layer's own min value, full colour at its max (Ben: "a single colour
+// blending from white... because if you have wifi and scale factor
+// together it might be useful to select different colours" - so each
+// such layer gets its own hue rather than one fixed diverging scale).
+const MAP_COLOURS = COLOURS;
+
+function hexToRgb(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+function blendWhiteTo(hex, t) {
+  const [r, g, b] = hexToRgb(hex);
+  const mix = (c) => Math.round(255 + (c - 255) * Math.max(0, Math.min(1, t)));
+  return `rgb(${mix(r)}, ${mix(g)}, ${mix(b)})`;
+}
 
 // How much slack (seconds) either side of the selection's own time span
 // counts as "overlapping" for the Suggested list — a drive log triggered
@@ -129,6 +149,7 @@ function fmtTime(t) {
 }
 
 function fileLabel(source, entry) {
+  if (entry.is_map) return `Scale-factor map (${entry.line_count} cells)`;
   const when = fmtTime(entry.start_t);
   if (entry.path_name) return `${when} — ${entry.path_name} (${entry.line_count} lines)`;
   return `${when} (${entry.line_count} lines)`;
@@ -245,6 +266,7 @@ function renderTimescaleChoice() {
   };
   makeRadio("ts-none", "Timescale: union of all selected (default)", !timescaleRef, () => { timescaleRef = null; });
   for (const s of selected) {
+    if (s.is_map) continue;  // a perpetual point map has no coherent start/end of its own to be a timescale reference
     const isRef = !!timescaleRef && timescaleRef.source === s.source && timescaleRef.filename === s.filename;
     makeRadio(`ts-${s.source}__${s.filename}`, `Timescale: ${s.source}: ${fileLabel(s.source, s)}`, isRef, () => {
       timescaleRef = { source: s.source, filename: s.filename };
@@ -357,14 +379,6 @@ function refreshQuantityTabs() {
   tabsEl.innerHTML = "";
   contentEl.innerHTML = "";
   loaded.forEach((file, i) => {
-    const keys = Array.from(file.plottableKeys).sort();
-    const prefix = `${file.source}__${file.filename}__`;
-    const hasAnySelected = Array.from(selectedQuantities).some((sk) => sk.startsWith(prefix));
-    if (!hasAnySelected) {
-      for (const k of ["cross_track_error_m", "distance_m", "distance_travelled_m"]) {
-        if (keys.includes(k)) selectedQuantities.add(quantityKey(file, k));
-      }
-    }
     const tabId = `tab-${i}`;
     const li = document.createElement("li");
     li.className = "nav-item";
@@ -374,6 +388,41 @@ function refreshQuantityTabs() {
     const pane = document.createElement("div");
     pane.className = `tab-pane fade ${i === 0 ? "show active" : ""}`;
     pane.id = tabId;
+
+    if (file.is_map) {
+      // A point layer on the map, not a time series - no quantity
+      // checkboxes/chart, just how it's drawn (Ben, 2026-09-14: "the
+      // colour, opacity, layer number and point size can be set").
+      const colourOptions = MAP_COLOURS.map((c) => `<option value="${c}" ${c === file.mapStyle.colour ? "selected" : ""}>${c}</option>`).join("");
+      pane.innerHTML = `
+        <div class="d-flex flex-wrap gap-4 align-items-center">
+          <label class="small">Colour
+            <select class="form-select form-select-sm map-style-input" data-file="${i}" data-prop="colour">${colourOptions}</select>
+          </label>
+          <label class="small">Opacity
+            <input type="range" min="0" max="100" value="${Math.round(file.mapStyle.opacity * 100)}" class="map-style-input" data-file="${i}" data-prop="opacity">
+          </label>
+          <label class="small">Point size (0 = hide)
+            <input type="number" min="0" max="20" value="${file.mapStyle.pointSize}" class="form-control form-control-sm map-style-input" data-file="${i}" data-prop="pointSize" style="width: 5em;">
+          </label>
+          <label class="small">Layer
+            <input type="number" value="${file.mapStyle.layer}" class="form-control form-control-sm map-style-input" data-file="${i}" data-prop="layer" style="width: 5em;">
+          </label>
+        </div>
+        <div class="text-body-secondary small mt-2">Higher layer numbers draw on top of lower ones.</div>
+      `;
+      contentEl.appendChild(pane);
+      return;
+    }
+
+    const keys = Array.from(file.plottableKeys).sort();
+    const prefix = `${file.source}__${file.filename}__`;
+    const hasAnySelected = Array.from(selectedQuantities).some((sk) => sk.startsWith(prefix));
+    if (!hasAnySelected) {
+      for (const k of ["cross_track_error_m", "distance_m", "distance_travelled_m"]) {
+        if (keys.includes(k)) selectedQuantities.add(quantityKey(file, k));
+      }
+    }
     pane.innerHTML = `<div class="d-flex flex-wrap gap-3">${keys
       .map((k) => {
         const qk = quantityKey(file, k);
@@ -392,6 +441,14 @@ function refreshQuantityTabs() {
       if (cb.checked) selectedQuantities.add(cb.value);
       else selectedQuantities.delete(cb.value);
       redraw();
+    });
+  });
+  contentEl.querySelectorAll(".map-style-input").forEach((el) => {
+    el.addEventListener("input", () => {
+      const file = loaded[Number(el.dataset.file)];
+      const prop = el.dataset.prop;
+      file.mapStyle[prop] = prop === "colour" ? el.value : Number(el.value);
+      redrawMap();
     });
   });
 }
@@ -565,6 +622,36 @@ function redrawMap() {
   let colourIndex = 0;
   for (const file of loaded) {
     if (!fileHasPosition(file)) continue;
+    currentNames.add(file.label);
+    _mapLayerNamesSeen.add(file.label);
+
+    if (file.is_map) {
+      // A perpetual point layer (wheelspeed's scale-factor map, added
+      // 2026-09-14), not a run's trail - own style controls (see
+      // refreshQuantityTabs), coloured by blending white (this layer's
+      // own min "mean") to its chosen colour (max "mean") rather than
+      // one fixed diverging scale, so several such layers (e.g. a
+      // future wifi-signal map) stay visually distinct.
+      const style = file.mapStyle;
+      if (!style.pointSize) {
+        window._geoMap.setLayer(file.label, []);
+        continue;
+      }
+      const values = file.lines.map((l) => l.mean).filter((v) => typeof v === "number");
+      const lo = values.length ? Math.min(...values) : 0;
+      const hi = values.length ? Math.max(...values) : 1;
+      window._geoMap.setLayer(file.label, file.lines, {
+        dots: true,
+        dotRadius: style.pointSize,
+        line: false,
+        background: true,
+        zIndex: style.layer,
+        opacity: style.opacity,
+        colorFn: (p) => blendWhiteTo(style.colour, hi > lo ? (p.mean - lo) / (hi - lo) : 1),
+      });
+      continue;
+    }
+
     const colour = COLOURS[colourIndex % COLOURS.length];
     colourIndex++;
     mapFileColours.set(file.label, colour);
@@ -578,8 +665,6 @@ function redrawMap() {
     if (timescaleWindow) {
       points = points.filter((l) => l.t - timebaseT0 >= timescaleWindow[0] && l.t - timebaseT0 <= timescaleWindow[1]);
     }
-    currentNames.add(file.label);
-    _mapLayerNamesSeen.add(file.label);
     window._geoMap.setLayer(file.label, points, { color: colour, dots: false });
   }
   for (const name of _mapLayerNamesSeen) {
@@ -650,7 +735,32 @@ function onChartCursorMove(u) {
   window._geoMap.draw();
 }
 
+// Hovering a "map" layer's own point (see redrawMap) doesn't have a
+// meaningful position in the numeric chart at all - its own `t` is a
+// per-cell last-updated time, not a sample along one coherent run, so
+// syncing it to the chart cursor the way a real trail point does would
+// just move the cursor to a distant, irrelevant spot (found live
+// 2026-09-14 - this is why hovering the scale-factor map didn't seem to
+// select anything: the general chart-cursor path swallowed it with no
+// visible effect). Highlighted and read out directly on/under the map
+// instead, entirely independent of the chart.
+function mapLegendHtml(file, point) {
+  const stdev = point.stdev === null || point.stdev === undefined ? "—" : point.stdev.toFixed(3);
+  return `<strong>${file.label}</strong>: mean = <strong>${point.mean.toFixed(3)}</strong>, stdev = ${stdev}, n = ${point.n}`;
+}
+
 function onMapHover(hit) {
+  const legendEl = document.getElementById("map-legend");
+  const hoveredFile = hit ? loaded.find((f) => f.label === hit.layer) : null;
+  if (hoveredFile && hoveredFile.is_map) {
+    window._geoMap.setLayer("__map-hover", [hit.point], { dots: true, dotRadius: (hoveredFile.mapStyle.pointSize || 5) + 3, color: "#212529", line: false });
+    window._geoMap.draw();
+    legendEl.innerHTML = mapLegendHtml(hoveredFile, hit.point);
+    return;
+  }
+  window._geoMap.setLayer("__map-hover", []);
+  window._geoMap.draw();
+  legendEl.innerHTML = "";
   if (!chart) return;
   if (!hit || hit.point.t === undefined) {
     chart.setCursor({ left: -10, top: -10 });
@@ -665,11 +775,16 @@ function redraw() {
   redrawMap();
 }
 
+function defaultMapStyle(index) {
+  return { colour: MAP_COLOURS[index % MAP_COLOURS.length], opacity: 0.6, pointSize: 5, layer: 0 };
+}
+
 async function fetchFile(s) {
   const resp = await fetch(`/api/logs/${s.source}/${s.filename}`);
   const text = await resp.text();
   const lines = text.trim().length ? text.trim().split("\n").map((l) => JSON.parse(l)) : [];
-  const file = { source: s.source, filename: s.filename, label: `${s.source}: ${fileLabel(s.source, s)}`, lines };
+  const file = { source: s.source, filename: s.filename, label: `${s.source}: ${fileLabel(s.source, s)}`, lines, is_map: !!s.is_map };
+  if (file.is_map) file.mapStyle = defaultMapStyle(0);  // index fixed up (colour picked to avoid clashing with other loaded maps) once all files are known - see loadSelected
   indexFile(file);
   return file;
 }
@@ -693,14 +808,20 @@ async function loadSelected() {
     // file's own network round trip, JSON parsing, and key/level
     // indexing no longer waits on the previous one's.
     loaded = await Promise.all(selected.map(fetchFile));
+    // A "map" pseudo-file's own lines carry a per-cell last-updated `t`,
+    // not samples of one coherent run - miles apart, and in no
+    // particular order (see wheelspeed's /api/scale-factor-map) - never
+    // a candidate for the shared timebase, ref or otherwise.
+    loaded.filter((f) => f.is_map).forEach((f, i) => { f.mapStyle = defaultMapStyle(i); });
+    const timedFiles = loaded.filter((f) => !f.is_map);
     const refFile = timescaleRef
-      ? loaded.find((f) => f.source === timescaleRef.source && f.filename === timescaleRef.filename)
+      ? timedFiles.find((f) => f.source === timescaleRef.source && f.filename === timescaleRef.filename)
       : null;
     if (refFile && refFile.lines.length) {
       timebaseT0 = refFile.lines[0].t;
       timescaleWindow = [0, refFile.lines[refFile.lines.length - 1].t - timebaseT0];
     } else {
-      const starts = loaded.filter((f) => f.lines.length).map((f) => f.lines[0].t);
+      const starts = timedFiles.filter((f) => f.lines.length).map((f) => f.lines[0].t);
       timebaseT0 = starts.length ? Math.min(...starts) : 0;
       timescaleWindow = null;
     }
