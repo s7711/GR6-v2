@@ -34,8 +34,8 @@ class NavigateStub:
     def navigate_status(self):
         return self._status
 
-    def set_status(self, state, abort_reason=None):
-        self._status = {"state": state, "abort_reason": abort_reason}
+    def set_status(self, state, abort_reason=None, heading_deg=None):
+        self._status = {"state": state, "abort_reason": abort_reason, "heading_deg": heading_deg}
 
 
 class HardwareStub:
@@ -456,6 +456,184 @@ class TestWaterStep(unittest.TestCase):
         status = runner.status()
         self.assertEqual(status["state"], "aborted")
         self.assertIn("already running", status["abort_reason"])
+
+    def test_sweep_deg_absent_never_touches_navigate_turn(self):
+        clock = FakeClock()
+        runner, stub, hw = make_runner(clock)
+        stub.set_status("idle", heading_deg=100)
+        runner.go("m", [{"type": "water", "duration_s": 60}])
+        clock.advance(68)
+        runner.tick()
+        self.assertEqual(stub.turn_calls, [])
+
+
+class TestWaterSweep(unittest.TestCase):
+    def test_sweep_issues_an_initial_retarget_to_minus_half_angle(self):
+        clock = FakeClock()
+        runner, stub, hw = make_runner(clock)
+        stub.set_status("idle", heading_deg=100)
+        runner.go("m", [{"type": "water", "duration_s": 60, "sweep_deg": 20}])
+        self.assertEqual(stub.turn_calls, [(90.0, None)])
+
+    def test_sweep_advances_the_target_over_time_towards_plus_half_angle(self):
+        clock = FakeClock()
+        runner, stub, hw = make_runner(clock)
+        stub.set_status("idle", heading_deg=100)
+        runner.go("m", [{"type": "water", "duration_s": 60, "sweep_deg": 20}])
+
+        # Walk through the 4 priming phases (2s each - see
+        # WATER_PRIME_PHASES), same as
+        # test_priming_sequence_runs_before_the_real_duration, to reach
+        # the real 60s duration - total sweep span is 8 + 60 = 68s.
+        for _ in range(4):
+            clock.advance(2)
+            runner.tick()
+        self.assertEqual(runner.status()["current_step_index"], 0)  # still watering
+
+        # Halfway through the whole 68s span (t=34) the target should be
+        # back on the original heading (100deg).
+        while clock.t < 34:
+            clock.advance(1)
+            runner.tick()
+        self.assertAlmostEqual(stub.turn_calls[-1][0], 100.0, places=3)
+
+        # Nearly at the end of the span, the target should have nearly
+        # reached +half (110deg) - not exactly at the very last tick,
+        # since that's the one where the deadline fires and the step
+        # moves on to reverting instead (see
+        # test_sweep_reverts_to_the_original_heading_once_pump_is_off).
+        while clock.t < 67:
+            clock.advance(1)
+            runner.tick()
+        self.assertGreater(stub.turn_calls[-1][0], 109.0)
+
+    def test_sweep_retarget_is_throttled_to_roughly_once_a_second(self):
+        clock = FakeClock()
+        runner, stub, hw = make_runner(clock)
+        stub.set_status("idle", heading_deg=100)
+        runner.go("m", [{"type": "water", "duration_s": 60, "sweep_deg": 20}])
+        calls_after_start = len(stub.turn_calls)
+        clock.advance(0.1)
+        runner.tick()
+        self.assertEqual(len(stub.turn_calls), calls_after_start)  # too soon - no new retarget yet
+        clock.advance(1.0)
+        runner.tick()
+        self.assertEqual(len(stub.turn_calls), calls_after_start + 1)
+
+    def test_sweep_refused_retarget_is_not_treated_as_a_failure(self):
+        # navigate's own /control/turn refuses while a previous turn
+        # hasn't reached tolerance yet ("a turn is already running") -
+        # this must not abort the job, just skip that tick.
+        clock = FakeClock()
+        runner, stub, hw = make_runner(clock)
+        stub.set_status("idle", heading_deg=100)
+        stub.turn_result = {"ok": False, "reason": "a turn is already running - stop it first"}
+        runner.go("m", [{"type": "water", "duration_s": 60, "sweep_deg": 20}])
+        clock.advance(1.0)
+        runner.tick()
+        self.assertEqual(runner.status()["state"], "running")
+
+    def test_sweep_reverts_to_the_original_heading_once_pump_is_off(self):
+        clock = FakeClock()
+        runner, stub, hw = make_runner(clock)
+        stub.set_status("idle", heading_deg=100)
+        runner.go("m", [{"type": "water", "duration_s": 60, "sweep_deg": 20}])
+
+        for on in (False, True, False, True):
+            clock.advance(2)
+            runner.tick()
+        clock.advance(60)
+        runner.tick()
+
+        # The step must not have advanced yet - it's waiting on the
+        # revert turn, same as a turn_to_heading step waits on navigate.
+        self.assertEqual(runner.status()["current_step_index"], 0)
+        self.assertEqual(stub.turn_calls[-1], (100, None))
+
+        stub.set_status("running", heading_deg=95)
+        runner.tick()
+        stub.set_status("stopped_ok", heading_deg=100)
+        runner.tick()
+        status = runner.status()
+        self.assertEqual(status["state"], "stopped_ok")
+        self.assertEqual(status["step_log"][-1]["outcome"], "ok")
+
+    def test_sweep_skipped_without_a_heading_fix_but_watering_still_happens(self):
+        clock = FakeClock()
+        runner, stub, hw = make_runner(clock)
+        stub.set_status("idle", heading_deg=None)
+        runner.go("m", [{"type": "water", "duration_s": 60, "sweep_deg": 20}])
+        self.assertEqual(stub.turn_calls, [])
+        self.assertEqual(hw.pump_calls, [True])
+
+        for on in (False, True, False, True):
+            clock.advance(2)
+            runner.tick()
+        clock.advance(60)
+        runner.tick()
+        status = runner.status()
+        # No heading was ever available to revert to - the step just
+        # finishes normally rather than waiting on a turn that was never
+        # started.
+        self.assertEqual(status["state"], "stopped_ok")
+        self.assertEqual(stub.turn_calls, [])
+
+    def test_stop_mid_sweep_stops_navigate_and_the_pump(self):
+        clock = FakeClock()
+        runner, stub, hw = make_runner(clock)
+        stub.set_status("idle", heading_deg=100)
+        runner.go("m", [{"type": "water", "duration_s": 60, "sweep_deg": 20}])
+        runner.stop()
+        self.assertEqual(runner.status()["state"], "idle")
+        self.assertEqual(stub.stop_calls, 1)
+        self.assertEqual(hw.pump_calls[-1], False)
+
+    def test_stop_during_sweep_revert_stops_navigate(self):
+        clock = FakeClock()
+        runner, stub, hw = make_runner(clock)
+        stub.set_status("idle", heading_deg=100)
+        runner.go("m", [{"type": "water", "duration_s": 60, "sweep_deg": 20}])
+        for on in (False, True, False, True):
+            clock.advance(2)
+            runner.tick()
+        clock.advance(60)
+        runner.tick()  # now reverting
+
+        runner.stop()
+        self.assertEqual(runner.status()["state"], "idle")
+        self.assertEqual(stub.stop_calls, 1)
+
+    def test_a_second_plain_water_step_after_a_swept_one_ticks_normally(self):
+        # Regression for a real bug found while implementing this:
+        # _water_reverting must be cleared when a new step starts, or a
+        # following plain "water" step gets routed through the
+        # navigate-status poller instead of _tick_timed, using stale
+        # leftover navigate state from the previous step's revert.
+        clock = FakeClock()
+        runner, stub, hw = make_runner(clock)
+        stub.set_status("idle", heading_deg=100)
+        runner.go("m", [
+            {"type": "water", "duration_s": 60, "sweep_deg": 20},
+            {"type": "water", "duration_s": 5},
+        ])
+        for on in (False, True, False, True):
+            clock.advance(2)
+            runner.tick()
+        clock.advance(60)
+        runner.tick()  # now reverting the first step
+        stub.set_status("running", heading_deg=95)
+        runner.tick()
+        stub.set_status("stopped_ok", heading_deg=100)
+        runner.tick()  # revert finishes, second water step starts
+
+        self.assertEqual(runner.status()["current_step_index"], 1)
+        pump_calls_at_second_step_start = len(hw.pump_calls)
+        clock.advance(1)
+        runner.tick()
+        # Still ticking the second step's own timed phases, not treating
+        # navigate's still-"stopped_ok" status as this step finishing.
+        self.assertEqual(runner.status()["current_step_index"], 1)
+        self.assertGreater(len(hw.pump_calls), pump_calls_at_second_step_start)
 
 
 class TestFillStep(unittest.TestCase):

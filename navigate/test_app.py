@@ -487,14 +487,14 @@ class NavigateAppTestCase(unittest.TestCase):
         self.assertEqual(app.runner.status()["state"], "aborted")
         lines_at_abort = app._debug_log_path.read_text().splitlines()
 
-        # 1.5s later - still within the tail, keeps logging.
-        with patch.object(app.time, "time", return_value=1001.5):
+        # 3s later - still within the tail (LOG_TAIL_AFTER_STOP_S=5.0), keeps logging.
+        with patch.object(app.time, "time", return_value=1003.0):
             app._control_tick()
         lines_in_tail = app._debug_log_path.read_text().splitlines()
         self.assertEqual(len(lines_in_tail), len(lines_at_abort) + 1)
 
-        # 3s after the abort - past the tail, stops logging.
-        with patch.object(app.time, "time", return_value=1003.0):
+        # 6s after the abort - past the tail, stops logging.
+        with patch.object(app.time, "time", return_value=1006.0):
             app._control_tick()
         lines_after_tail = app._debug_log_path.read_text().splitlines()
         self.assertEqual(len(lines_after_tail), len(lines_in_tail))
@@ -602,6 +602,13 @@ class NavigateAppTestCase(unittest.TestCase):
         snapshot = app._snapshot()
         self.assertEqual(snapshot["state"], "running")
         self.assertIsNone(snapshot["path_name"])
+
+    def test_snapshot_reports_the_current_heading(self):
+        # jobs' own "water" step sweep needs this - see _snapshot's
+        # comment.
+        self.assertIsNone(app._snapshot()["heading_deg"])
+        self._set_position(52.2, -1.5, 123)
+        self.assertEqual(app._snapshot()["heading_deg"], 123)
 
     def test_control_entry_check(self):
         paths_module.save_path(app.PATHS_DIR, "loop", SAMPLE_POINTS)

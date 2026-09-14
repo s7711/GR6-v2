@@ -113,6 +113,33 @@ viewer:
 No config beyond the standard four keys — there is nothing else to
 configure; see "Auto-discovery" above.
 
+## Timescale clipping and load performance (2026-09-14)
+
+Picking one selected file as the "Timescale" (a radio choice above the
+Load button) clips **both** the chart's x-axis and the map's plotted
+points to that file's own `[start, end]` span — added specifically for
+loading a short per-run file (e.g. a single navigate path) alongside a
+continuously-logged one (oxts-nav, wheelspeed, network) that otherwise
+covers far more time than the run being looked at. Found live: the map
+side of this was missing entirely (only the chart clipped), so picking
+a short timescale still showed a continuously-logged file's entire
+untrimmed trail on the map — both the wrong picture, and slower to
+render/auto-zoom than the much smaller clipped set actually needed.
+
+Loading a large file was also independently slow for its own reason:
+`numericKeys`/`categoricalKeys`/`categoryLevelsByKey` (which fields a
+file has, and a categorical field's distinct values) used to be
+recomputed by scanning every field of every line from scratch on every
+redraw, every quantity-checkbox toggle, and (for the categorical scan)
+once per *selected quantity* — several redundant full-file passes per
+Load for no reason, since none of that changes once a file is fetched.
+Now computed once per file (`indexFile()`, right after fetching) and
+cached on the file object. Files are also fetched in parallel
+(`Promise.all`) rather than one at a time, and the Load button shows
+"Loading…" (disabled) for the whole operation - fetch, indexing, and
+redraw - so a slow load is visibly still working rather than looking
+stuck with no feedback either way.
+
 ## Not yet built
 
 - **Global communication bus.** Ben's own longer-term idea: services

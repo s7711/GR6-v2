@@ -71,7 +71,14 @@ def load_path(name):
     try:
         resp = requests.post(f"{NAVIGATE_BASE_URL}/control/load/{name}", timeout=NAVIGATE_TIMEOUT_S)
         return resp.json()
-    except requests.exceptions.RequestException:
+    except requests.exceptions.RequestException as e:
+        # Logged with the real exception, not just a fixed string - see
+        # waterbutt_go's own comment (2026-09-12) for why: a "couldn't
+        # reach X" reason with nothing else logged is undiagnosable when
+        # it actually happens (seen live 2026-09-13: a run_path step
+        # failed this way and there was nothing to tell a timeout apart
+        # from a genuine connection failure).
+        logging.warning("[jobs] Couldn't reach navigate to load %r: %s", name, e)
         return {"ok": False, "reason": "couldn't reach navigate"}
 
 
@@ -79,15 +86,16 @@ def start_path():
     try:
         resp = requests.post(f"{NAVIGATE_BASE_URL}/control/start", timeout=NAVIGATE_TIMEOUT_S)
         return resp.json()
-    except requests.exceptions.RequestException:
+    except requests.exceptions.RequestException as e:
+        logging.warning("[jobs] Couldn't reach navigate to start: %s", e)
         return {"ok": False, "reason": "couldn't reach navigate"}
 
 
 def stop_path():
     try:
         requests.post(f"{NAVIGATE_BASE_URL}/control/stop", timeout=NAVIGATE_TIMEOUT_S)
-    except requests.exceptions.RequestException:
-        logging.warning("[jobs] Couldn't reach navigate to stop")
+    except requests.exceptions.RequestException as e:
+        logging.warning("[jobs] Couldn't reach navigate to stop: %s", e)
 
 
 def start_turn(heading_deg, tolerance_deg):
@@ -103,7 +111,8 @@ def start_turn(heading_deg, tolerance_deg):
     try:
         resp = requests.post(f"{NAVIGATE_BASE_URL}/control/turn", json=payload, timeout=NAVIGATE_TIMEOUT_S)
         return resp.json()
-    except requests.exceptions.RequestException:
+    except requests.exceptions.RequestException as e:
+        logging.warning("[jobs] Couldn't reach navigate to turn: %s", e)
         return {"ok": False, "reason": "couldn't reach navigate"}
 
 
@@ -118,7 +127,8 @@ def pump_on(on):
     try:
         resp = requests.post(f"{NAVIGATE_BASE_URL}/pump/manual", json={"on": on}, timeout=NAVIGATE_TIMEOUT_S)
         return resp.json()
-    except requests.exceptions.RequestException:
+    except requests.exceptions.RequestException as e:
+        logging.warning("[jobs] Couldn't reach navigate to set the pump: %s", e)
         return {"ok": False, "reason": "couldn't reach navigate"}
 
 
@@ -252,7 +262,6 @@ def inject_urls():
         # shared/web/static/sysstatus.js.
         "oxtsnav_ws_url": service_url(browser_host, "oxts-nav", scheme="ws") + "/ws/nav",
         "aruco_ws_url": service_url(browser_host, "aruco", scheme="ws") + "/ws/aruco",
-        "map_manager_ws_url": service_url(browser_host, "map-manager", scheme="ws") + "/ws/map-manager",
         "drive_ws_url": service_url(browser_host, "drive", scheme="ws") + "/ws/drive",  # battery badge - see sysstatus.js
         "wheelspeed_ws_url": service_url(browser_host, "wheelspeed", scheme="ws") + "/ws/wheelspeed",  # "W" badge - see sysstatus.js
     }

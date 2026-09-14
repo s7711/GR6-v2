@@ -366,6 +366,43 @@ actual xNAV command and the safety net:
   `while True` loop — same reason `navigate`'s `_control_tick()` was
   split out the same way.
 
+## Interference diagnostics (added 2026-09-14)
+
+`decoded_log_fields` now also includes `GnssPosReject`/`GnssVelReject`/
+`GnssAttReject` (the xNAV's own consecutive-rejected-update counters —
+NCOM manual/`ncomrx.py`'s `decodeStatus0`) and `InnPosXFilt`/
+`InnPosYFilt`/`InnPosZFilt` (the filtered GNSS-vs-INS position
+innovations, `ncomrx.py`'s `_updateInnovation`). Prompted by a real
+incident (2026-09-13, "Water kitchen bed 2 return" aborting on a
+spurious-looking heading error): diagnosing it meant decoding a whole
+hour of raw NCOM by hand (see `data/raw-logs/` - retained regardless,
+see "Nav data feed" above) since none of this was in the decoded log,
+taking several minutes for what turned out to be the actual root cause
+(GNSS position/velocity rejections climbing steadily for the run's
+entire duration, well before the abort itself) - logging them
+continuously means a future occurrence is a quick jsonl glance instead
+of a raw-NCOM decoding session.
+
+**Units, corrected 2026-09-14 (Ben)**: the innovations are normalised
+(signal divided by the combined INS+GNSS accuracy, i.e. standard
+deviations), not metres - a rejection is a several-sigma statistical
+disagreement, not necessarily a large physical one. A value of several
+std devs against a tight expected accuracy (RTK integer, ~cm-level)
+can mean an actual GNSS/INS difference of only a few cm - worth keeping
+in mind reading this field directly rather than assuming it's a
+distance.
+
+The xNAV has its own built-in recovery (`mobile.cfg`'s
+`gpsposrej_lim`, default -1 meaning 20 samples for position; velocity
+has its own, undocumented-here, default) - once the reject count hits
+this limit, it force-accepts the GNSS update, first decoupling the
+position update from the other filter states so the resulting jump
+doesn't corrupt them. This is why a real rejection episode shows up as
+the position (or heading) zig-zagging before settling, rather than a
+clean single jump - `navigate`'s own pure-pursuit heading-error abort
+on "Water kitchen bed 2 return" was very likely a legitimate reaction
+to this, not a control-loop artifact.
+
 ## Config additions (shared config file)
 
 - `xnav_ip` — the xNAV650's IP address (top-level, since other future

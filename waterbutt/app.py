@@ -43,22 +43,17 @@ VALVE_TIMEOUT_S = 3.0  # the ESP8266's own /open,/close handler blocks for ~0.5s
 # for /go's duration_s, so a stray/malicious client can't request an
 # arbitrary duration.
 DURATIONS_S = [1, 2, 5, 10, 20, 50, 120]
-# QC threshold choices, and the server-side allow-list for /go's
-# qc_threshold_m - same "operator picks from a fixed set, server
-# re-validates" reasoning as DURATIONS_S above.
-QC_THRESHOLD_OPTIONS_M = [0.05, 0.08, 0.10]
 
 cfg = load_config()
 service_cfg = cfg["services"]["waterbutt"]
 aruco_cfg = cfg["services"]["aruco"]
 drive_cfg = cfg["services"]["drive"]
 
-# Used for a /go call that doesn't pick a tolerance at all (e.g. jobs'
-# `fill` step, which has no threshold selector of its own yet) - a
-# config value, not a hardcoded constant, since this is exactly the
-# kind of thing worth tuning without a code change. See
-# waterbutt-prd.md's "QC gating on fill".
-QC_DEFAULT_THRESHOLD_M = service_cfg["qc_default_threshold_m"]
+# QC tolerance for /go's marker check - a config value, not a hardcoded
+# constant, since this is exactly the kind of thing worth tuning without
+# a code change. No longer operator-selectable in the UI (unused in
+# practice - see waterbutt-prd.md's "QC gating on fill").
+QC_THRESHOLD_M = service_cfg["qc_default_threshold_m"]
 
 VALVE_HOSTNAME = service_cfg["hostname"]
 QC_MARKER_PATH = Path(__file__).resolve().parent.parent / service_cfg["qc_marker_file"]
@@ -252,7 +247,6 @@ def inject_urls():
         # shared/web/static/sysstatus.js.
         "oxtsnav_ws_url": service_url(browser_host, "oxts-nav", scheme="ws") + "/ws/nav",
         "aruco_ws_url": service_url(browser_host, "aruco", scheme="ws") + "/ws/aruco",
-        "map_manager_ws_url": service_url(browser_host, "map-manager", scheme="ws") + "/ws/map-manager",
         "drive_ws_url": service_url(browser_host, "drive", scheme="ws") + "/ws/drive",  # battery badge - see sysstatus.js
         "wheelspeed_ws_url": service_url(browser_host, "wheelspeed", scheme="ws") + "/ws/wheelspeed",  # "W" badge - see sysstatus.js
     }
@@ -306,16 +300,13 @@ def go():
     duration_s = payload["duration_s"]
     if duration_s not in DURATIONS_S:
         abort(400)
-    threshold_m = payload.get("qc_threshold_m", QC_DEFAULT_THRESHOLD_M)
-    if threshold_m not in QC_THRESHOLD_OPTIONS_M:
-        abort(400)
 
     # No QC marker means no fill - a missing/unreachable/out-of-range
     # check refuses the same as a too-far-away one, never silently
     # skipped. See waterbutt-prd.md's "QC gating on fill".
     reading = get_qc_reading()
-    if not qc_check.passes(reading, threshold_m):
-        return jsonify({"ok": False, "reason": _qc_refusal_reason(reading, threshold_m)}), 409
+    if not qc_check.passes(reading, QC_THRESHOLD_M):
+        return jsonify({"ok": False, "reason": _qc_refusal_reason(reading, QC_THRESHOLD_M)}), 409
 
     # Not confident the butt is actually empty - refuse rather than
     # risk overflowing. See waterbutt-prd.md's "Tank level estimate".
@@ -355,7 +346,7 @@ def ws_waterbutt(ws):
 
 
 def run_context():
-    return {"durations_s": DURATIONS_S, "qc_threshold_options_m": QC_THRESHOLD_OPTIONS_M, "qc_default_threshold_m": QC_DEFAULT_THRESHOLD_M}
+    return {"durations_s": DURATIONS_S}
 
 
 register_pages(app, PAGES_DIR, index_slug="run", context_providers={"run": run_context})

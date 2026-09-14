@@ -57,7 +57,6 @@ def inject_manager_url():
         # shared/web/static/sysstatus.js.
         "oxtsnav_ws_url": service_url(browser_host, "oxts-nav", scheme="ws") + "/ws/nav",
         "aruco_ws_url": service_url(browser_host, "aruco", scheme="ws") + "/ws/aruco",
-        "map_manager_ws_url": service_url(browser_host, "map-manager", scheme="ws") + "/ws/map-manager",
         "drive_ws_url": service_url(browser_host, "drive", scheme="ws") + "/ws/drive",  # battery badge - see sysstatus.js
         "wheelspeed_ws_url": service_url(browser_host, "wheelspeed", scheme="ws") + "/ws/wheelspeed",  # "W" badge - see sysstatus.js
     }

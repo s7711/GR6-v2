@@ -61,6 +61,10 @@
             Aruco priority (turn GNSS off for this pause, so it's already settled on the marker before the next path starts)
           </label>
         </div>
+        <div id="step-sweep-field" class="mt-3 d-none">
+          <label class="form-label">Sweep (turn back and forth through this arc while watering)</label>
+          <select id="step-sweep" class="form-select"></select>
+        </div>
         <div id="step-turn-fields" class="d-none">
           <div class="row g-2">
             <div class="col-6">
@@ -122,6 +126,22 @@ const STEP_LABELS = { pause: "Pause", water: "Water (stationary)", fill: "Fill w
 // it gets its own shorter list rather than a duration that would always
 // be refused at run time. Pause/water have no such restriction.
 const DURATION_OPTIONS_S = { pause: [5, 10, 20, 60], water: [5, 10, 20, 60], fill: [5, 10, 20, 50] };
+// A "water" step's sweep_deg (added 2026-09-13) - turns back and forth
+// through this arc while watering instead of hitting one spot; 0 (the
+// default, and the only option pre-existing jobs have) mimics the
+// original stationary behaviour exactly - see jobs-prd.md's "Water
+// sweep". Same fixed-choices/server-just-reads-it reasoning as the
+// duration options above, but there's no hardware allow-list to match
+// here (unlike DURATIONS_S/fill's own choices), since a sweep is only
+// ever approximate.
+const SWEEP_OPTIONS_DEG = [0, 10, 20, 30];
+
+function sweepOptionsHtml(selected) {
+  return SWEEP_OPTIONS_DEG.map((d) => {
+    const label = d === 0 ? "No sweep" : `${d}&deg; sweep`;
+    return `<option value="${d}" ${d === selected ? "selected" : ""}>${label}</option>`;
+  }).join("");
+}
 
 let steps = []; // [{type: "run_path", path: "..."}, {type: "pause"|"water"|"fill", duration_s: N}, {type: "turn_to_heading", heading_deg: N, tolerance_deg: N|undefined}]
 let dirty = false;
@@ -148,12 +168,22 @@ function stepCellHtml(step) {
     const tolerance = step.tolerance_deg !== undefined ? `&plusmn;${step.tolerance_deg}` : "default tolerance";
     return `${STEP_LABELS[step.type]} &mdash; ${step.heading_deg}&deg; (${tolerance})`;
   }
-  if (step.type === "pause") {
-    return `${STEP_LABELS[step.type]} &mdash; ${step.duration_s}s
+  if (step.type === "pause" || step.type === "water") {
+    const options = DURATION_OPTIONS_S[step.type]
+      .map((s) => `<option value="${s}" ${s === step.duration_s ? "selected" : ""}>${s}s</option>`)
+      .join("");
+    const arucoField = step.type === "pause" ? `
       <div class="form-check form-check-inline ms-2">
         <input type="checkbox" class="form-check-input step-aruco-priority" ${step.aruco_priority ? "checked" : ""}>
         <label class="form-check-label small text-muted">aruco priority</label>
-      </div>`;
+      </div>` : "";
+    const sweepField = step.type === "water"
+      ? `<select class="form-select form-select-sm step-sweep-inline d-inline-block w-auto ms-2">${sweepOptionsHtml(step.sweep_deg || 0)}</select>`
+      : "";
+    return `${STEP_LABELS[step.type]} &mdash;
+      <select class="form-select form-select-sm step-duration-inline d-inline-block w-auto">${options}</select>
+      ${sweepField}
+      ${arucoField}`;
   }
   return `${STEP_LABELS[step.type]} &mdash; ${step.duration_s}s`;
 }
@@ -178,6 +208,21 @@ function renderSteps() {
         steps[i].path = e.target.value;
         dirty = true;
         updateMap();
+      });
+    }
+    const durationSelect = tr.querySelector(".step-duration-inline");
+    if (durationSelect) {
+      durationSelect.addEventListener("change", (e) => {
+        steps[i].duration_s = parseInt(e.target.value, 10);
+        dirty = true;
+      });
+    }
+    const sweepSelect = tr.querySelector(".step-sweep-inline");
+    if (sweepSelect) {
+      sweepSelect.addEventListener("change", (e) => {
+        const deg = parseInt(e.target.value, 10);
+        if (deg) steps[i].sweep_deg = deg; else delete steps[i].sweep_deg;
+        dirty = true;
       });
     }
     const arucoCheckbox = tr.querySelector(".step-aruco-priority");
@@ -251,10 +296,13 @@ const stepDurationSelect = document.getElementById("step-duration");
 function fillStepDurationOptions() {
   const isTurn = stepTypeSelect.value === "turn_to_heading";
   const isPause = stepTypeSelect.value === "pause";
+  const isWater = stepTypeSelect.value === "water";
   document.getElementById("step-duration-fields").classList.toggle("d-none", isTurn);
   document.getElementById("step-turn-fields").classList.toggle("d-none", !isTurn);
   document.getElementById("step-aruco-priority-field").classList.toggle("d-none", !isPause);
+  document.getElementById("step-sweep-field").classList.toggle("d-none", !isWater);
   if (!isPause) document.getElementById("step-aruco-priority").checked = false;
+  if (isWater) document.getElementById("step-sweep").innerHTML = sweepOptionsHtml(0);
   if (isTurn) return;
   const options = DURATION_OPTIONS_S[stepTypeSelect.value];
   stepDurationSelect.innerHTML = options.map((s) => `<option value="${s}">${s}s</option>`).join("");
@@ -276,6 +324,10 @@ document.getElementById("step-modal-add").addEventListener("click", () => {
     const step = { type: stepTypeSelect.value, duration_s: parseInt(stepDurationSelect.value, 10) };
     if (stepTypeSelect.value === "pause" && document.getElementById("step-aruco-priority").checked) {
       step.aruco_priority = true;
+    }
+    if (stepTypeSelect.value === "water") {
+      const sweepDeg = parseInt(document.getElementById("step-sweep").value, 10);
+      if (sweepDeg) step.sweep_deg = sweepDeg;
     }
     steps.push(step);
   }

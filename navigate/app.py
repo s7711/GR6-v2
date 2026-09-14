@@ -242,7 +242,15 @@ def _start_new_debug_log():
     written on every line below — that's the one an actual viewer
     should key off, since a filename could in principle collide or get
     truncated; the name in the filename is just a convenience mirror
-    of it."""
+    of it.
+
+    Nothing stops this being called (a new /control/start or /control/
+    turn) while a previous run's LOG_TAIL_AFTER_STOP_S tail is still
+    being written - reassigning _debug_log_path here just means that
+    tail's remaining lines never get queued, so the old run's log ends
+    up shorter than a full tail (whatever had already been enqueued
+    still lands in the right file - see _append_debug_log's own
+    comment on why that can't cross-contaminate the new run's log)."""
     global _debug_log_path
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.datetime.now().strftime("%y%m%d_%H%M%S")
@@ -338,7 +346,7 @@ _control_loop_last_state = "idle"
 # Only an operator-pressed Stop (PathRunner.stop()/TurnRunner.stop(), which
 # set state straight to "idle") ever ended it before this fix.
 _terminal_state_entered_at = None
-LOG_TAIL_AFTER_STOP_S = 2.0  # deliberately short - "let me see what happens right after it stops", not an unbounded idle recording
+LOG_TAIL_AFTER_STOP_S = 5.0  # raised from 2.0 (2026-09-14) - 2s cut off before the robot had actually settled after an abort; still deliberately short - "let me see what happens right after it stops", not an unbounded idle recording. If a new run starts before this tail elapses (nothing stops that - see _start_new_debug_log's docstring), the previous run's tail is simply cut short at that point, not corrupted or merged with the new run's own log.
 
 
 def _control_tick():
@@ -431,7 +439,6 @@ def inject_urls():
         # For the shared header's Aruco status badge — see
         # shared/web/static/sysstatus.js.
         "aruco_ws_url": service_url(browser_host, "aruco", scheme="ws") + "/ws/aruco",
-        "map_manager_ws_url": service_url(browser_host, "map-manager", scheme="ws") + "/ws/map-manager",
         "drive_ws_url": service_url(browser_host, "drive", scheme="ws") + "/ws/drive",  # battery badge - see sysstatus.js
         "wheelspeed_ws_url": service_url(browser_host, "wheelspeed", scheme="ws") + "/ws/wheelspeed",  # "W" badge - see sysstatus.js
     }
@@ -743,9 +750,17 @@ def control_stop():
 
 
 def _snapshot():
+    # heading_deg (added 2026-09-13): jobs' own "water" step sweep needs
+    # the robot's actual current heading to sweep around, and this feed
+    # is the one jobs already subscribes to (navigate_feed_socket) for
+    # run_path/turn_to_heading polling - piggybacking here avoids a
+    # second feed subscription just for one number. None if no fix yet,
+    # same as _current_position() itself.
+    position = _current_position()
+    heading_deg = position["heading_deg"] if position is not None else None
     if _active_kind == "turn":
-        return {**turn_runner.status(), "path_name": None}
-    return {**runner.status(), "path_name": _current_path_name}
+        return {**turn_runner.status(), "path_name": None, "heading_deg": heading_deg}
+    return {**runner.status(), "path_name": _current_path_name, "heading_deg": heading_deg}
 
 
 @sock.route("/ws/navigate")

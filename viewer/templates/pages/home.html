@@ -10,9 +10,9 @@
   quantities per file (each file gets its own tab), then Load. The chart's x-axis is
   seconds since the earliest loaded file's own start (fixed for the whole loaded set, not
   per file), so files covering the same real event stay aligned — unless you pick one
-  selected file as the timescale below, in which case the chart is clipped to that file's
-  own span (handy for a short run alongside a continuously-logged file that covers far
-  more than you need). Hover the chart to see the matching position on the map, the map
+  selected file as the timescale below, in which case both the chart and the map are
+  clipped to that file's own span (handy for a short run alongside a continuously-logged
+  file that covers far more than you need). Hover the chart to see the matching position on the map, the map
   to jump the chart there, or the chart to read exact values + time under it.
 </p>
 
@@ -289,52 +289,58 @@ async function refreshSources() {
   renderSuggested();
 }
 
-function numericKeysOf(lines) {
-  const keys = new Set();
-  for (const line of lines) {
-    for (const [k, v] of Object.entries(line)) {
-      if (k !== "t" && typeof v === "number") keys.add(k);
-    }
-  }
-  return keys;
-}
+// numericKeys/categoricalKeys/categoryLevelsByKey are computed ONCE per
+// file, in indexFile() below, right after it's fetched - not
+// recomputed from scratch (a full scan of every field of every line)
+// on every redraw, every checkbox toggle, or once per selected
+// quantity. Found live 2026-09-14: loading a continuously-logged file
+// (oxts-nav, ~7000 lines) alongside a short one made the page feel
+// stuck for a long stretch with no feedback that anything was
+// happening at all - these repeated full-file rescans (several times
+// over, once per selected quantity in the worst case) were a real,
+// avoidable chunk of that.
 
 // String-valued fields (e.g. network's `connected_bssid`, already a
 // friendly name/BSSID string by the time it's logged - see
 // network/scanner.py) - plottable the same way as a numeric field, just
 // coded to small integers first (see categoryLevelsOf) since a chart
-// axis is numeric. Kept as a separate set from numericKeysOf, not
+// axis is numeric. Kept as a separate set from numeric fields, not
 // merged into it, so a field can never accidentally flip type key-by-key
 // depending on which lines happen to be in the loaded file.
-function categoricalKeysOf(lines) {
-  const keys = new Set();
-  for (const line of lines) {
-    for (const [k, v] of Object.entries(line)) {
-      if (k !== "t" && typeof v === "string") keys.add(k);
-    }
-  }
-  return keys;
-}
-
-function plottableKeysOf(lines) {
-  return new Set([...numericKeysOf(lines), ...categoricalKeysOf(lines)]);
-}
-
-// Distinct string values of file.lines[*][key], in first-appearance
-// order - the order becomes each value's plotted integer code (0, 1,
-// 2, ...), and the legend readout maps the code straight back to the
-// original string (see updateLegendReadout).
-function categoryLevelsOf(file, key) {
-  const levels = [];
-  const seen = new Set();
+function indexFile(file) {
+  const numericKeys = new Set();
+  const categoricalKeys = new Set();
   for (const line of file.lines) {
-    const v = line[key];
-    if (typeof v === "string" && !seen.has(v)) {
-      seen.add(v);
-      levels.push(v);
+    for (const [k, v] of Object.entries(line)) {
+      if (k === "t") continue;
+      if (typeof v === "number") numericKeys.add(k);
+      else if (typeof v === "string") categoricalKeys.add(k);
     }
   }
-  return levels;
+  file.numericKeys = numericKeys;
+  file.categoricalKeys = categoricalKeys;
+  file.plottableKeys = new Set([...numericKeys, ...categoricalKeys]);
+  // Distinct string values per categorical key, in first-appearance
+  // order - the order becomes each value's plotted integer code (0, 1,
+  // 2, ...), and the legend readout maps the code straight back to the
+  // original string (see updateLegendReadout).
+  file.categoryLevelsByKey = new Map();
+  if (categoricalKeys.size) {
+    const seenByKey = new Map();
+    for (const key of categoricalKeys) {
+      file.categoryLevelsByKey.set(key, []);
+      seenByKey.set(key, new Set());
+    }
+    for (const line of file.lines) {
+      for (const key of categoricalKeys) {
+        const v = line[key];
+        if (typeof v === "string" && !seenByKey.get(key).has(v)) {
+          seenByKey.get(key).add(v);
+          file.categoryLevelsByKey.get(key).push(v);
+        }
+      }
+    }
+  }
 }
 
 function quantityKey(file, key) {
@@ -351,7 +357,7 @@ function refreshQuantityTabs() {
   tabsEl.innerHTML = "";
   contentEl.innerHTML = "";
   loaded.forEach((file, i) => {
-    const keys = Array.from(plottableKeysOf(file.lines)).sort();
+    const keys = Array.from(file.plottableKeys).sort();
     const prefix = `${file.source}__${file.filename}__`;
     const hasAnySelected = Array.from(selectedQuantities).some((sk) => sk.startsWith(prefix));
     if (!hasAnySelected) {
@@ -415,7 +421,7 @@ let lastPairs = [];
 function activeQuantityPairs() {
   const pairs = [];
   for (const file of loaded) {
-    for (const key of plottableKeysOf(file.lines)) {
+    for (const key of file.plottableKeys) {
       if (selectedQuantities.has(quantityKey(file, key))) pairs.push({ file, key });
     }
   }
@@ -487,7 +493,7 @@ function redrawChart() {
     const { file, key } = pair;
     const colour = COLOURS[colourIndex % COLOURS.length];
     colourIndex++;
-    const levels = categoricalKeysOf(file.lines).has(key) ? categoryLevelsOf(file, key) : null;
+    const levels = file.categoricalKeys.has(key) ? file.categoryLevelsByKey.get(key) : null;
     // Categorical values are coded to their index in `levels` so uPlot
     // (numeric-only) can plot them at all - updateLegendReadout maps the
     // code straight back via the same `levels` array stashed on the pair.
@@ -562,7 +568,16 @@ function redrawMap() {
     const colour = COLOURS[colourIndex % COLOURS.length];
     colourIndex++;
     mapFileColours.set(file.label, colour);
-    const points = file.lines.filter((l) => typeof l.lat === "number" && typeof l.lon === "number");
+    let points = file.lines.filter((l) => typeof l.lat === "number" && typeof l.lon === "number");
+    // Same timescaleWindow the chart clips to (see redrawChart) - found
+    // live 2026-09-14: picking a short file as the timescale still left
+    // the map showing a continuously-logged file's (e.g. oxts-nav's)
+    // entire hour-long trail, both the wrong picture and slower to
+    // render/auto-zoom than the handful of points that actually fall in
+    // the window being looked at.
+    if (timescaleWindow) {
+      points = points.filter((l) => l.t - timebaseT0 >= timescaleWindow[0] && l.t - timebaseT0 <= timescaleWindow[1]);
+    }
     currentNames.add(file.label);
     _mapLayerNamesSeen.add(file.label);
     window._geoMap.setLayer(file.label, points, { color: colour, dots: false });
@@ -650,27 +665,53 @@ function redraw() {
   redrawMap();
 }
 
+async function fetchFile(s) {
+  const resp = await fetch(`/api/logs/${s.source}/${s.filename}`);
+  const text = await resp.text();
+  const lines = text.trim().length ? text.trim().split("\n").map((l) => JSON.parse(l)) : [];
+  const file = { source: s.source, filename: s.filename, label: `${s.source}: ${fileLabel(s.source, s)}`, lines };
+  indexFile(file);
+  return file;
+}
+
 async function loadSelected() {
-  loaded = [];
-  for (const s of selected) {
-    const resp = await fetch(`/api/logs/${s.source}/${s.filename}`);
-    const text = await resp.text();
-    const lines = text.trim().length ? text.trim().split("\n").map((l) => JSON.parse(l)) : [];
-    loaded.push({ source: s.source, filename: s.filename, label: `${s.source}: ${fileLabel(s.source, s)}`, lines });
+  // Covers the whole operation (fetch + index + redraw), not just the
+  // fetch - found live 2026-09-14: a large file made this take long
+  // enough that "did clicking Load actually do anything?" was a
+  // reasonable question with no other feedback on screen. A brief
+  // yield (setTimeout 0) before the heavy synchronous part below lets
+  // the browser actually paint the disabled/"Loading…" button first,
+  // rather than the whole thing running as one uninterrupted blocking
+  // stretch that includes the button update itself.
+  const btn = document.getElementById("load-btn");
+  const startedAt = performance.now();
+  btn.disabled = true;
+  btn.textContent = "Loading…";
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  try {
+    // In parallel, not one fetch-then-parse-then-index at a time - each
+    // file's own network round trip, JSON parsing, and key/level
+    // indexing no longer waits on the previous one's.
+    loaded = await Promise.all(selected.map(fetchFile));
+    const refFile = timescaleRef
+      ? loaded.find((f) => f.source === timescaleRef.source && f.filename === timescaleRef.filename)
+      : null;
+    if (refFile && refFile.lines.length) {
+      timebaseT0 = refFile.lines[0].t;
+      timescaleWindow = [0, refFile.lines[refFile.lines.length - 1].t - timebaseT0];
+    } else {
+      const starts = loaded.filter((f) => f.lines.length).map((f) => f.lines[0].t);
+      timebaseT0 = starts.length ? Math.min(...starts) : 0;
+      timescaleWindow = null;
+    }
+    refreshQuantityTabs();
+    redraw();
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Load selected";
   }
-  const refFile = timescaleRef
-    ? loaded.find((f) => f.source === timescaleRef.source && f.filename === timescaleRef.filename)
-    : null;
-  if (refFile && refFile.lines.length) {
-    timebaseT0 = refFile.lines[0].t;
-    timescaleWindow = [0, refFile.lines[refFile.lines.length - 1].t - timebaseT0];
-  } else {
-    const starts = loaded.filter((f) => f.lines.length).map((f) => f.lines[0].t);
-    timebaseT0 = starts.length ? Math.min(...starts) : 0;
-    timescaleWindow = null;
-  }
-  refreshQuantityTabs();
-  redraw();
+  const loadMs = performance.now() - startedAt;
+  if (loadMs > 500) console.log(`Log viewer: loaded ${loaded.length} file(s) in ${loadMs.toFixed(0)}ms`);
 }
 
 document.getElementById("load-btn").addEventListener("click", loadSelected);

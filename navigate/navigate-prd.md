@@ -973,6 +973,20 @@ without data.
   First real "point of the whole project" run — it watered an actual
   bed, not just a test path.
 
+  **Revisited (2026-09-14)**: `cte_gain: 0.3` turned out not to have
+  fully settled the oscillation after all - "Water kitchen bed 2
+  return"'s own debug log (2026-09-13, the same run that later aborted
+  on a tight curve with a spurious "heading error -73.6deg", since eased
+  by widening that corner) showed a sustained, un-decaying
+  heading_error/wheel-speed oscillation the whole run (roughly
+  +-30-50deg every 5-6s on that tight curve, +-15deg even on a gentler
+  path, "Safe waterbutt leave," the same day) - not just a slow-decaying
+  overshoot approaching the end of a run, as the 07-30 test happened to
+  show. Lowered `cte_gain` again, 0.3 -> 0.15, same reasoning as before
+  (the no-phase-lead term is the prime suspect) - not yet field-verified.
+  If it's still oscillating, try `heading_gain: 0.8 -> 0.6` next, one
+  variable at a time rather than changing both together.
+
 ## Resolved design questions
 
 - **Differential age**: already available with no upstream change

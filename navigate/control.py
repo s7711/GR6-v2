@@ -208,6 +208,16 @@ class PathRunner:
                     robot_north - self._last_robot_local[0], robot_east - self._last_robot_local[1]
                 )
             self._last_robot_local = (robot_north, robot_east)
+            # Written into last_status incrementally as each value becomes
+            # available (here, and again below), rather than only in one
+            # block at the very end - every abort branch below returns
+            # early, and used to leave last_status (what the debug log and
+            # /ws/navigate actually show) holding the *previous* tick's
+            # values instead of whatever just triggered the abort. Found
+            # live 2026-09-13: a heading-error abort logged "-12.6deg" as
+            # the current heading error when the value that actually
+            # tripped it (and is in abort_reason) was -73.6deg.
+            self.last_status["distance_travelled_m"] = self.distance_travelled_m
 
             limit = self.config["localisation_accuracy_limit_m"]
             if horizontal_accuracy_m is not None and horizontal_accuracy_m > limit:
@@ -234,6 +244,10 @@ class PathRunner:
             self.tracked_index = result.tracked_index
 
             clearance = self.path[self.tracked_index].clearance_m
+            self.last_status["tracked_index"] = self.tracked_index
+            self.last_status["cross_track_error_m"] = result.cross_track_error_m
+            self.last_status["clearance_m"] = clearance
+            self.last_status["clearance_headroom_m"] = clearance - abs(result.cross_track_error_m)
             if abs(result.cross_track_error_m) > clearance:
                 self._abort(
                     f"cross-track error {result.cross_track_error_m:.2f}m exceeds "
@@ -244,6 +258,7 @@ class PathRunner:
             heading_err = geometry.heading_error_deg(
                 robot_heading_deg, robot_north, robot_east, result.north, result.east
             )
+            self.last_status["heading_error_deg"] = heading_err
             max_heading = self.config["max_heading_correction_deg"]
             if abs(heading_err) > max_heading:
                 self._abort(f"heading error {heading_err:.1f}deg exceeds limit {max_heading:.1f}deg")
@@ -286,17 +301,14 @@ class PathRunner:
             # because this used to only resend on a state change.
             self.send_pump(result.pump)
 
-            self.last_status = {
-                "tracked_index": self.tracked_index,
-                "cross_track_error_m": result.cross_track_error_m,
-                "clearance_m": clearance,
-                "clearance_headroom_m": clearance - abs(result.cross_track_error_m),
-                "heading_error_deg": heading_err,
-                "distance_travelled_m": self.distance_travelled_m,
-                "target_speed_mps": result.speed_mps,
-                "left_mps": left,
-                "right_mps": right,
-            }
+            # tracked_index/cross_track_error_m/clearance_m/
+            # clearance_headroom_m/heading_error_deg/distance_travelled_m
+            # were already written into last_status above, as each became
+            # available - only these three are new this far into a
+            # non-aborting tick.
+            self.last_status["target_speed_mps"] = result.speed_mps
+            self.last_status["left_mps"] = left
+            self.last_status["right_mps"] = right
 
     def _abort(self, reason):
         self.state = "aborted"

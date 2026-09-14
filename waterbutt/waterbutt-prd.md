@@ -217,16 +217,14 @@ of them silently pass. This runs in `app.py`'s `/go` route (not
 all) — the same place `duration_s` is already validated against
 `DURATIONS_S`.
 
-The threshold is selectable, not fixed — `qc_threshold_m`, an
-allow-listed choice (`QC_THRESHOLD_OPTIONS_M`: 5/8/10cm, same
-"operator picks from a fixed set, server re-validates" reasoning as
-`DURATIONS_S`) on the Run page next to the duration slider. A `/go`
-call that doesn't specify one at all (`jobs`' own `fill` step, which
-has no threshold selector of its own yet — see jobs-prd.md) gets
-`QC_DEFAULT_THRESHOLD_M` (8cm). `jobs`' `waterbutt_go()` surfaces the
-refusal's actual `reason` (not a generic "waterbutt refused") so a
-`fill` step's abort reason says *why* — too far, not visible, or
-never configured — not just that it failed.
+The threshold is a single global constant, `QC_THRESHOLD_M`
+(`qc_default_threshold_m` in config.yaml, 8cm) — not
+operator-selectable (removed 2026-09-13; the Run page's tolerance
+picker went unused, so it was dropped to declutter the screen).
+`jobs`' `waterbutt_go()` surfaces the refusal's actual `reason` (not a
+generic "waterbutt refused") so a `fill` step's abort reason says
+*why* — too far, not visible, or never configured — not just that it
+failed.
 
 ### QC reading log (added 2026-08-12)
 

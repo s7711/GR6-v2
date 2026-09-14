@@ -64,37 +64,23 @@ class WaterbuttAppTestCase(unittest.TestCase):
 
     def test_go_refused_when_beyond_threshold(self):
         app._set_qc_reading({"state": "ok", "marker_id": 12, "distance_m": 0.15})
-        resp = self.client.post("/go", json={"duration_s": 5, "qc_threshold_m": 0.08})
+        resp = self.client.post("/go", json={"duration_s": 5})
         self.assertEqual(resp.status_code, 409)
         self.assertIn("15.0cm", resp.get_json()["reason"])
-        self.assertIn("8cm", resp.get_json()["reason"])
+        self.assertIn("8cm", resp.get_json()["reason"])  # app.QC_THRESHOLD_M
         self.assertEqual(self.valve_stub.go_calls, [])
 
     def test_go_allowed_within_threshold(self):
         app._set_qc_reading({"state": "ok", "marker_id": 12, "distance_m": 0.04})
-        resp = self.client.post("/go", json={"duration_s": 5, "qc_threshold_m": 0.08})
+        resp = self.client.post("/go", json={"duration_s": 5})
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(self.valve_stub.go_calls, [5])
 
     def test_go_allowed_exactly_at_threshold(self):
         app._set_qc_reading({"state": "ok", "marker_id": 12, "distance_m": 0.08})
-        resp = self.client.post("/go", json={"duration_s": 5, "qc_threshold_m": 0.08})
+        resp = self.client.post("/go", json={"duration_s": 5})
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(self.valve_stub.go_calls, [5])
-
-    def test_go_with_no_threshold_specified_uses_the_default(self):
-        # e.g. jobs' `fill` step, which has no threshold selector of its
-        # own yet - see waterbutt-prd.md's "QC gating on fill".
-        app._set_qc_reading({"state": "ok", "marker_id": 12, "distance_m": 0.081})
-        resp = self.client.post("/go", json={"duration_s": 5})
-        self.assertEqual(resp.status_code, 409)
-        self.assertIn("8cm", resp.get_json()["reason"])  # app.QC_DEFAULT_THRESHOLD_M
-
-    def test_go_rejects_a_threshold_outside_the_allow_list(self):
-        app._set_qc_reading({"state": "ok", "marker_id": 12, "distance_m": 0.01})
-        resp = self.client.post("/go", json={"duration_s": 5, "qc_threshold_m": 0.5})
-        self.assertEqual(resp.status_code, 400)
-        self.assertEqual(self.valve_stub.go_calls, [])
 
     def test_go_rejects_a_duration_outside_the_allow_list(self):
         app._set_qc_reading({"state": "ok", "marker_id": 12, "distance_m": 0.01})

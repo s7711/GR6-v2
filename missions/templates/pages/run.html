@@ -76,16 +76,27 @@ createJoystick(document.getElementById("joystick"), document.getElementById("joy
 });
 </script>
 <script>
-// Same step-colour cycling/fading as jobs' own Run page - see that
-// page's comment for why (cycled by step index so a job that reuses a
-// path for two steps still tells them apart; faded since this is the
-// upcoming job's *planned* route, not a live trail).
-const STEP_COLORS = [
-  "rgba(13, 110, 253, 0.35)", "rgba(220, 53, 69, 0.35)", "rgba(25, 135, 84, 0.35)",
-  "rgba(253, 126, 20, 0.35)", "rgba(111, 66, 193, 0.35)",
-];
+// Draws every job in the mission at once (added 2026-09-13 - the
+// previous version only ever drew the upcoming job, so the map looked
+// empty/wrong for most of a mission's run): the job that's actually
+// current (the live current_step_index while running, otherwise
+// whichever the "Start from job" dropdown has selected) at full
+// opacity, every other job faded - a glance says both "where's it
+// going right now" and "what's the whole round". Colour still cycles
+// by step index within a job (same as jobs' own Run page), so a job
+// that reuses a path for two steps still tells them apart.
+const STEP_COLORS_RGB = [[13, 110, 253], [220, 53, 69], [25, 135, 84], [253, 126, 20], [111, 66, 193]];
+const CURRENT_JOB_ALPHA = 0.9;
+const OTHER_JOB_ALPHA = 0.3;
+function stepColor(i, alpha) {
+  const [r, g, b] = STEP_COLORS_RGB[i % STEP_COLORS_RGB.length];
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
 const pathPointsCache = {};
+const jobCache = {}; // job name -> {"steps": [...]} - a job's own steps don't depend on which mission references it, so this outlives a single mission selection
 let currentSteps = []; // [{type: "run_job", job: "..."}, ...] - set whenever a mission's steps are fetched
+let lastRenderedCurrentIndex = null; // whichever mission step is drawn at full opacity - live current_step_index while running, else the "Start from job" selection
 
 const missionSelect = document.getElementById("mission-select");
 const startStepSelect = document.getElementById("start-step");
@@ -93,7 +104,7 @@ const map = createGeoMap(document.getElementById("map-canvas"), document.getElem
 map.setZoom("auto");
 
 // Rebuilds the "Start from job" dropdown from currentSteps (already
-// fetched by refreshUpcomingJob) so each entry reads e.g. "2 (water-the-tomatoes)"
+// fetched by refreshMissionSteps) so each entry reads e.g. "2 (water-the-tomatoes)"
 // - same idea as jobs' own Run page (2026-08-18).
 function fillStartSteps() {
   const selected = startStepSelect.value;
@@ -109,58 +120,85 @@ function fillStartSteps() {
   }
 }
 
-// Previews whichever job will actually run next (start-step, not
-// necessarily step 0) - that's the one the robot needs to be lined up
-// against, not the mission's own first job.
-let lastRenderedStepCount = 0;
-function updateUpcomingJobPreview() {
-  const startIndex = parseInt(startStepSelect.value || "0", 10);
-  const upcoming = currentSteps[startIndex];
-  if (!upcoming) {
-    for (let i = 0; i < lastRenderedStepCount; i++) map.setLayer(`step-${i}`, []);
-    lastRenderedStepCount = 0;
-    map.resize();
-    return;
-  }
-  fetch(`/api/jobs/${encodeURIComponent(upcoming.job)}`).then((r) => (r.ok ? r.json() : null)).then((job) => {
+// Draws every job in the mission - currentIndex (whichever job is
+// actually current, live or just selected to start from - see below)
+// full opacity, every other job faded. Layer keys are per (mission
+// step, job step) pair rather than a plain count, so a mission whose
+// jobs have different step counts (the normal case) still clears
+// exactly the layers that no longer apply, not just a shrinking tail.
+let lastRenderedLayers = [];
+function redrawMissionMap(currentIndex) {
+  const layers = [];
+  currentSteps.forEach((step, stepIndex) => {
+    const job = jobCache[step.job];
     if (!job) return;
-    const steps = job.steps;
-    const names = [...new Set(steps.map((s) => s.path).filter(Boolean))];
-    const toFetch = names.filter((n) => !(n in pathPointsCache));
+    const alpha = stepIndex === currentIndex ? CURRENT_JOB_ALPHA : OTHER_JOB_ALPHA;
+    job.steps.forEach((jobStep, jobStepIndex) => {
+      if (!jobStep.path) return;
+      const key = `mission-${stepIndex}-path-${jobStepIndex}`;
+      const points = pathPointsCache[jobStep.path] || [];
+      map.setLayer(key, points, { color: stepColor(jobStepIndex, alpha), dots: true, dotRadius: 3 });
+      layers.push(key);
+    });
+  });
+  lastRenderedLayers.filter((key) => !layers.includes(key)).forEach((key) => map.setLayer(key, []));
+  lastRenderedLayers = layers;
+  map.resize();
+}
+
+// Fetches (and caches) every job the mission references, then every
+// path any of those jobs reference, then draws - reselecting a mission
+// already seen before redraws instantly from cache.
+function loadJobsAndRedraw() {
+  const jobNames = [...new Set(currentSteps.map((s) => s.job))];
+  const jobsToFetch = jobNames.filter((n) => !(n in jobCache));
+  Promise.all(jobsToFetch.map((name) =>
+    fetch(`/api/jobs/${encodeURIComponent(name)}`).then((r) => (r.ok ? r.json() : null)).then((job) => { jobCache[name] = job; })
+  )).then(() => {
+    const pathNames = new Set();
+    currentSteps.forEach((s) => {
+      const job = jobCache[s.job];
+      (job ? job.steps : []).forEach((js) => { if (js.path) pathNames.add(js.path); });
+    });
+    const toFetch = [...pathNames].filter((n) => !(n in pathPointsCache));
     Promise.all(toFetch.map((pathName) =>
       fetch(`/api/navigate-paths/${encodeURIComponent(pathName)}`)
         .then((r) => (r.ok ? r.json() : []))
         .then((points) => { pathPointsCache[pathName] = points; })
     )).then(() => {
-      steps.forEach((step, i) => {
-        const points = pathPointsCache[step.path] || [];
-        map.setLayer(`step-${i}`, points, { color: STEP_COLORS[i % STEP_COLORS.length], dots: true, dotRadius: 3 });
-      });
-      for (let i = steps.length; i < lastRenderedStepCount; i++) {
-        map.setLayer(`step-${i}`, []);
-      }
-      lastRenderedStepCount = steps.length;
-      map.resize();
+      lastRenderedCurrentIndex = parseInt(startStepSelect.value || "0", 10);
+      redrawMissionMap(lastRenderedCurrentIndex);
     });
   });
 }
 
-function refreshUpcomingJob() {
+function refreshMissionSteps() {
   const name = missionSelect.value;
-  if (!name) { currentSteps = []; fillStartSteps(); updateUpcomingJobPreview(); return; }
+  if (!name) {
+    currentSteps = [];
+    fillStartSteps();
+    lastRenderedCurrentIndex = null;
+    redrawMissionMap(null);
+    return;
+  }
   fetch(`/api/missions/${encodeURIComponent(name)}`).then((r) => (r.ok ? r.json() : null)).then((mission) => {
     currentSteps = mission ? mission.steps : [];
     fillStartSteps();
-    updateUpcomingJobPreview();
+    loadJobsAndRedraw();
   });
 }
 
-missionSelect.addEventListener("change", refreshUpcomingJob);
-startStepSelect.addEventListener("change", updateUpcomingJobPreview);
+missionSelect.addEventListener("change", refreshMissionSteps);
+startStepSelect.addEventListener("change", () => {
+  // Only matters while idle - once running, the live current_step_index
+  // from /ws/missions below takes over.
+  lastRenderedCurrentIndex = parseInt(startStepSelect.value || "0", 10);
+  redrawMissionMap(lastRenderedCurrentIndex);
+});
 
 const preselect = new URLSearchParams(window.location.search).get("mission");
 if (preselect) missionSelect.value = preselect;
-refreshUpcomingJob();
+refreshMissionSteps();
 map.resize();
 
 document.getElementById("start-btn").addEventListener("click", () => {
@@ -197,6 +235,17 @@ connectWs("/ws/missions", (msg) => {
   const running = msg.state === "running";
   joystickEl.style.pointerEvents = running ? "none" : "auto";
   joystickEl.style.opacity = running ? "0.4" : "1";
+
+  // Which job the map highlights at full opacity: the live
+  // current_step_index while a mission is actually running, otherwise
+  // whatever "Start from job" has selected (handled by its own change
+  // listener above) - only redraw on an actual change, not every
+  // /ws/missions tick.
+  const effectiveIndex = running ? msg.current_step_index : parseInt(startStepSelect.value || "0", 10);
+  if (effectiveIndex !== lastRenderedCurrentIndex) {
+    lastRenderedCurrentIndex = effectiveIndex;
+    redrawMissionMap(effectiveIndex);
+  }
 });
 
 // --- Live trail: where the robot has actually been, same mechanism as

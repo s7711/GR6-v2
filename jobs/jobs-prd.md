@@ -219,6 +219,61 @@ today. An operator **Stop** mid-priming behaves the same as
 mid-real-watering — turns the pump off immediately, regardless of which
 phase it was in.
 
+**Water sweep (added 2026-09-13):** a `water` step's own `sweep_deg`
+(0/10/20/30, 0 by default — mimics the original stationary behaviour
+exactly, so every pre-existing job is unaffected) turns the robot back
+and forth through that arc while watering, instead of always hitting
+one spot. Deliberately approximate — this is a trial-and-error feature,
+not a precise "robot shall do this", and it's built entirely out of
+mechanisms that already existed rather than a new control loop:
+
+- The pump starts immediately, same as before (priming included) —
+  no waiting for an initial turn to finish first.
+- `_start_water_sweep` (`control.py`) captures the robot's heading at
+  the moment the step starts (from navigate's own feed — see
+  navigate/app.py's `_snapshot`, which now also carries `heading_deg`
+  for exactly this) and immediately issues a turn to `-sweep_deg/2`
+  relative to it, via the same `start_turn` call a `turn_to_heading`
+  step uses.
+- While the timed phases (priming, then the real duration) are still
+  running, `_maybe_retarget_sweep` nudges that target roughly once a
+  second (`SWEEP_RETARGET_PERIOD_S`), linearly, from `-sweep_deg/2` at
+  the step's start to `+sweep_deg/2` by the time the whole step (priming
+  included) ends. No new "moving target" controller was written for
+  this — navigate's existing turn-in-place control (`turn_control.py`)
+  already drives continuously toward whatever target it was last given;
+  a sweep is just that same endpoint called repeatedly with an
+  advancing absolute heading, not a fixed one.
+- Navigate's own `/control/turn` refuses a retarget while the previous
+  one hasn't reached tolerance yet ("a turn is already running") — this
+  is treated as expected, not a failure: the tick is skipped and tried
+  again next period with a further-advanced target, so a robot whose
+  motors don't respond to small nudges (seen in practice: often not
+  much under 5°) just accumulates error against the ramp until it's
+  big enough to actually move, then catches up — the same proportional
+  controller doing what it already does, no special-casing for "the
+  motors are sticky" needed.
+- Once the pump turns off, a swept step turns back to the heading it
+  started at before finishing (`_start_water_revert`) — paths generally
+  expect to start from wherever the previous step left the robot. This
+  reuses the exact same navigate-status polling as `run_path`/
+  `turn_to_heading` (`_tick_navigate_step`, via the step's own
+  `_water_reverting` flag) rather than a fixed wait, so whatever comes
+  next genuinely waits for it to finish.
+- No heading available at all (e.g. no GNSS fix yet) degrades to the
+  original stationary behaviour for that run rather than failing the
+  step — watering matters more than sweeping.
+- Deliberately **not** monitored for a genuine stall the way
+  `turn_to_heading` is — retargeting resets `TurnRunner`'s own stall
+  guard every call (by design, so a slow-moving target never falsely
+  trips it), which as a side effect means a sweep that's truly stuck
+  goes undetected. Accepted for now, same spirit as priming's own
+  unmonitored ~4s; can be added back if it turns out to matter.
+- The create-job page's dropdown for this sits next to the existing
+  duration dropdown on a `water` step's own row (see "Create/Edit job
+  page" below) — added specifically so duration/sweep can be retuned
+  without deleting and re-adding the step.
+
 **Fill step refusal (added 2026-08-15, generalised 2026-08-18):** if
 `waterbutt` itself refuses the fill — its QC check marker isn't
 visible, unconfigured, unreachable, or too far from ideal (see
@@ -342,6 +397,13 @@ dropdown scoped to that type (see "Job execution"'s "Timed steps")
 choices made before it means anything, so appending one blank and
 editing in place (the run_path pattern) wouldn't leave a step in any
 sensible default state.
+
+A `pause`/`water` step's own row (2026-09-13) also carries its duration
+(and, for `water`, its sweep — see "Water sweep" above) as an inline
+dropdown, and a `pause` step's own `aruco_priority` flag (see
+`control.py`'s class docstring) as an inline checkbox — editable in
+place rather than needing delete-and-re-add for a value tweak, same
+reasoning as up/down/Remove already being inline per-row controls.
 
 A step's colour swatch and the preview map below only ever draw
 `run_path` steps (a `pause`/`water`/`fill` step has no points to plot) —

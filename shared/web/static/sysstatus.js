@@ -1,32 +1,16 @@
-// Header status badges (map-manager logging, battery, wifi, CPU, GPS
-// position mode, Aruco marker status) — every service's shared header
-// watches the manager's /ws/system, oxts-nav's /ws/nav, aruco's
-// /ws/aruco, drive's /ws/drive, and map-manager's /ws/map-manager
-// directly, cross-port, via connectWsUrl (same pattern as aruco's own
-// Map page reading oxts-nav's /ws/nav). See shared/sysstats.py for what
-// the manager is reading. Each of these is a separate, independently-
-// retrying websocket (see ws-utils.js) — if the owning service isn't
-// running, its badge just stays at its initial "—" default (set in
-// base.html) rather than anything more elaborate.
+// Header status badges (battery, wifi, CPU, GPS position mode, Aruco
+// marker status) — every service's shared header watches the
+// manager's /ws/system, oxts-nav's /ws/nav, aruco's /ws/aruco, and
+// drive's /ws/drive directly, cross-port, via connectWsUrl (same
+// pattern as aruco's own Map page reading oxts-nav's /ws/nav). See
+// shared/sysstats.py for what the manager is reading. Each of these is
+// a separate, independently-retrying websocket (see ws-utils.js) — if
+// the owning service isn't running, its badge just stays at its
+// initial "—" default (set in base.html) rather than anything more
+// elaborate.
 
 (function () {
   const wsUrl = MANAGER_URL.replace(/^http/, "ws") + "ws/system";
-
-  // Logging on/off badge (added 2026-08-18, replacing the previous
-  // brown-out "Vs" badge — see map-manager-prd.md's "Accuracy/logging
-  // gating"): green while map-manager is actively updating the
-  // occupancy grid, red while it's off (either the manual switch, or
-  // accuracy/no-fix — same red either way, since from a glance-at-the-
-  // header point of view "not currently recording" is the only thing
-  // that matters; the home page's own eligibility message has the
-  // detail). Icon stays at its neutral default grey if map-manager
-  // itself isn't running.
-  if (MAP_MANAGER_WS_URL) {
-    connectWsUrl(MAP_MANAGER_WS_URL, (msg) => {
-      const logging = document.getElementById("sys-logging");
-      logging.className = "badge " + (msg.logging_enabled && !msg.eligibility_reason ? "text-bg-success" : "text-bg-danger");
-    });
-  }
 
   // Battery voltage badge (added 2026-09-01, replacing the CPU
   // temperature badge - the new electronics has a big fan and the CPU

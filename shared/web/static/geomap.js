@@ -1,10 +1,10 @@
 // Reusable canvas-based local-tangent-plane map: gridlines, scale bar,
-// zoom presets, and named "layers" of {lat, lon, ...} points drawn as a
-// polyline and/or dots, plus a single "current position" marker. First
-// built (independently, twice) for aruco's Map page and navigate's Run
-// page — promoted here once a third consumer (navigate's Create Path
-// page) needed the same thing. See ui-style.md's shared-asset-promotion
-// convention.
+// zoom presets, drag-to-pan, and named "layers" of {lat, lon, ...}
+// points drawn as a polyline and/or dots, plus a single "current
+// position" marker. First built (independently, twice) for aruco's Map
+// page and navigate's Run page — promoted here once a third consumer
+// (navigate's Create Path page) needed the same thing. See
+// ui-style.md's shared-asset-promotion convention.
 //
 // Usage:
 //   const map = createGeoMap(canvasEl, wrapperEl, ".zoom-btn");
@@ -15,6 +15,18 @@
 //     Viewer page - hit is {layer, point} for whatever's nearest the
 //     mouse, or null; point is the exact object passed into setLayer,
 //     so it carries whatever extra fields the caller's points had
+//
+// Pan/zoom (added 2026-09-13): drag the canvas (mouse or touch, via
+// Pointer Events) to pan, scroll/pinch-free mouse wheel to zoom in
+// small steps - both purely client-side view state (`center`/
+// `zoomMode` below), so they never touch whatever `current`/layers the
+// caller keeps pushing in. Once you've dragged, the view deliberately
+// stays put even as `current` keeps moving (Ben's call: "closer to how
+// a normal map behaves once you've dragged it" - see the missions Run
+// page's map discussion) - clicking *any* zoom preset button (including
+// re-clicking the one already active, e.g. "Auto") is the way back to
+// following the live position again, rather than a separate "recenter"
+// control - see setZoom below.
 
 function createGeoMap(canvasEl, wrapperEl, zoomButtonsSelector) {
   const ctx = canvasEl.getContext("2d");
@@ -72,6 +84,14 @@ function createGeoMap(canvasEl, wrapperEl, zoomButtonsSelector) {
 
   function setZoom(mode) {
     zoomMode = mode;
+    // Any preset button (even re-clicking the one already active) drops
+    // a manual pan/recentre override - the one way back to "follow
+    // whatever this page normally centres on" (current position, or a
+    // caller's own setCenter - e.g. edit-path's "recentre on the
+    // selected point") without a separate recentre control. Freehand
+    // wheel-zoom below deliberately does NOT go through setZoom, so it
+    // never disturbs an in-progress pan.
+    center = null;
     if (zoomButtonsSelector) {
       document.querySelectorAll(zoomButtonsSelector).forEach((btn) => {
         const active = btn.dataset.zoom === String(mode);
@@ -92,6 +112,87 @@ function createGeoMap(canvasEl, wrapperEl, zoomButtonsSelector) {
       });
     });
   }
+
+  // A freehand zoom level (wheel) clears every preset button's active
+  // styling, same as a level between two of the fixed choices wouldn't
+  // match any of them - not wired through setZoom, since that would
+  // also clear a manual pan (see setZoom's own comment above).
+  function clearZoomButtonStyling() {
+    if (!zoomButtonsSelector) return;
+    document.querySelectorAll(zoomButtonsSelector).forEach((btn) => {
+      btn.classList.remove("btn-primary");
+      btn.classList.add("btn-outline-secondary");
+    });
+  }
+
+  // --- Drag-to-pan and wheel-zoom (added 2026-09-13) ---
+  // Pointer Events cover mouse, touch and pen with one code path.
+  // Panning moves `center` incrementally (each move only shifts by the
+  // pixel delta since the *previous* move, not the total since
+  // pointerdown) rather than computing a single delta at drag-end, so
+  // the map visibly tracks the drag in real time.
+  canvasEl.style.touchAction = "none"; // otherwise a touch drag also scrolls the page underneath
+  canvasEl.style.cursor = "grab";
+  let dragging = false;
+  let lastPointerX = 0;
+  let lastPointerY = 0;
+
+  canvasEl.addEventListener("pointerdown", (e) => {
+    if (e.pointerType === "mouse" && e.button !== 0) return; // left-button/primary-touch only
+    if (!lastProjection) return; // nothing drawn yet to pan against
+    dragging = true;
+    canvasEl.setPointerCapture(e.pointerId);
+    canvasEl.style.cursor = "grabbing";
+    lastPointerX = e.clientX;
+    lastPointerY = e.clientY;
+    if (!center) {
+      // Seed the override from whatever's actually showing right now
+      // (current position, or a layer point via referencePoint's own
+      // fallback) - the drag then starts exactly where the view already
+      // was, rather than jumping.
+      const ref = referencePoint();
+      if (ref) center = { lat: ref.lat, lon: ref.lon };
+    }
+  });
+
+  canvasEl.addEventListener("pointermove", (e) => {
+    if (!dragging || !center) return;
+    const dxPx = e.clientX - lastPointerX;
+    const dyPx = e.clientY - lastPointerY;
+    lastPointerX = e.clientX;
+    lastPointerY = e.clientY;
+    if (dxPx === 0 && dyPx === 0) return;
+
+    // Same local-tangent-plane approximation as offsetMetres, inverted:
+    // dragging right/down must reveal what's to the west/north of the
+    // old centre, i.e. the reference point itself moves west/north -
+    // see the pan design discussion for the full derivation.
+    const metresPerPx = lastProjection.metresPerPx;
+    const metresPerDegLat = 111320;
+    const metresPerDegLon = 111320 * Math.cos((center.lat * Math.PI) / 180);
+    center = {
+      lat: center.lat + (dyPx * metresPerPx) / metresPerDegLat,
+      lon: center.lon + (-dxPx * metresPerPx) / metresPerDegLon,
+    };
+    draw();
+  });
+
+  function endDrag() {
+    dragging = false;
+    canvasEl.style.cursor = "grab";
+  }
+  canvasEl.addEventListener("pointerup", endDrag);
+  canvasEl.addEventListener("pointercancel", endDrag);
+
+  const ZOOM_WHEEL_FACTOR = 1.15; // per wheel notch - a good default "feel", not worth a config knob
+  canvasEl.addEventListener("wheel", (e) => {
+    if (!lastProjection) return;
+    e.preventDefault();
+    const factor = e.deltaY > 0 ? ZOOM_WHEEL_FACTOR : 1 / ZOOM_WHEEL_FACTOR; // scroll down/away = zoom out, same convention as most map UIs
+    zoomMode = Math.max(0.5, lastProjection.metresAcross * factor);
+    clearZoomButtonStyling();
+    draw();
+  }, { passive: false });
 
   function resize() {
     const top = wrapperEl.getBoundingClientRect().top;
@@ -202,7 +303,7 @@ function createGeoMap(canvasEl, wrapperEl, zoomButtonsSelector) {
     ctx.font = "12px sans-serif";
     ctx.fillText(`${barMetres} m`, bx, by - 8);
 
-    lastProjection = { ref, metresPerPx, cx, cy };
+    lastProjection = { ref, metresPerPx, cx, cy, metresAcross };
   }
 
   // Nearest plotted point (across every layer) to a canvas-pixel

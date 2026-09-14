@@ -284,6 +284,21 @@ class TestStep(unittest.TestCase):
         self.assertIn("heading error", status["abort_reason"])
         self.assertEqual(recorder.velocity_calls[-1], (0.0, 0.0))
 
+    def test_heading_breach_status_reports_the_value_that_actually_aborted_it(self):
+        # Found live 2026-09-13: step()'s abort branches used to return
+        # before last_status was updated, so status()'s heading_error_deg
+        # (and the debug log line built from it) showed the *previous*
+        # tick's value, not the one abort_reason itself quotes - a real
+        # incident logged "-12.6deg" in status while abort_reason said
+        # "-73.6deg". heading_error_deg should always match the number in
+        # abort_reason on the aborting tick.
+        runner, recorder = make_runner()
+        runner.start(robot_lat=52.200000, robot_lon=-1.500000, robot_heading_deg=0)
+        runner.step(robot_lat=52.200000, robot_lon=-1.500000, robot_heading_deg=170, horizontal_accuracy_m=0.1)
+        status = runner.status()
+        self.assertAlmostEqual(status["heading_error_deg"], -170.0, places=1)
+        self.assertIn("-170.0deg", status["abort_reason"])
+
     def test_reaching_the_end_of_path_finishes_cleanly(self):
         runner, recorder = make_runner()
         runner.start(robot_lat=52.200000, robot_lon=-1.500000, robot_heading_deg=0)

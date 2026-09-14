@@ -31,8 +31,26 @@ purpose - oxts-nav is the sole authority on the actual GNSS state and
 already guarantees it can't be left off indefinitely on its own (see
 gnss_mode.py's watchdog), so a pause here never fails/aborts the job
 just because oxts-nav couldn't be reached.
+
+A `water` step's own `sweep_deg` (added 2026-09-13, 0 by default -
+mimics the original stationary behaviour exactly) sweeps the robot's
+heading back and forth through an arc while watering, instead of
+hitting one spot: the pump starts as normal, and (best-effort,
+approximate - see jobs-prd.md's "Water sweep" for why this is
+deliberately not precise) `_maybe_retarget_sweep` nudges navigate's
+turn target every `SWEEP_RETARGET_PERIOD_S` from `-sweep_deg/2` to
+`+sweep_deg/2` (relative to the heading the step started at) over the
+whole step's duration (priming included), then turns back to that
+starting heading once the pump is off - reusing the exact same
+start_turn/navigate-status-polling primitives as a `turn_to_heading`
+step, never a new control loop. `_water_reverting` is what makes
+tick() route a swept `water` step's final turn-back through
+_tick_navigate_step (the same polling used for run_path/
+turn_to_heading) instead of _tick_timed once the timed phases are
+done.
 """
 
+import logging
 import threading
 import time
 
@@ -50,6 +68,12 @@ NAVIGATE_STEP_FEED_GRACE_S = 1.0  # see _tick_navigate_step's comment
 # watering time on a short one (duration_s + the two "on" phases here) -
 # see jobs-prd.md's "Water priming".
 WATER_PRIME_PHASES = ((True, 2.0), (False, 2.0), (True, 2.0), (False, 2.0))
+
+# How often a swept "water" step nudges navigate's turn target - see
+# jobs-prd.md's "Water sweep". A global constant, not configurable,
+# same reasoning as WATER_PRIME_PHASES: something to tune live if it
+# turns out not to work well, not something worth a config knob yet.
+SWEEP_RETARGET_PERIOD_S = 1.0
 
 
 class JobRunner:
@@ -81,6 +105,12 @@ class JobRunner:
         self._navigate_step_started_at = None
         self._water_phases = None  # the current "water" step's full (pump_on, duration_s) phase list - WATER_PRIME_PHASES then (True, duration_s) - see _start_current_step/_tick_timed
         self._water_phase_index = None
+        self._water_sweep_deg = 0  # 0 - no sweep, mimics the original stationary "water" step - see class docstring's "Water sweep"
+        self._water_base_heading_deg = None  # the heading the current sweep is centred on - captured once, at the step's own start
+        self._water_sweep_total_s = None  # the whole step's duration (priming included) - the ramp's -half to +half spans this
+        self._water_sweep_started_at = None
+        self._water_last_retarget_at = None
+        self._water_reverting = False  # True while turning back to _water_base_heading_deg after a swept water step's pump turns off - see tick()
 
     def go(self, job_name: str, steps: list, start_index: int = 0):
         """Starts (or resumes, from start_index) a job."""
@@ -109,6 +139,9 @@ class JobRunner:
             self.step_deadline = None
             self._water_phases = None
             self._water_phase_index = None
+            self._water_sweep_deg = 0
+            self._water_base_heading_deg = None
+            self._water_reverting = False
         self.stop_path()
         if step_type == "water":
             self.pump_on(False)
@@ -130,11 +163,15 @@ class JobRunner:
             return {"type": "run_path", "path": step["path"]}
         if step_type == "turn_to_heading":
             return {"type": "turn_to_heading", "heading_deg": step["heading_deg"], "tolerance_deg": step.get("tolerance_deg")}
+        if step_type == "water":
+            return {"type": "water", "duration_s": step.get("duration_s"), "sweep_deg": step.get("sweep_deg", 0)}
         return {"type": step_type, "duration_s": step.get("duration_s")}
 
     def _start_current_step(self, step_index: int):
         step = self.steps[step_index]
         step_type = step.get("type", "run_path")
+        with self.lock:
+            self._water_reverting = False  # leftover from a previous swept "water" step - see class docstring
 
         if step_type == "run_path":
             self._start_run_path_step(step_index, step)
@@ -155,6 +192,11 @@ class JobRunner:
                 self._water_phases = phases
                 self._water_phase_index = 0
                 self.step_deadline = self.now() + phases[0][1]
+                self._water_sweep_deg = step.get("sweep_deg", 0)
+                self._water_base_heading_deg = None
+                self._water_sweep_started_at = None
+                self._water_last_retarget_at = None
+            self._start_water_sweep(step_index, phases)
         elif step_type == "fill":
             result = self.waterbutt_go(step["duration_s"])
             if not result.get("ok"):
@@ -206,6 +248,88 @@ class JobRunner:
             self._fail_step(step_index, "failed_to_start", result.get("reason", "couldn't start turning"))
             return
 
+    def _start_water_sweep(self, step_index: int, phases: tuple):
+        """Captures the heading to sweep around and issues the sweep's
+        first retarget (to -sweep_deg/2) - see class docstring's "Water
+        sweep". No-op, degrading to the original stationary "water"
+        behaviour, if sweep_deg is 0 or there's no heading yet to sweep
+        around (e.g. no GNSS fix) - a missing heading never fails the
+        step, watering still happens either way."""
+        with self.lock:
+            sweep_deg = self._water_sweep_deg
+        if not sweep_deg:
+            return
+        nav = self.navigate_status()
+        base_heading = nav.get("heading_deg")
+        if base_heading is None:
+            logging.warning("[jobs] No heading yet - this water step will run without its sweep")
+            with self.lock:
+                self._water_sweep_deg = 0
+            return
+        with self.lock:
+            if self.state != "running" or self.current_step_index != step_index:
+                return
+            self._water_base_heading_deg = base_heading
+            self._water_sweep_total_s = sum(duration for _, duration in phases)
+            self._water_sweep_started_at = self.now()
+            self._water_last_retarget_at = self.now()
+        result = self.start_turn(base_heading - sweep_deg / 2.0, None)
+        if not result.get("ok"):
+            logging.warning("[jobs] Couldn't start the water step's sweep turn: %s", result.get("reason"))
+
+    def _maybe_retarget_sweep(self, step_index: int):
+        """Called every _tick_timed tick while a swept "water" step's
+        timed phases are still running - nudges navigate's turn target
+        along the sweep's -half to +half ramp roughly every
+        SWEEP_RETARGET_PERIOD_S. Best-effort and approximate on purpose
+        (see class docstring): navigate's own /control/turn refuses a
+        retarget while the previous one hasn't reached tolerance yet
+        ("a turn is already running") - rather than treat that as a
+        failure, this just skips the tick and tries again next period
+        with a further-advanced target, so an ignored retarget simply
+        makes the next successful one jump further along the ramp."""
+        with self.lock:
+            sweep_deg = self._water_sweep_deg
+            base_heading = self._water_base_heading_deg
+            if not sweep_deg or base_heading is None:
+                return
+            if self.now() - self._water_last_retarget_at < SWEEP_RETARGET_PERIOD_S:
+                return
+            elapsed = self.now() - self._water_sweep_started_at
+            fraction = min(1.0, elapsed / self._water_sweep_total_s)
+            target = base_heading - sweep_deg / 2.0 + fraction * sweep_deg
+
+        self.start_turn(target, None)  # best-effort - see docstring above
+
+        with self.lock:
+            if self.state == "running" and self.current_step_index == step_index:
+                self._water_last_retarget_at = self.now()
+
+    def _start_water_revert(self, step_index: int) -> bool:
+        """After a swept "water" step's pump turns off, turn back to
+        the heading it started at - paths generally expect to start
+        from wherever the previous step left off. Returns True if the
+        turn-back was actually kicked off (the caller then leaves the
+        step running, letting tick() route it through
+        _tick_navigate_step - the same polling used for
+        run_path/turn_to_heading - until navigate reports it done);
+        False (best-effort, same as _maybe_retarget_sweep) if it
+        couldn't even start, in which case the caller just finishes the
+        step without reverting rather than retrying forever."""
+        with self.lock:
+            base_heading = self._water_base_heading_deg
+        result = self.start_turn(base_heading, None)
+        if not result.get("ok"):
+            logging.warning("[jobs] Couldn't turn back to the pre-sweep heading: %s", result.get("reason"))
+            return False
+        with self.lock:
+            if self.state != "running" or self.current_step_index != step_index:
+                return True  # stop() (or another tick) already handled this - navigate_step bookkeeping doesn't matter now
+            self._navigate_step_seen_running = False
+            self._navigate_step_started_at = self.now()
+            self._water_reverting = True
+        return True
+
     def _fail_step(self, step_index: int, outcome: str, reason: str):
         with self.lock:
             # A concurrent stop() may already have moved the job on
@@ -245,8 +369,13 @@ class JobRunner:
                 return
             step_index = self.current_step_index
             step_type = self._current_step_type()
+            # A swept "water" step's final turn-back (_water_reverting,
+            # see _start_water_revert) is polled the same way as
+            # run_path/turn_to_heading, even though "water" isn't
+            # itself in NAVIGATE_STEP_TYPES.
+            reverting = step_type == "water" and self._water_reverting
 
-        if step_type in NAVIGATE_STEP_TYPES:
+        if step_type in NAVIGATE_STEP_TYPES or reverting:
             self._tick_navigate_step(step_index)
         else:
             self._tick_timed(step_index, step_type)
@@ -315,6 +444,7 @@ class JobRunner:
                 with self.lock:
                     phase_on = self._water_phases[self._water_phase_index][0]
                 self.pump_on(phase_on)
+                self._maybe_retarget_sweep(step_index)
             return
 
         if step_type == "water":
@@ -335,6 +465,13 @@ class JobRunner:
                     self.step_deadline = self.now() + phase_duration
                 return
             self.pump_on(False)
+            with self.lock:
+                sweep_active = (
+                    self.state == "running" and self.current_step_index == step_index
+                    and self._water_sweep_deg and self._water_base_heading_deg is not None
+                )
+            if sweep_active and self._start_water_revert(step_index):
+                return  # tick() now routes this step through _tick_navigate_step until the turn-back finishes
         elif step_type == "pause" and self.steps[step_index].get("aruco_priority"):
             self.gnss_normal()
         # fill needs no explicit stop here - waterbutt's own valve
@@ -349,6 +486,8 @@ class JobRunner:
             self.step_deadline = None
             self._water_phases = None
             self._water_phase_index = None
+            self._water_sweep_deg = 0
+            self._water_base_heading_deg = None
             self.step_log.append({"index": step_index, **self._step_summary(step_index), "outcome": "ok"})
             next_step_index = self._advance(step_index)
 

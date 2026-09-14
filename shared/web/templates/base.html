@@ -32,13 +32,6 @@
       </div>
       <div class="navbar-nav ms-auto flex-row gap-2 align-items-center">
         {% block statusbadges %}
-        <span id="sys-logging" class="badge text-bg-secondary" title="map-manager logging">
-          <!-- License: MIT. Made by michaelampr: https://github.com/michaelampr/jam
-               (via https://www.svgviewer.dev/s/489249/download) -->
-          <svg viewBox="-1 -1 16 16" width="0.9em" height="0.9em" fill="currentColor" style="vertical-align:-0.05em">
-            <path d="M8 6.641l1.121-1.12a1 1 0 0 1 1.415 1.413L7.707 9.763a.997.997 0 0 1-1.414 0L3.464 6.934A1 1 0 1 1 4.88 5.52L6 6.641V1a1 1 0 1 1 2 0v5.641zM1 12h12a1 1 0 0 1 0 2H1a1 1 0 0 1 0-2z"/>
-          </svg>
-        </span>
         <span id="sys-battery" class="badge text-bg-secondary" title="Battery voltage">&mdash;</span>
         <span id="sys-wifi" class="badge text-bg-secondary" title="Wifi signal">&mdash;</span>
         <span id="sys-cpu" class="badge text-bg-secondary" title="CPU load">&mdash;</span>
@@ -60,7 +53,6 @@
     // pattern as MANAGER_URL above — see sysstatus.js.
     const OXTSNAV_WS_URL = "{{ oxtsnav_ws_url|default('') }}";
     const ARUCO_WS_URL = "{{ aruco_ws_url|default('') }}";
-    const MAP_MANAGER_WS_URL = "{{ map_manager_ws_url|default('') }}";
     const DRIVE_WS_URL = "{{ drive_ws_url|default('') }}";
     const WHEELSPEED_WS_URL = "{{ wheelspeed_ws_url|default('') }}";
   </script>

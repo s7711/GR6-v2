@@ -11,14 +11,6 @@
           <label class="form-label">Duration: <strong id="duration-label">—</strong></label>
           <input type="range" class="form-range" id="duration-slider" min="0" max="{{ durations_s|length - 1 }}" step="1" value="2">
         </div>
-        <div class="mb-3">
-          <label class="form-label">QC tolerance (Go refuses beyond this)</label>
-          <select id="qc-threshold-select" class="form-select">
-            {% for t in qc_threshold_options_m %}
-            <option value="{{ t }}" {% if t == qc_default_threshold_m %}selected{% endif %}>{{ (t * 100)|round|int }} cm</option>
-            {% endfor %}
-          </select>
-        </div>
         <button id="go-btn" class="btn btn-success btn-lg me-2">Go</button>
         <button id="stop-btn" class="btn btn-danger btn-lg" disabled>Stop</button>
         <div class="mt-3">
@@ -73,7 +65,6 @@ function updateDurationLabel() {
 slider.addEventListener("input", updateDurationLabel);
 updateDurationLabel();
 
-const qcThresholdSelect = document.getElementById("qc-threshold-select");
 const goRefused = document.getElementById("go-refused");
 
 goBtn.addEventListener("click", () => {
@@ -83,7 +74,6 @@ goBtn.addEventListener("click", () => {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       duration_s: DURATIONS_S[slider.value],
-      qc_threshold_m: parseFloat(qcThresholdSelect.value),
     }),
   }).then((r) => (r.ok ? null : r.json())).then((result) => {
     if (result && result.reason) goRefused.textContent = `Refused: ${result.reason}`;

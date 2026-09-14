@@ -1,10 +1,11 @@
 # Top-Level PRD: GR6-v2 Multi-Program Architecture
 
 The GR6 robot is a two wheeled (plus casters) robot designed for watering
-plants. It has a Raspberry Pi 4, an OXTS xNAV650, a pi camera, an Arduino
-(soon to be changed to a Raspberry Pi Pico), and battery. The Arduino has
-a motor controller, wheel encoders, water pump, SH-04 unltra sonic sensors.
-The Raspberry Pi is running Raspberry Pi OS.
+plants. It has a Raspberry Pi 4, an OXTS xNAV650, a pi camera, a
+Raspberry Pi Pico (MicroPython, replacing the original Arduino), and
+battery. The Pico has a motor controller (TB6612FNG driver), wheel
+encoders, water pump, SH-04 ultra sonic sensors. The Raspberry Pi is
+running Raspberry Pi OS.
 
 This is the umbrella document for the overall architecture. Individual
 services (vision, nav decode, path following, manager, etc.) each get their
@@ -92,7 +93,7 @@ general-purpose sysadmin tool.
   vs a 10ms budget at 100Hz). Optional future refinement: fixed-layout
   struct/msgpack in shared memory with a seqlock, for lower/more
   deterministic latency — not required to hit current targets.
-- **Low-rate structured data (Arduino telemetry, motor commands, ~10Hz):**
+- **Low-rate structured data (Pico telemetry, motor commands, ~10Hz):**
   pickled dict over Unix domain socket — overhead is negligible against a
   100ms budget.
 - **Commands / mode changes:** Unix domain socket (ZeroMQ if pub/sub
@@ -135,20 +136,25 @@ general-purpose sysadmin tool.
    the camera's frames) — in progress, see `aruco/aruco-prd.md`.
 4. Motor control, split into `drive` (low-level: motor velocity, water
    pump, ultrasonics, encoder/PID telemetry, over USB serial to the
-   motor-controller microcontroller) — done, see `drive/drive-prd.md` —
-   then `navigate` (waypoint/path-following) — done, **field-proven
-   2026-07-30**: a real autonomous run (`Waterstablebed`, 29 points,
-   30.2m) completed end-to-end with no abort, watering a real bed —
-   then `jobs` (sequencing multiple stops + pump actions) — **built
-   2026-07-31, see `jobs/jobs-prd.md`**: the first genuinely
+   motor-controller microcontroller) — done, see `drive/drive-prd.md`
+   (the original Arduino+L298 board was replaced with a Raspberry Pi
+   Pico + TB6612FNG driver in 2026-08, see the PRD's "Pico transition"
+   section) — then `navigate` (waypoint/path-following) — done,
+   **field-proven repeatedly**, including a real autonomous run
+   (`Waterstablebed`, 29 points, 30.2m) completed end-to-end with no
+   abort, watering a real bed — then `jobs` (sequencing multiple stops +
+   pump actions) — **done, see `jobs/jobs-prd.md`**: the first genuinely
    new capability this project has needed (no GR6-v1 equivalent to port
    from), sequencing saved `navigate` paths with a save-time continuity
-   check between consecutive paths — then `safety` (obstacle-avoidance
+   check between consecutive paths — then `missions` (sequencing
+   multiple `jobs` into a full watering round) — **done, see
+   `missions/missions-prd.md`**, field-proven completing a full
+   multi-job round end-to-end — then `safety` (obstacle-avoidance
    decisions, once the ultrasonics are trusted) built on top of it. This
    last one is the safety-critical piece — most confidence wanted before
-   touching it, hence saved for last.
-5. Network sharing (wifi -> ethernet internet sharing) — **in progress,
-   see `network/network-prd.md`**. Originally identified while testing
+   touching it, hence saved for last, still not started.
+5. Network sharing (wifi -> ethernet internet sharing) — **done, see
+   `network/network-prd.md`**. Originally identified while testing
    `aruco`/`oxts-nav` together: the xNAV650 sits on `eth0` (already
    given a static IP via NetworkManager) and needs internet access (for
    NTRIP corrections) shared from the Pi's wifi. Superseded the
@@ -156,51 +162,66 @@ general-purpose sysadmin tool.
    with NetworkManager's own `ipv4.method: shared` mechanism instead,
    once wifi improvements (item 7, brought forward to 2026-07-26) made
    building the `network` app itself the natural place to add this too
-   — one mechanism for interface config, hotspot, and internet sharing,
-   rather than a separate service. Internet-sharing itself not yet
-   tested as of 2026-07-26 (see `network/network-prd.md`'s
-   implementation-status notes for exactly what has/hasn't been).
-6. Wheelspeed GAD aiding — **built 2026-07-27, see
-   `wheelspeed/wheelspeed-prd.md`**, identified while surveying ArUco
-   markers with `aruco`: position-only GAD from a stationary/known
-   marker doesn't help the INS solution *between* good fixes, whereas
-   wheelspeed aiding keeps drift much lower while driving through a
-   GNSS-poor patch, making the fix at the next marker (or on return to
-   good sky view) far more accurate. Was blocked on `drive` (item 4)
-   publishing wheel velocity — unblocked once `drive` was done. Ported
-   from GR6-v1's `gad_wheelspeed.py`; both `GadSpeed` and `GadVelocity`
-   message types implemented, config-selectable. Not yet run live — the
-   per-wheel lever arms are still unmeasured placeholders, and the
-   translated update-rate design is flagged as an open question for Ben
-   in the PRD.
-7. Wifi improvements — **in progress, see `network/network-prd.md`**,
-   picked up 2026-07-26 once the external USB wifi adapter arrived and
-   outdoor signal was still marginal ahead of real watering runs.
-   Deliberately deferred until then, since `navigate`'s path-following
-   is what surfaced real pain from it first (a jog/drive command
-   arriving late after a wifi reconnect could make the robot behave
-   unexpectedly for a moment — worse under Flask's own request handling
-   than the hand-rolled websocket code GR6-v1 used, though every
-   channel is affected to some degree). Approach ended up
-   hardware-*and*-network (not hardware alone as first planned): the
-   dual-band USB adapter handles day-to-day roaming between access
-   points, the onboard wifi chip is dedicated to hotspot mode (for a
-   tablet to connect directly at short range) *and* doubles as a
-   trusted recovery fallback, and the `network` app's per-interface
-   recovery/auto-revert mechanism is the software safety net that makes
-   experimenting with any of this over-the-network survivable. A
-   software mitigation for stale drive commands (timestamp browser-
-   originated commands, reject anything too stale) was considered
-   separately and stays parked — revisit only if the hardware/hotspot
-   change doesn't fully fix the underlying pain.
-8. Waterbutt valve control — **built 2026-07-30, see
-   `waterbutt/waterbutt-prd.md`**: a standalone service for the water
-   butt's own ESP8266 pinch-valve controller (not part of the Pi's
-   architecture, a separate microcontroller on the same wifi network),
-   giving an operator a duration-based "Go"/"Stop" page. Independent of
-   `navigate`/`jobs` for now — the future `jobs` service (item
-   4) would call this one's `/go`/`/stop` rather than reimplement the
-   valve timing.
+   — one mechanism for interface config, hotspot, internet sharing, and
+   (added later) wifi scanning/signal-strength logging, rather than a
+   separate service.
+6. Wheelspeed GAD aiding — **done, see `wheelspeed/wheelspeed-prd.md`**,
+   identified while surveying ArUco markers with `aruco`: position-only
+   GAD from a stationary/known marker doesn't help the INS solution
+   *between* good fixes, whereas wheelspeed aiding keeps drift much
+   lower while driving through a GNSS-poor patch, making the fix at the
+   next marker (or on return to good sky view) far more accurate. Was
+   blocked on `drive` (item 4) publishing wheel velocity — unblocked
+   once `drive` was done. Ported from GR6-v1's `gad_wheelspeed.py`; both
+   `GadSpeed` and `GadVelocity` message types implemented,
+   config-selectable, plus a live-togglable on/off switch (defaults off)
+   and a log-only scale-factor estimator added later. Field-tested with
+   real measured lever arms; currently disabled by default (see
+   `wheelspeed-prd.md`) after real-surface testing found the wheel
+   odometry carries a large surface-dependent bias, unsuitable for
+   direct Kalman aiding without further work.
+7. Wifi improvements — **done, see `network/network-prd.md`**, picked
+   up 2026-07-26 once the external USB wifi adapter arrived and outdoor
+   signal was still marginal ahead of real watering runs. Deliberately
+   deferred until then, since `navigate`'s path-following is what
+   surfaced real pain from it first (a jog/drive command arriving late
+   after a wifi reconnect could make the robot behave unexpectedly for a
+   moment — worse under Flask's own request handling than the
+   hand-rolled websocket code GR6-v1 used, though every channel is
+   affected to some degree). Approach ended up hardware-*and*-network
+   (not hardware alone as first planned): the dual-band USB adapter
+   handles day-to-day roaming between access points, the onboard wifi
+   chip is dedicated to hotspot mode (for a tablet to connect directly
+   at short range) *and* doubles as a trusted recovery fallback, and the
+   `network` app's per-interface recovery/auto-revert mechanism is the
+   software safety net that makes experimenting with any of this
+   over-the-network survivable. A software mitigation for stale drive
+   commands (timestamp browser-originated commands, reject anything too
+   stale) was considered separately and stays parked — revisit only if
+   the hardware/hotspot change doesn't fully fix the underlying pain.
+8. Waterbutt valve control — **done, see `waterbutt/waterbutt-prd.md`**:
+   a standalone service for the water butt's own ESP8266 pinch-valve
+   controller (not part of the Pi's architecture, a separate
+   microcontroller on the same wifi network), giving an operator a
+   duration-based "Go"/"Stop" page, later extended with a GNSS-independent
+   QC marker check and a tank-level estimate that gate `jobs`'/`missions`'
+   own fill steps. `jobs` calls this service's `/go`/`/stop` rather than
+   reimplement the valve timing.
+9. `map-manager` — **done, see `map-manager/map-manager-prd.md`**, a
+   garden-wide occupancy grid built from the ultrasonic sensors and live
+   GNSS/INS pose, prompted by a recurring pain point: no way to plan a
+   route back to the water butt other than retracing the outbound path.
+   First slice only (the grid itself) — a path planner that actually
+   reads it, and a human override-editing UI, are still to come.
+10. `viewer` — **done, see `viewer/viewer-prd.md`**, a generic
+    cross-app log browser/plotter that auto-discovers any service's
+    `data/logs/` folder with no per-app registration, superseding
+    `navigate`'s own hardcoded two-source log page.
+
+Still to come: `safety` (item 4, above); camera/ArUco bore-sight
+calibration (flagged in `aruco-prd.md` as the likely dominant error
+source in marker position accuracy, never actually done); a route
+planner built on `map-manager`'s grid.
 
 ## Out of Scope (at this level)
 

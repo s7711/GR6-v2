@@ -137,21 +137,27 @@ current job number/name via a websocket (`/ws/missions`). A separate
 page lists saved missions (name, job count) — mirrors `jobs`' own
 Jobs page.
 
-**Jog + upcoming-job preview** (added at the same time as v1, not
-deferred): lining a mission up needs the same jog control `jobs`
-already has on its own Run page, proxied one hop further —
-`missions`' `POST /jog/manual` forwards to `jobs`' own `/jog/manual`,
-which forwards again to `navigate`'s — never skipping a layer, same
-boundary as everywhere else. The preview map shows whichever job will
-actually run next (the chosen start index, not necessarily the
-mission's first job) — fetched via two thin proxies through `jobs`
-(`GET /api/jobs/<name>` for that job's own steps, `GET
+**Jog + whole-mission preview** (jog added at the same time as v1;
+preview widened 2026-09-13): lining a mission up needs the same jog
+control `jobs` already has on its own Run page, proxied one hop
+further — `missions`' `POST /jog/manual` forwards to `jobs`' own
+`/jog/manual`, which forwards again to `navigate`'s — never skipping a
+layer, same boundary as everywhere else. The map draws every job in
+the mission (fetched via two thin proxies through `jobs`: `GET
+/api/jobs/<name>` for each job's own steps, `GET
 /api/navigate-paths/<name>` for each referenced path's points, both
-already existing on `jobs`, just forwarded one hop further) — since
-that's the job the robot actually needs to be lined up against, not
-the mission's own start. The live trail connects the browser straight
-to `oxts-nav`'s feed (not proxied — a WebSocket isn't subject to CORS
-the way a `fetch()` is), same pattern `jobs`' own Run page uses.
+already existing on `jobs`, just forwarded one hop further), the job
+that's actually current — the live `current_step_index` while a
+mission is running, otherwise whichever the "Start from job" dropdown
+has selected — at full opacity, every other job faded to 30%.
+Originally this only ever drew the upcoming job at a fixed faded
+opacity, which meant the map looked essentially empty (or wrong, once
+a mission had progressed past the job that was on screen when Start
+was clicked) for most of an actual run; drawing the whole mission and
+tracking the live current step fixed both. The live trail connects the
+browser straight to `oxts-nav`'s feed (not proxied — a WebSocket isn't
+subject to CORS the way a `fetch()` is), same pattern `jobs`' own Run
+page uses.
 
 ### Create/Edit mission page
 
@@ -183,9 +189,9 @@ The Run page originally listed every job in the mission above the map
 ("Jobs in this mission"), alongside the map's own faded preview of
 whichever job runs next. Live feedback: it just took up space above
 the one thing actually wanted while a mission runs — the map. Removed;
-the upcoming-job preview logic (`updateUpcomingJobPreview`, keyed off
-`start-step`) is unchanged, only the separate list rendering
-(`renderJobList`) is gone.
+the (since superseded, see "Jog + whole-mission preview" above)
+upcoming-job preview logic was unchanged, only the separate list
+rendering (`renderJobList`) was gone.
 
 ## A job finishing synchronously was mistaken for a failed start (fixed 2026-09-03)
 
