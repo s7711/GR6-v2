@@ -1,0 +1,331 @@
+{# title: Bore-sight #}
+{% extends "base.html" %}
+{% block title %}GR6 — Bore-sight{% endblock %}
+
+{% block content %}
+<div class="card mb-3">
+  <div class="card-header">1. Where to put the markers</div>
+  <div class="card-body">
+    <div class="row g-2 align-items-end mb-3">
+      <div class="col-auto">
+        <label class="form-label small mb-0">Boundary path</label>
+        <input id="box-path" class="form-control form-control-sm" value="Boresight limits">
+      </div>
+      <div class="col-auto">
+        <label class="form-label small mb-0">Marker height (m)</label>
+        <input id="height" type="number" step="0.05" class="form-control form-control-sm" value="0.25">
+      </div>
+      <div class="col-auto">
+        <button id="plan-btn" class="btn btn-sm btn-primary">Plan</button>
+      </div>
+    </div>
+    <div id="plan-result"></div>
+    <div id="guidance" class="mt-3"></div>
+  </div>
+</div>
+
+<div class="card mb-3">
+  <div class="card-header">2. Drive &amp; capture</div>
+  <div class="card-body">
+    <p class="small text-body-secondary">
+      Put the robot inside the rectangle, roughly facing the markers, then press Run.
+      It builds the path, drives it, and records — nothing else to do.
+    </p>
+    <div class="row g-2 align-items-end mb-2">
+      <div class="col-auto">
+        <label class="form-label small mb-0">Passes</label>
+        <input id="passes" type="number" min="1" max="12" class="form-control form-control-sm" value="4" style="width: 6rem;">
+      </div>
+      <div class="col-auto">
+        <button id="run-start" class="btn btn-sm btn-success">Run</button>
+        <button id="run-stop" class="btn btn-sm btn-outline-danger" disabled>Stop</button>
+      </div>
+      <div class="col-auto">
+        <button id="build-only" class="btn btn-sm btn-outline-secondary">Build job only</button>
+      </div>
+    </div>
+    <div id="build-info" class="small"></div>
+    <div id="capture-status" class="mt-2 small"></div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">3. Solve</div>
+  <div class="card-body">
+    <div class="row g-2 align-items-end mb-3">
+      <div class="col-auto">
+        <label class="form-label small mb-0">Session</label>
+        <select id="session" class="form-select form-select-sm"></select>
+      </div>
+      <div class="col-auto form-check mb-1 ms-2">
+        <input class="form-check-input" type="checkbox" id="size-scale" checked>
+        <label class="form-check-label small" for="size-scale">Estimate marker size</label>
+      </div>
+      <div class="col-auto">
+        <button id="solve-btn" class="btn btn-sm btn-primary">Solve</button>
+      </div>
+    </div>
+    <div id="solve-result"></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let targets = [];
+
+function fmt(x, n = 3) { return (x === null || x === undefined) ? "—" : Number(x).toFixed(n); }
+
+function showError(elId, message) {
+  document.getElementById(elId).innerHTML =
+    `<div class="alert alert-danger py-2 mb-0">${message}</div>`;
+}
+
+/* Every fetch goes through this. The first version of this page let a
+   failed request fall through silently, so pressing "Plan" against a
+   service that didn't yet have the route simply did nothing at all —
+   no output, no error, nothing to diagnose from. */
+function api(url, options, elId) {
+  return fetch(url, options)
+    .then((r) => {
+      if (!r.ok) {
+        throw new Error(`${r.status} ${r.statusText} from ${url}` +
+          (r.status === 404 ? " — has the aruco service been restarted since this was added?" : ""));
+      }
+      return r.json();
+    })
+    .catch((e) => { if (elId) showError(elId, e.message); throw e; });
+}
+
+function renderPlan(p) {
+  const el = document.getElementById("plan-result");
+  if (p.error) { el.innerHTML = `<div class="alert alert-danger py-2 mb-0">${p.error}</div>`; return; }
+  if (!p.is_box) {
+    el.innerHTML = `<div class="alert alert-warning py-2">
+        <strong>That path isn't a box.</strong>
+        <ul class="mb-1">${p.problems.map((x) => `<li>${x}</li>`).join("")}</ul>
+        <div class="small">Corners ${p.corners_deg.join("°, ")}° &middot; sides ${p.side_lengths_m.join(" m, ")} m</div>
+      </div>`;
+    targets = [];
+    return;
+  }
+  targets = p.targets;
+  el.innerHTML = `
+    <div class="small text-body-secondary mb-2">
+      Box OK — corners ${p.corners_deg.join("°, ")}°, sides ${p.side_lengths_m.join(" m, ")} m.
+      Markers face bearing <strong>${p.face_bearing_deg}°</strong>, ${p.clearance_m} m clear ahead.
+    </div>
+    <table class="table table-sm align-middle mb-2">
+      <thead>
+        <tr>
+          <th rowspan="2">Id</th><th rowspan="2">Height</th>
+          <th colspan="2" class="text-center border-start">Find the spot</th>
+          <th colspan="3" class="text-center border-start">Nudge the marker <span class="fw-normal small">(only while visible)</span></th>
+        </tr>
+        <tr>
+          <th class="border-start">Range</th><th>Bearing</th>
+          <th class="border-start">Towards robot</th><th>Robot's right</th><th>Rotate</th>
+        </tr>
+      </thead>
+      <tbody>${p.targets.map((t) => `<tr>
+        <td>${t.id}</td><td>${fmt(t.height_m, 2)} m</td>
+        <td class="border-start" id="g-range-${t.id}">—</td><td id="g-bearing-${t.id}">—</td>
+        <td class="border-start" id="m-fwd-${t.id}">—</td>
+        <td id="m-right-${t.id}">—</td>
+        <td id="m-rot-${t.id}">—</td>
+      </tr>`).join("")}</tbody>
+    </table>
+    <div class="alert alert-info py-2 small mb-0">
+      Placement doesn't need to be accurate — every marker's pose is solved for.
+      Get the row roughly centred, roughly facing ${p.face_bearing_deg}°, about 0.5 m apart.
+      <br><strong>${p.marker_size_note}.</strong>
+    </div>`;
+}
+
+/* A nudge reads better as a direction plus a magnitude than as a signed
+   number you have to decode while kneeling in the grass. */
+function nudge(value, positive, negative, unit, tolerance) {
+  if (Math.abs(value) < tolerance) return `<span class="text-success">ok</span>`;
+  const word = value > 0 ? positive : negative;
+  return `${Math.abs(value).toFixed(unit === "°" ? 0 : 2)}${unit === "°" ? "°" : " m"} ${word}`;
+}
+
+function pollGuidance() {
+  if (!targets.length) return;
+  fetch("/boresight/guidance", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ targets }),
+  }).then((r) => r.json()).then((g) => {
+    if (g.error) return;
+    g.targets.forEach((t) => {
+      const range = document.getElementById(`g-range-${t.id}`);
+      const bearing = document.getElementById(`g-bearing-${t.id}`);
+      if (!range) return;
+      range.textContent = `${fmt(t.range_m, 2)} m`;
+      range.className = (t.range_m < 0.3 ? "text-success fw-bold " : "") + "border-start";
+      bearing.textContent = `${fmt(t.bearing_deg, 0)}°`;
+    });
+    targets.forEach((t) => {
+      const m = (g.visible || {})[t.id];
+      const fwd = document.getElementById(`m-fwd-${t.id}`);
+      const right = document.getElementById(`m-right-${t.id}`);
+      const rot = document.getElementById(`m-rot-${t.id}`);
+      if (!fwd) return;
+      if (!m) {
+        fwd.innerHTML = `<span class="text-body-secondary">not seen</span>`;
+        right.textContent = "—"; rot.textContent = "—";
+        return;
+      }
+      fwd.innerHTML = nudge(m.towards_robot_m, "towards robot", "away from robot", "m", 0.1);
+      right.innerHTML = nudge(m.to_robot_right_m, "to robot's right", "to robot's left", "m", 0.1);
+      rot.innerHTML = nudge(m.rotate_deg, "clockwise", "anticlockwise", "°", 5);
+    });
+  });
+}
+
+function renderBuild(b) {
+  if (b.error) { showError("build-info", `${b.error}${(b.problems || []).map((p) => `<br>· ${p}`).join("")}`); return; }
+  document.getElementById("build-info").innerHTML = `
+    <div class="text-body-secondary">
+      Job "<strong>${b.job_name}</strong>": ${b.legs} straight legs + ${b.turns} turn-on-the-spot
+      steps, ${b.length_m} m, about ${b.minutes_per_pass} min per pass, facing ${b.face_bearing_deg}°.
+      Turns forced ${b.turns_left} left / ${b.turns_right} right.
+      ${b.waypoints_pulled_in ? `${b.waypoints_pulled_in} leg end(s) pulled inside the boundary.` : ""}
+      ${(b.continuity_warnings || []).length ? `<br><span class="text-warning">continuity: ${b.continuity_warnings.join("; ")}</span>` : ""}
+    </div>`;
+}
+
+function renderCapture(s) {
+  const running = s.running || (s.run && ["starting", "driving"].includes(s.run.state));
+  document.getElementById("run-start").disabled = running;
+  document.getElementById("run-stop").disabled = !running;
+  const el = document.getElementById("capture-status");
+  const run = s.run || {};
+  let runLine = "";
+  if (run.state && run.state !== "idle") {
+    const cls = { blocked: "text-bg-warning", error: "text-bg-danger",
+                  done: "text-bg-primary" }[run.state] || "text-bg-secondary";
+    runLine = `<div><span class="badge ${cls}">${run.state}</span>
+      ${run.message || ""} ${run.passes ? `(${run.passes_done}/${run.passes} passes)` : ""}</div>`;
+  }
+  if (!s.session) {
+    el.innerHTML = runLine || `<span class="text-body-secondary">Idle.</span>`;
+    return;
+  }
+  const c = s.session.counts || {};
+  const rejected = Object.entries(s.session.rejected || {})
+    .sort((a, b) => b[1] - a[1])
+    .map(([k, v]) => `${k}: ${v}`).join(" &middot; ");
+  el.innerHTML = runLine + `
+    <div>${s.running ? '<span class="badge text-bg-success">capturing</span>' : '<span class="badge text-bg-secondary">stopped</span>'}
+      ${fmt(s.session.elapsed_s, 0)} s &middot; <strong>${s.session.total}</strong> detections
+      from ${s.session.frames} frames</div>
+    <div class="mt-1">${Object.entries(c).map(([id, n]) => `marker ${id}: <strong>${n}</strong>`).join(" &middot; ")}</div>
+    <div class="text-body-secondary mt-1">nav buffer ${s.nav_buffer.samples} samples / ${s.nav_buffer.span_s}s</div>
+    ${rejected ? `<div class="text-body-secondary mt-1">skipped — ${rejected}</div>` : ""}`;
+}
+
+function runBody() {
+  return JSON.stringify({
+    path: document.getElementById("box-path").value,
+    height_m: Number(document.getElementById("height").value),
+    passes: Number(document.getElementById("passes").value),
+  });
+}
+const JSON_POST = { method: "POST", headers: { "Content-Type": "application/json" } };
+
+function loadSessions() {
+  fetch("/boresight/sessions").then((r) => r.json()).then((list) => {
+    document.getElementById("session").innerHTML = list
+      .map((s) => `<option value="${s.name}">${s.name} (${s.observations})</option>`).join("");
+  });
+}
+
+function renderSolve(r) {
+  const el = document.getElementById("solve-result");
+  if (r.error) { el.innerHTML = `<div class="alert alert-danger py-2 mb-0">${r.error}</div>`; return; }
+  const names = ["heading", "pitch", "roll"];
+  el.innerHTML = `
+    <table class="table table-sm w-auto mb-3">
+      <thead><tr><th></th><th class="text-end">hpr_cb</th><th class="text-end">± (split)</th><th class="text-end">± (formal)</th></tr></thead>
+      <tbody>${names.map((n, i) => `<tr>
+        <td>${n}</td>
+        <td class="text-end font-monospace fw-bold">${fmt(r.hpr_cb[i], 3)}°</td>
+        <td class="text-end font-monospace">${fmt(r.sigma_split[i], 3)}°</td>
+        <td class="text-end font-monospace text-body-secondary">${fmt(r.sigma_formal[i], 4)}°</td>
+      </tr>`).join("")}</tbody>
+    </table>
+    <div class="small text-body-secondary mb-2">
+      ${r.n_obs} observations &middot; residual ${r.rms_px} px &middot; reduced &chi;² ${r.chi2_reduced}
+      &middot; implied marker size <strong>${(r.implied_marker_size_m * 1000).toFixed(1)} mm</strong>
+      (scale ${r.size_scale})
+    </div>
+    <div class="alert alert-secondary py-2 small">
+      Quote the <strong>split</strong> figure, not the formal one. The formal σ assumes independent
+      corner noise and a perfect INS; the real error is dominated by INS attitude error correlated
+      over tens of seconds, so it reads far too small.
+    </div>
+    <button id="apply-btn" class="btn btn-sm btn-warning">Write hpr_cb to config.yaml</button>
+    <div id="apply-result" class="mt-2"></div>`;
+  document.getElementById("apply-btn").addEventListener("click", () => {
+    if (!confirm(`Write hpr_cb = [${r.hpr_cb.map((v) => v.toFixed(3)).join(", ")}] to config.yaml?`)) return;
+    fetch("/boresight/apply", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ hpr_cb: r.hpr_cb }),
+    }).then((x) => x.json()).then((a) => {
+      document.getElementById("apply-result").innerHTML = a.error
+        ? `<div class="alert alert-danger py-2 mb-0">${a.error}</div>`
+        : `<div class="alert alert-success py-2 mb-0">Written. Backup: ${a.backup}<br>${a.note}</div>`;
+    });
+  });
+}
+
+document.getElementById("plan-btn").addEventListener("click", () => {
+  const q = new URLSearchParams({
+    path: document.getElementById("box-path").value,
+    height_m: document.getElementById("height").value,
+  });
+  api(`/boresight/plan?${q}`, undefined, "plan-result").then(renderPlan).catch(() => {});
+});
+document.getElementById("build-only").addEventListener("click", () => {
+  api("/boresight/build-path", { ...JSON_POST, body: runBody() }, "build-info")
+    .then(renderBuild).catch(() => {});
+});
+document.getElementById("run-start").addEventListener("click", () => {
+  api("/boresight/run/start", { ...JSON_POST, body: runBody() }, "build-info")
+    .then((r) => {
+      if (r.error) { showError("build-info", r.error); return; }
+      renderBuild(r.built);
+      renderCapture(r.capture);
+    }).catch(() => {});
+});
+document.getElementById("run-stop").addEventListener("click", () => {
+  api("/boresight/run/stop", { method: "POST" }, "capture-status")
+    .then((s) => { renderCapture(s); loadSessions(); }).catch(() => {});
+});
+document.getElementById("solve-btn").addEventListener("click", () => {
+  const btn = document.getElementById("solve-btn");
+  btn.disabled = true; btn.textContent = "Solving…";
+  api("/boresight/solve", {
+    ...JSON_POST,
+    body: JSON.stringify({
+      session: document.getElementById("session").value,
+      estimate_size_scale: document.getElementById("size-scale").checked,
+    }),
+  }, "solve-result").then(renderSolve).catch(() => {})
+    .finally(() => { btn.disabled = false; btn.textContent = "Solve"; });
+});
+
+let wasRunning = false;
+setInterval(() => {
+  api("/boresight/capture/status").then((s) => {
+    renderCapture(s);
+    const running = s.running || (s.run && ["starting", "driving"].includes(s.run.state));
+    if (wasRunning && !running) loadSessions();  // a finished run has a new session to solve
+    wasRunning = running;
+  }).catch(() => {});
+  pollGuidance();
+}, 1000);
+loadSessions();
+</script>
+{% endblock %}

@@ -34,6 +34,10 @@ import gad  # noqa: E402
 import marker_map  # noqa: E402
 import survey  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parent / "boresight"))
+from boresight import layouts as boresight_layouts  # noqa: E402
+from boresight.service import BoresightService  # noqa: E402
+
 PAGES_DIR = Path(__file__).resolve().parent / "templates" / "pages"
 CAMERA_CAL_FILE = Path(__file__).resolve().parent.parent / "shared" / "camera-cal.yaml"
 STATUS_HZ = 5  # /ws/aruco update rate — independent of camera_fps
@@ -437,6 +441,104 @@ def ws_add_marker(ws):
             }
         ws.send(json.dumps(payload))
         time.sleep(period)
+
+
+# --- Bore-sight calibration (see boresight/boresight-prd.md) ---
+# Everything behind these routes lives in boresight/service.py, so the
+# routes stay thin and the logic stays testable without a Flask app.
+
+boresight = BoresightService(
+    cfg=cfg,
+    nav_client=nav_client,
+    frame_reader_fn=lambda: _get_frame_reader(wait=False),
+    detect_fn=lambda frame, k, d: detection.detect_markers(frame, k, d, size_for_id=_marker_size_lookup),
+    marker_size=detection.DEFAULT_MARKER_SIZE,
+    hpr_cb=hpr_cb,
+    dxc_b=dxc_b,
+    camera_cal_fn=lambda: detection.load_calibration(CAMERA_CAL_FILE),
+    paths_dir=Path(__file__).resolve().parent.parent / cfg["services"]["navigate"]["paths_dir"],
+    # Server-to-server on localhost, same convention jobs/app.py uses to
+    # reach waterbutt — the bore-sight run drives the robot itself rather
+    # than asking the operator to.
+    navigate_base_url=f"http://localhost:{cfg['services']['navigate']['port']}",
+    jobs_base_url=f"http://localhost:{cfg['services']['jobs']['port']}",
+    max_detection_hz=service_cfg["max_detection_hz"],
+)
+
+
+@app.route("/boresight/build-path", methods=["POST"])
+def boresight_build_path():
+    body = request.get_json(force=True)
+    return jsonify(boresight.build_capture_job(
+        body.get("path", "Boresight limits"),
+        float(body.get("height_m", boresight_layouts.RECOMMENDED_HEIGHT_M)),
+        boresight_layouts.INS_HEIGHT_M,
+    ))
+
+
+@app.route("/boresight/run/start", methods=["POST"])
+def boresight_run_start():
+    body = request.get_json(force=True)
+    return jsonify(boresight.start_run(
+        body.get("path", "Boresight limits"),
+        float(body.get("height_m", boresight_layouts.RECOMMENDED_HEIGHT_M)),
+        boresight_layouts.INS_HEIGHT_M,
+        passes=int(body.get("passes", 4)),
+    ))
+
+
+@app.route("/boresight/run/stop", methods=["POST"])
+def boresight_run_stop():
+    return jsonify(boresight.stop_run())
+
+
+@app.route("/boresight/plan")
+def boresight_plan():
+    return jsonify(boresight.placement_plan(
+        request.args.get("path", "Boresight limits"),
+        float(request.args.get("height_m", boresight_layouts.RECOMMENDED_HEIGHT_M)),
+        boresight_layouts.INS_HEIGHT_M,
+    ))
+
+
+@app.route("/boresight/guidance", methods=["POST"])
+def boresight_guidance():
+    return jsonify(boresight.placement_guidance(request.get_json(force=True)["targets"]))
+
+
+@app.route("/boresight/capture/start", methods=["POST"])
+def boresight_capture_start():
+    return jsonify(boresight.start_capture())
+
+
+@app.route("/boresight/capture/stop", methods=["POST"])
+def boresight_capture_stop():
+    return jsonify(boresight.stop_capture())
+
+
+@app.route("/boresight/capture/status")
+def boresight_capture_status():
+    return jsonify(boresight.capture_status())
+
+
+@app.route("/boresight/sessions")
+def boresight_sessions():
+    return jsonify(boresight.list_sessions())
+
+
+@app.route("/boresight/solve", methods=["POST"])
+def boresight_solve():
+    body = request.get_json(force=True)
+    return jsonify(boresight.solve_session(
+        boresight.data_dir / body["session"],
+        estimate_size_scale=bool(body.get("estimate_size_scale", True)),
+    ))
+
+
+@app.route("/boresight/apply", methods=["POST"])
+def boresight_apply():
+    from shared.config import CONFIG_PATH
+    return jsonify(boresight.apply_to_config(CONFIG_PATH, request.get_json(force=True)["hpr_cb"]))
 
 
 register_pages(app, PAGES_DIR, index_slug="home")
