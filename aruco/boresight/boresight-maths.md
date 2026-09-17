@@ -79,14 +79,14 @@ $$
   `cv2.aruco.estimatePoseSingleMarkers` (though the solve here never
   actually calls that on the real data — see §4, it re-derives the
   equivalent information from raw corner pixels instead).
-- $C_{nm} = C_{nb}(\text{marker\_hpr})$ — a marker's orientation. **Also
+- $C_{nm} = C_{nb}(\text{marker hpr})$ — a marker's orientation. **Also
   an unknown**, one free triple per marker.
 
 ## 4. Forward projection
 
 Given a candidate $\text{hpr}_{cb}$, a marker's pose
 $(\text{pos}_n, \text{hpr}_m)$, and the vehicle's reported pose
-$(\text{nav\_pos}_n, \text{nav\_hpr})$, `model.py` predicts where the
+$(\text{nav pos}_n, \text{nav hpr})$, `model.py` predicts where the
 marker's four corners land in the image. The corners in the marker's
 own frame $M$ are just its four physical corners:
 
@@ -100,13 +100,13 @@ $$
 \begin{aligned}
 X_m &= C_{mM}\,X_M \\
 X_n &= \text{pos}_n + C_{nm}\,X_m \\
-X_b &= C_{nb}^{\mathsf T}\,(X_n - \text{nav\_pos}_n) \\
-X_{b,\text{cam}} &= X_b - d_{xc\_b} \\
+X_b &= C_{nb}^{\mathsf T}\,(X_n - \text{nav pos}_n) \\
+X_{b,\text{cam}} &= X_b - d_{xcb} \\
 X_C &= C_{Cc}\,C_{cb}\,X_{b,\text{cam}}
 \end{aligned}
 $$
 
-$d_{xc\_b}$ is the camera's fixed position offset from the body origin
+$d_{xcb}$ is the camera's fixed position offset from the body origin
 (CAD, ~5mm, held constant — see §8). Then OpenCV's own pinhole +
 distortion model turns $X_C$ into a pixel:
 
@@ -322,7 +322,7 @@ GAD updates want the camera consistent with the frame the xNAV650
 *reports*, not with true geographic north.
 
 **Why it's nearly exact.** With the camera at the body origin
-($d_{xc\_b}=0$) and zero mount angle, on level ground ($p=r=0$):
+($d_{xcb}=0$) and zero mount angle, on level ground ($p=r=0$):
 
 $$
 C_{nb}(h+b,\,0,\,0) = R_z(b)\,C_{nb}(h,\,0,\,0)
@@ -336,9 +336,9 @@ invisible.
 
 **Why it's not exact — two small leaks, both measured:**
 
-- **The 0.105m lever arm.** With $d_{xc\_b} \neq 0$, the camera's actual
-  position is $\text{nav\_pos}_n + C_{nb}\,d_{xc\_b}$. A heading bias
-  $b$ shifts that position by approximately $b \times (C_{nb}\,d_{xc\_b})$
+- **The 0.105m lever arm.** With $d_{xcb} \neq 0$, the camera's actual
+  position is $\text{nav pos}_n + C_{nb}\,d_{xcb}$. A heading bias
+  $b$ shifts that position by approximately $b \times (C_{nb}\,d_{xcb})$
   — a genuine *translation* of the camera, which no rotation
   ($\text{hpr}_{cb}$ only ever rotates) can reproduce. Measured: ~1.3%
   of the bias leaks through rather than being absorbed.
