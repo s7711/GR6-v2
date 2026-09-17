@@ -13,6 +13,11 @@ also gates the visual-mapping work that comes next.
 Target accuracy: **0.1 degrees** (Ben, 2026-09-14) — about 5cm of
 cross-range error at 3m.
 
+For the maths itself — frames, the forward projection model, the cost
+function, the observability arguments, why the INS heading bias is
+absorbed rather than measured — see `boresight-maths.md`. This document
+is the design log: decisions, dead ends, and what got built.
+
 ## Status (2026-09-16)
 
 All built and tested — 154 tests. Forward model (`model.py`), solver
