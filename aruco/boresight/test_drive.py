@@ -129,6 +129,72 @@ class BuildJobTestCase(unittest.TestCase):
         self.assertIsNone(steps)
         self.assertFalse(info["is_box"])
 
+    def test_approach_legs_are_slower_than_return_legs(self):
+        """Ben's point: slow down driving IN (where a marker is about to
+        drop off the image edge) and speed up driving back OUT."""
+        legs, _steps, _info = self._job()
+        for _name, points in legs:
+            self.assertEqual(points[0]["speed_mps"], points[1]["speed_mps"])
+            self.assertIn(points[0]["speed_mps"], (drive.APPROACH_SPEED_MPS, drive.RETURN_SPEED_MPS))
+
+    def test_length_and_seconds_account_for_mixed_speeds(self):
+        _legs, _steps, info = self._job()
+        self.assertGreater(info["seconds"], 0)
+        # A single-speed estimate using the faster speed would understate
+        # the time; using the slower speed would overstate it.
+        naive_fast = info["length_m"] / drive.RETURN_SPEED_MPS
+        naive_slow = info["length_m"] / drive.APPROACH_SPEED_MPS
+        self.assertGreater(info["seconds"], naive_fast)
+        self.assertLess(info["seconds"], naive_slow)
+
+    def test_no_lead_in_without_a_robot_position(self):
+        legs, steps, _info = self._job()
+        self.assertEqual(steps[0]["type"], "run_path")
+        self.assertEqual(steps[0]["path"], legs[0][0])
+
+    def test_lead_in_drives_to_leg_zero_then_turns_onto_it(self):
+        """Ben's point: he had to drive the robot to the start by hand.
+        A parked-elsewhere robot should get turn -> run_path(approach) ->
+        turn -> run_path(leg 0), not start leg 0's run_path cold."""
+        box = _box_points()
+        info, targets = placement.marker_targets(
+            box, (20, 21, 22), layouts.RECOMMENDED_HEIGHT_M, 0.5, layouts.INS_HEIGHT_M)
+        legs, steps, _info2 = drive.build_job(
+            box, info["face_bearing_deg"], targets[1]["lat"], targets[1]["lon"],
+            robot_lat=box[0]["lat"], robot_lon=box[0]["lon"], robot_heading_deg=0.0)
+        self.assertEqual(legs[0][0], f"{drive.LEG_PATH_PREFIX} approach")
+        self.assertEqual(legs[0][1][0]["lat"], box[0]["lat"])
+        self.assertEqual(legs[0][1][0]["lon"], box[0]["lon"])
+        self.assertEqual(legs[0][1][1]["lat"], legs[1][1][0]["lat"])
+        self.assertEqual(steps[0]["type"], "turn_to_heading")
+        run_path_types = [s["type"] for s in steps[:4]]
+        self.assertIn("run_path", run_path_types)
+        approach_run_index = next(i for i, s in enumerate(steps)
+                                  if s["type"] == "run_path" and s["path"] == legs[0][0])
+        leg0_run_index = next(i for i, s in enumerate(steps)
+                              if s["type"] == "run_path" and s["path"] == legs[1][0])
+        self.assertLess(approach_run_index, leg0_run_index)
+        # A turn_to_heading separates the approach arrival from leg 0.
+        self.assertEqual(steps[leg0_run_index - 1]["type"], "turn_to_heading")
+
+    def test_no_approach_leg_when_already_at_the_start(self):
+        """Below MIN_APPROACH_LEG_M, only the alignment turn is needed —
+        a near-zero-length run_path would just fail navigate's entry
+        check."""
+        box = _box_points()
+        info, targets = placement.marker_targets(
+            box, (20, 21, 22), layouts.RECOMMENDED_HEIGHT_M, 0.5, layouts.INS_HEIGHT_M)
+        legs, steps, _ = drive.build_job(box, info["face_bearing_deg"],
+                                         targets[1]["lat"], targets[1]["lon"])
+        first_start = legs[0][1][0]
+        legs2, steps2, _ = drive.build_job(
+            box, info["face_bearing_deg"], targets[1]["lat"], targets[1]["lon"],
+            robot_lat=first_start["lat"], robot_lon=first_start["lon"], robot_heading_deg=200.0)
+        self.assertEqual(len(legs2), len(legs))
+        self.assertEqual(steps2[0]["type"], "turn_to_heading")
+        self.assertEqual(steps2[1]["type"], "run_path")
+        self.assertEqual(steps2[1]["path"], legs2[0][0])
+
 
 class JobDriverTestCase(unittest.TestCase):
     def setUp(self):

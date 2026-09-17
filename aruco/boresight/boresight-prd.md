@@ -458,6 +458,93 @@ interference** (every surviving sample claimed 0.16-0.19 deg heading
 accuracy and 7-19mm position). The quality gates did not catch the bad
 window; the residual did.
 
+## Lead-in to the start (2026-09-16)
+
+The generated chain (build_chain) just starts at leg 0 wherever the fan
+happens to put it — nothing about the pattern itself cares where the
+robot begins. In practice that meant Ben had to drive the robot to the
+start by hand before starting a run.
+
+`build_job` now takes the robot's current lat/lon/heading (read from the
+nav feed in `service.build_capture_job`, the same feed the capture loop
+already subscribes to) and, when given, prepends a lead-in: turn towards
+leg 0's start, `run_path` to it, then turn onto leg 0's own heading
+before the first capture leg runs. Below `MIN_APPROACH_LEG_M` (0.3m) the
+approach `run_path` step is skipped — a near-zero-length path would fail
+navigate's entry check anyway — and only the alignment turn is added.
+The approach turns use `want_sign=0` (shortest way): they aren't part of
+the fan's own left/right balance requirement, just a one-off drive to
+the pattern's actual start.
+
+Omitting the three `robot_*` arguments keeps the old behaviour, which is
+what the simulator and most of `test_drive.py` still exercise — the
+lead-in only matters once there's a real robot sitting somewhere.
+
+## Fan critique (2026-09-16)
+
+Ben watched the actual driven pattern and raised five points. Checked
+each numerically rather than by argument:
+
+1. **Approach from both directions** (back-to-back panel, `both_sides_legs`
+   + `row3h_back_to_back`, already in `layouts.py` since the original
+   design pass but never adopted). Monte Carlo says this is a real win,
+   not a marginal one: H 0.100 -> 0.046 deg, P 0.057 -> 0.031, R 0.051 ->
+   0.038, obs 1194 -> 2266 (8 trials, seed 1). Cost: 3 more markers
+   (ids 23-25) to print and place on the panel's back face, and the
+   panel can no longer sit backed up against one edge for turning room
+   (see placement.py's `along_axis_fraction=0.9`) since both sides now
+   need approach room. Not yet decided or built — this needs Ben's
+   sign-off given the extra printing/placing effort, and the placement
+   backing-fraction logic would need revisiting.
+
+2. **Rotate the panel 90 deg onto the box's short edge**, trading depth
+   for a much wider sector before clipping (the box's long axis was
+   giving depth nobody was using - ArUco's own range limit is 4m, and
+   the current fan's R_far=3.5 already sits near the max the SHORT axis
+   allows, 3.35m before margin shrink, ~2.9m after it - so the sector
+   was never actually depth-limited, it was width-limited). Tested at
+   half_width=75/85 deg, r_far=2.85m: NOT a clear win. Observation count
+   dropped 39-44% (fewer, shorter legs fit in the 2.9m the short axis
+   allows), and accuracy was mixed-to-worse (half_width=85 exceeded the
+   0.1 deg target on H; half_width=75 was roughly comparable to the
+   current baseline on H but worse on P/R). Only 8 trials each, so take
+   the exact numbers as a rough cut, but the observation-count drop is
+   geometry, not sampling noise, and it isn't a promising direction.
+   Not adopted.
+
+3. **Marker 22 (the outer marker) losing visibility fast on some
+   approaches** — checked in sim: on `fan` legs (straight at the panel)
+   marker 22 is visible 43% of frames; on `past` legs (which deliberately
+   swing the view off to one side so a marker sweeps towards the image
+   edge - that's the whole roll signal) it drops to 6%. This is the
+   `past` legs working as designed, not a fault to fix by "moving the fan
+   centre" - swinging the view means one outer marker goes past the edge
+   while the other is what ends up near it, asymmetric by construction.
+   Also confirmed: the camera's actual FOV from `shared/camera-cal.yaml`
+   is ~57 x 45 deg, not the ~90 deg Ben remembered - narrower than
+   assumed makes this effect, and the whole sector/oblique-angle tuning,
+   more important than it looked.
+
+4. **Slower approach, faster return** - adopted. `APPROACH_SPEED_MPS =
+   0.12`, `RETURN_SPEED_MPS = 0.3` in drive.py, applied per leg by
+   comparing start/end radius from the panel (decreasing radius =
+   approaching = slow). Not "more data" in general - INS heading error
+   is correlated over ~30s, so extra frames of the same geometry are
+   close to free lunch already spent - but more of the specific frames
+   where a marker is about to leave the frame, which point 3 shows is
+   exactly what's scarce. `build_job`'s `info["seconds"]` now sums each
+   leg's own length/speed rather than assuming one uniform SPEED_MPS,
+   since legs now genuinely run at different speeds.
+
+5. **Facing the sun** - can't be tested in sim, Ben's call on the
+   ground. Worth recording: IF the box gets rotated 90 deg (point 2,
+   currently not adopted), the two resulting facings are bearing 163 deg
+   (camera looks roughly north) or 343 deg (looks roughly south) - 163
+   is the one that also solves the sun problem, and is close to what Ben
+   called "the north edge". Moot while point 2 isn't adopted; the
+   current facing (73/253) is fixed by the box's long axis regardless of
+   sun angle.
+
 ## Still to do
 
 - **After calibration**: markers 10/11/12/17/19 were surveyed under
@@ -466,7 +553,6 @@ window; the residual did.
 - **The 0.097 -> 0.100 marker size fix** in marker-map.yaml and
   detection.py — Ben's call, and the two size estimates should agree
   first.
-- Nothing in `aruco/boresight/` is committed yet.
 
 ## Out of scope
 

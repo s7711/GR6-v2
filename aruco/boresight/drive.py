@@ -35,6 +35,16 @@ from shared.geodesy import lla_to_ned, ned_to_lla  # noqa: E402
 import placement  # noqa: E402
 
 SPEED_MPS = 0.2
+# Approach legs (radius decreasing, driving in towards the panel) go
+# slower than retreat legs (radius increasing, driving back out): the
+# marker is closest to leaving the frame right as the robot arrives at
+# the near radius, so slowing down there buys more frames of exactly the
+# view that's scarcest — not "more data" in general, since INS heading
+# error is correlated over ~30s and extra frames of the same geometry
+# are close to free lunch already spent, but more of the specific frames
+# where a marker is about to drop off the image edge (Ben, 2026-09-16).
+APPROACH_SPEED_MPS = 0.12
+RETURN_SPEED_MPS = 0.3
 CLEARANCE_M = 0.5
 
 # Sector and radii, as studied. r_near is kept off the panel so the robot
@@ -46,6 +56,11 @@ R_NEAR_M = 1.3
 
 LEG_PATH_PREFIX = "Boresight leg"
 JOB_NAME = "Boresight capture"
+# Below this, the robot is already close enough to leg 0's start that a
+# dedicated approach leg would be a near-zero-length run_path step (which
+# navigate's entry check would reject anyway) - just turn onto leg 0's
+# heading directly.
+MIN_APPROACH_LEG_M = 0.3
 # Forcing a turn the long way round needs the arc split into pieces each
 # comfortably under 180 degrees, or the controller's own shortest-way
 # logic just takes the short side of each piece instead. Three is plenty
@@ -168,7 +183,7 @@ def turn_steps(from_heading_deg, to_heading_deg, want_sign, tolerance_deg=8.0):
 
 
 def build_job(box_points, face_bearing_deg, panel_lat, panel_lon, inside_margin_m=0.4,
-              turn_tolerance_deg=8.0):
+              turn_tolerance_deg=8.0, robot_lat=None, robot_lon=None, robot_heading_deg=None):
     """Turn the chain into (leg_paths, job_steps).
 
     leg_paths: [(path_name, [point, point]), ...] to save into navigate.
@@ -178,6 +193,15 @@ def build_job(box_points, face_bearing_deg, panel_lat, panel_lon, inside_margin_
     along their own direction rather than dropped, so the chain stays
     connected — a gap would leave the robot too far from the next leg's
     start for navigate's entry check.
+
+    The chain itself starts wherever leg 0 happens to be, which is
+    nowhere near where Ben actually parks the robot before starting a
+    run — he had to drive it to the start by hand (Ben, 2026-09-16). If
+    the robot's current position/heading are given, a lead-in is
+    prepended: turn towards leg 0's start, run a path to it, then turn
+    onto leg 0's own heading before the first capture leg runs. Omitting
+    the three robot_* arguments keeps the old behaviour (used by tests
+    and anything that only cares about the pattern itself).
     """
     info = placement.check_box(box_points)
     if not info["is_box"]:
@@ -227,10 +251,12 @@ def build_job(box_points, face_bearing_deg, panel_lat, panel_lon, inside_margin_
         if float(np.linalg.norm(e - s)) < 0.8:
             continue  # too short to be worth a leg of its own
         name = f"{LEG_PATH_PREFIX} {index:02d}"
+        approaching = float(np.linalg.norm(end)) < float(np.linalg.norm(start))
+        speed = APPROACH_SPEED_MPS if approaching else RETURN_SPEED_MPS
         points = []
         for ne in (s, e):
             lat, lon = _ne_to_lla(ne, lat0, lon0)
-            points.append({"lat": lat, "lon": lon, "speed_mps": SPEED_MPS,
+            points.append({"lat": lat, "lon": lon, "speed_mps": speed,
                            "pump": False, "clearance_m": CLEARANCE_M})
         leg_paths.append((name, points))
         heading = math.degrees(math.atan2(e[1] - s[1], e[0] - s[0]))
@@ -243,13 +269,42 @@ def build_job(box_points, face_bearing_deg, panel_lat, panel_lon, inside_margin_
         steps.append({"type": "run_path", "path": name})
         previous_end, previous_heading = e, heading
 
+    if leg_paths and robot_lat is not None and robot_lon is not None and robot_heading_deg is not None:
+        lead_in_steps = []
+        first_start, first_end = leg_paths[0][1][0], leg_paths[0][1][1]
+        robot_ne = np.array(lla_to_ned(robot_lat, robot_lon, 0.0, lat0, lon0, 0.0)[:2])
+        start_ne = np.array(lla_to_ned(first_start["lat"], first_start["lon"], 0.0, lat0, lon0, 0.0)[:2])
+        end_ne = np.array(lla_to_ned(first_end["lat"], first_end["lon"], 0.0, lat0, lon0, 0.0)[:2])
+        current_heading = robot_heading_deg
+        approach_dist = float(np.linalg.norm(start_ne - robot_ne))
+        if approach_dist >= MIN_APPROACH_LEG_M:
+            approach_name = f"{LEG_PATH_PREFIX} approach"
+            approach_heading = math.degrees(math.atan2(start_ne[1] - robot_ne[1],
+                                                        start_ne[0] - robot_ne[0]))
+            lead_in_steps.extend(turn_steps(current_heading, approach_heading, 0, turn_tolerance_deg))
+            lead_in_steps.append({"type": "run_path", "path": approach_name})
+            leg_paths = [(approach_name, [
+                {"lat": robot_lat, "lon": robot_lon, "speed_mps": SPEED_MPS,
+                 "pump": False, "clearance_m": CLEARANCE_M},
+                dict(first_start),
+            ])] + leg_paths
+            current_heading = approach_heading
+        first_leg_heading = math.degrees(math.atan2(end_ne[1] - start_ne[1], end_ne[0] - start_ne[0]))
+        lead_in_steps.extend(turn_steps(current_heading, first_leg_heading, 0, turn_tolerance_deg))
+        steps = lead_in_steps + steps
+
     info = dict(info)
     info["waypoints_pulled_in"] = pulled_in
     info["leg_count"] = len(leg_paths)
-    info["length_m"] = sum(
+    leg_lengths_m = [
         float(np.linalg.norm(np.array(lla_to_ned(p[1]["lat"], p[1]["lon"], 0.0, lat0, lon0, 0.0)[:2])
                              - np.array(lla_to_ned(p[0]["lat"], p[0]["lon"], 0.0, lat0, lon0, 0.0)[:2])))
-        for _n, p in leg_paths)
+        for _n, p in leg_paths]
+    info["length_m"] = sum(leg_lengths_m)
+    # Legs run at different speeds (see APPROACH_SPEED_MPS/RETURN_SPEED_MPS),
+    # so a single length/SPEED_MPS estimate would be wrong - sum each leg's
+    # own duration instead. Both points of a leg share one speed_mps.
+    info["seconds"] = sum(length / p[0]["speed_mps"] for length, (_n, p) in zip(leg_lengths_m, leg_paths))
     info["turn_count"] = sum(1 for s in steps if s["type"] == "turn_to_heading")
     info["turns_left"] = sum(1 for x in turn_signs if x < 0)
     info["turns_right"] = sum(1 for x in turn_signs if x > 0)

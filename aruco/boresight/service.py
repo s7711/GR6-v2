@@ -5,6 +5,7 @@ testable without a Flask app.
 """
 
 import logging
+import math
 import re
 import shutil
 import sys
@@ -304,23 +305,34 @@ class BoresightService:
     def build_capture_job(self, box_path_name, height_m, ins_height_m):
         """Generate the capture legs and the job that sequences them, and
         save both — so the run can also be started by hand from the jobs
-        page if anything goes wrong here."""
+        page if anything goes wrong here.
+
+        Includes a lead-in from wherever the robot is actually parked:
+        without it the chain just starts at leg 0 wherever that happens
+        to fall, and Ben had to drive the robot to the start by hand
+        (2026-09-16)."""
         plan = self.placement_plan(box_path_name, height_m, ins_height_m)
         if plan.get("error") or not plan["is_box"]:
             return {"error": plan.get("error") or "boundary path is not a box",
                     "problems": plan.get("problems", [])}
         panel = plan["targets"][len(plan["targets"]) // 2]  # middle marker = panel centre
         file = self.paths_dir / f"{box_path_name}.yaml"
+        robot_lat = robot_lon = robot_heading_deg = None
+        nav = self.nav_client.latest().get("nav", {})
+        if "Lat" in nav and "Lon" in nav and "Heading" in nav:
+            robot_lat, robot_lon = math.degrees(nav["Lat"]), math.degrees(nav["Lon"])
+            robot_heading_deg = nav["Heading"]
         leg_paths, steps, info = drive_mod.build_job(
             yaml.safe_load(file.read_text()) or [],
-            plan["face_bearing_deg"], panel["lat"], panel["lon"])
+            plan["face_bearing_deg"], panel["lat"], panel["lon"],
+            robot_lat=robot_lat, robot_lon=robot_lon, robot_heading_deg=robot_heading_deg)
         if leg_paths is None:
             return {"error": "boundary path is not a box"}
         warnings = {}
         if self.driver is not None:
             warnings = self.driver.save(leg_paths, steps) or {}
         real_warnings = _continuity_warnings_worth_showing(warnings.get("warnings", []), steps)
-        minutes = info["length_m"] / drive_mod.SPEED_MPS / 60.0
+        minutes = info["seconds"] / 60.0
         return {
             "job_name": drive_mod.JOB_NAME,
             "legs": info["leg_count"],
