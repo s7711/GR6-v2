@@ -68,11 +68,19 @@
     <div id="solve-result"></div>
   </div>
 </div>
+
+<div class="card mt-3">
+  <div class="card-header">4. Run log</div>
+  <div class="card-body">
+    <div id="run-log-table"></div>
+  </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
 <script>
 let targets = [];
+let lastSolvedSession = null;
 
 function fmt(x, n = 3) { return (x === null || x === undefined) ? "—" : Number(x).toFixed(n); }
 
@@ -244,6 +252,7 @@ function loadSessions() {
 function renderSolve(r) {
   const el = document.getElementById("solve-result");
   if (r.error) { el.innerHTML = `<div class="alert alert-danger py-2 mb-0">${r.error}</div>`; return; }
+  lastSolvedSession = document.getElementById("session").value;
   const names = ["heading", "pitch", "roll"];
   el.innerHTML = `
     <table class="table table-sm w-auto mb-3">
@@ -266,7 +275,19 @@ function renderSolve(r) {
       over tens of seconds, so it reads far too small.
     </div>
     <button id="apply-btn" class="btn btn-sm btn-warning">Write hpr_cb to config.yaml</button>
-    <div id="apply-result" class="mt-2"></div>`;
+    <div id="apply-result" class="mt-2"></div>
+    <hr>
+    <div class="row g-2 align-items-end">
+      <div class="col-auto">
+        <label class="form-label small mb-0">Notes (optional)</label>
+        <input id="run-log-notes" class="form-control form-control-sm" style="width: 20rem;"
+               placeholder="e.g. clean run, no interference">
+      </div>
+      <div class="col-auto">
+        <button id="log-run-btn" class="btn btn-sm btn-outline-primary">Log this run</button>
+      </div>
+    </div>
+    <div id="log-run-result" class="mt-2"></div>`;
   document.getElementById("apply-btn").addEventListener("click", () => {
     if (!confirm(`Write hpr_cb = [${r.hpr_cb.map((v) => v.toFixed(3)).join(", ")}] to config.yaml?`)) return;
     fetch("/boresight/apply", {
@@ -278,6 +299,43 @@ function renderSolve(r) {
         : `<div class="alert alert-success py-2 mb-0">Written. Backup: ${a.backup}<br>${a.note}</div>`;
     });
   });
+  document.getElementById("log-run-btn").addEventListener("click", () => {
+    const btn = document.getElementById("log-run-btn");
+    btn.disabled = true;
+    api("/boresight/runs/log", {
+      ...JSON_POST,
+      body: JSON.stringify({ session: lastSolvedSession, notes: document.getElementById("run-log-notes").value }),
+    }, "log-run-result").then((row) => {
+      document.getElementById("log-run-result").innerHTML = row.error
+        ? `<div class="alert alert-danger py-2 mb-0">${row.error}</div>`
+        : `<div class="alert alert-success py-2 mb-0">Logged as ${row.timestamp}.</div>`;
+      loadRunLog();
+    }).catch(() => {}).finally(() => { btn.disabled = false; });
+  });
+}
+
+function renderRunLog(rows) {
+  const el = document.getElementById("run-log-table");
+  if (!rows.length) { el.innerHTML = `<div class="text-body-secondary small">No runs logged yet.</div>`; return; }
+  const cols = [
+    ["timestamp", "when"], ["session", "session"], ["n_obs", "points"], ["rotations", "rotations"],
+    ["heading_spread_deg", "heading spread°"], ["hpr_cb_h", "H°"], ["hpr_cb_p", "P°"], ["hpr_cb_r", "R°"],
+    ["sigma_split_h", "±H°"], ["sigma_split_p", "±P°"], ["sigma_split_r", "±R°"],
+    ["rms_px", "rms px"], ["implied_marker_size_m", "size m"], ["notes", "notes"],
+  ];
+  el.innerHTML = `
+    <div class="table-responsive">
+    <table class="table table-sm">
+      <thead><tr>${cols.map(([, label]) => `<th>${label}</th>`).join("")}</tr></thead>
+      <tbody>${rows.slice().reverse().map((row) => `<tr>${
+        cols.map(([key]) => `<td class="font-monospace small">${row[key] ?? ""}</td>`).join("")
+      }</tr>`).join("")}</tbody>
+    </table>
+    </div>`;
+}
+
+function loadRunLog() {
+  fetch("/boresight/runs").then((r) => r.json()).then(renderRunLog);
 }
 
 document.getElementById("plan-btn").addEventListener("click", () => {
@@ -327,5 +385,6 @@ setInterval(() => {
   pollGuidance();
 }, 1000);
 loadSessions();
+loadRunLog();
 </script>
 {% endblock %}

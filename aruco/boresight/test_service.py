@@ -5,6 +5,8 @@ so it must never mangle a file it doesn't fully understand, and it must
 preserve the comments that carry this project's tuning history.
 """
 
+import csv
+import json
 import shutil
 import sys
 import tempfile
@@ -12,13 +14,21 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import numpy as np
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
+import drive as drive_mod  # noqa: E402
 import layouts  # noqa: E402
 import service  # noqa: E402
+import sim  # noqa: E402
+
+from shared.geodesy import ned_to_lla  # noqa: E402
+
+TRUE_HPR_CB = (2.0, -1.2, 1.5)
+DXC_B = (0.0775, 0.002, -0.07)
 
 REAL_BOX = Path(__file__).resolve().parent.parent.parent / "navigate" / "data" / "Boresight limits.yaml"
 
@@ -42,6 +52,32 @@ class _FakeNavClient:
         return self._payload
 
 
+class _FakeDriver:
+    """Records what would have been sent to navigate/jobs, without any
+    real HTTP - so build_capture_job/_run_loop's SEQUENCING can be
+    checked (which job_name, in what order) without a live robot."""
+
+    def __init__(self, idle_results=None):
+        self.saved = []          # [{"job_name":, "legs":, "steps":}, ...]
+        self.started = []        # [job_name, ...] in call order
+        self.stopped = 0
+        self._idle_results = list(idle_results or [])
+
+    def save(self, leg_paths, steps, job_name=drive_mod.JOB_NAME):
+        self.saved.append({"job_name": job_name, "legs": leg_paths, "steps": steps})
+        return {}
+
+    def start(self, job_name=drive_mod.JOB_NAME):
+        self.started.append(job_name)
+        return {"state": "running"}
+
+    def stop(self):
+        self.stopped += 1
+
+    def wait_until_idle(self, should_stop=None):
+        return self._idle_results.pop(0) if self._idle_results else {"state": "idle"}
+
+
 def _service(tmp, nav_payload=None, paths_dir=None):
     return service.BoresightService(
         cfg={}, nav_client=_FakeNavClient(nav_payload or {"nav": {}, "connection": {}}),
@@ -50,6 +86,32 @@ def _service(tmp, nav_payload=None, paths_dir=None):
         camera_cal_fn=lambda: (None, None),
         paths_dir=paths_dir or (tmp / "paths"), data_dir=tmp / "data",
     )
+
+
+def _write_session(path, lat0=52.235464, lon0=-1.460508, seed=1):
+    """A real-shaped session file — geometry good enough to pass
+    geometry_check, same recipe test_solve.py uses for its own fixtures
+    — so log_run can be exercised without a live robot."""
+    rng = np.random.default_rng(seed)
+    legs = layouts.fan_legs(count=4) + layouts.past_legs(count=4)
+    t, pos, hpr = sim.legs_to_poses(legs, fps=1.0, bump_deg=1.5, rng=rng)
+    noise = sim.NoiseModel(sigma_px=1e-9, pos_sigma_m=0.0, heading_sigma_deg=0.0,
+                           heading_bias_deg=0.0, tilt_sigma_deg=0.0, tilt_bias_deg=0.0)
+    obs, _bias = sim.simulate(layouts.row3h(), t, pos, hpr, TRUE_HPR_CB, DXC_B, noise, rng)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w") as f:
+        f.write(json.dumps({"type": "header", "marker_ids": obs.marker_ids,
+                            "marker_size": 0.097}) + "\n")
+        for i in range(len(obs)):
+            lat, lon, alt = ned_to_lla(*obs.nav_pos_n[i], lat0, lon0, 0.0)
+            f.write(json.dumps({
+                "type": "obs", "t": float(obs.t[i]),
+                "id": int(obs.marker_ids[obs.marker_idx[i]]), "size": float(obs.sizes[i]),
+                "corners": obs.corners[i].tolist(),
+                "lat": float(lat), "lon": float(lon), "alt": float(alt),
+                "heading": float(obs.nav_hpr[i, 0]), "pitch": float(obs.nav_hpr[i, 1]),
+                "roll": float(obs.nav_hpr[i, 2]),
+            }) + "\n")
 
 
 class PlacementPlanTestCase(unittest.TestCase):
@@ -181,6 +243,158 @@ class CaptureStatusTestCase(unittest.TestCase):
         path = self.tmp / "empty.jsonl"
         path.write_text('{"type": "header", "marker_ids": [20, 21, 22]}\n')
         self.assertIn("error", self.svc.solve_session(path))
+
+
+class RunLogTestCase(unittest.TestCase):
+    """The run log is a plain CSV next to the session files — a handful
+    of full-length runs a season, meant to be compared by eye (Ben,
+    2026-09-23)."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.svc = _service(self.tmp)
+        self.svc.camera_cal_fn = lambda: (sim.CAMERA_MATRIX, sim.DIST_COEFFS)
+        self.session_name = "260923_120000.jsonl"
+        _write_session(self.svc.data_dir / self.session_name)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_empty_before_anything_is_logged(self):
+        self.assertEqual(self.svc.list_runs(), [])
+
+    def test_logging_a_real_session_appends_a_row(self):
+        row = self.svc.log_run(self.session_name, notes="clean run")
+        self.assertNotIn("error", row)
+        self.assertEqual(row["session"], self.session_name)
+        self.assertEqual(row["notes"], "clean run")
+        self.assertGreater(row["n_obs"], 100)
+        self.assertGreater(row["rotations"], 0)
+
+        rows = self.svc.list_runs()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["session"], self.session_name)
+
+    def test_appends_rather_than_overwrites(self):
+        self.svc.log_run(self.session_name)
+        self.svc.log_run(self.session_name)
+        self.assertEqual(len(self.svc.list_runs()), 2)
+
+    def test_timestamp_is_the_logging_time_not_the_session_time(self):
+        """Two different things: when the data was captured (the session
+        filename) vs when it was judged worth recording (the log row) —
+        keeping both distinguishes a same-day re-solve from a new run."""
+        row = self.svc.log_run(self.session_name)
+        self.assertNotEqual(row["timestamp"], "260923_120000")
+        self.assertRegex(row["timestamp"], r"^\d{6}_\d{6}$")
+
+    def test_refuses_a_session_that_does_not_exist(self):
+        out = self.svc.log_run("no-such-session.jsonl")
+        self.assertIn("error", out)
+        self.assertEqual(self.svc.list_runs(), [])
+
+    def test_csv_survives_a_round_trip_on_disk(self):
+        """Not just self.svc's in-memory view — a fresh read of the file
+        itself, the way Ben opening it later actually would."""
+        self.svc.log_run(self.session_name)
+        with (self.svc.data_dir / "runs.csv").open(newline="") as f:
+            rows = list(csv.DictReader(f))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(set(service.BoresightService.RUN_LOG_FIELDS), set(rows[0].keys()))
+
+
+class BuildCaptureJobLeadInTestCase(unittest.TestCase):
+    """build_capture_job must save the lead-in as its own separate job,
+    never folded into the job that repeats every pass. Folding it in
+    worked for pass 1 and then failed navigate's entry check on every
+    pass after, because the saved approach leg still targeted the
+    position the robot was in before pass 1 (found live 2026-09-23)."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        (self.tmp / "paths").mkdir()
+        shutil.copy2(REAL_BOX, self.tmp / "paths" / "Boresight limits.yaml")
+        box = yaml.safe_load(REAL_BOX.read_text())
+        # A corner of the recorded boundary is metres from any fan leg
+        # (all within R_FAR_M=3.5m of the panel), so a lead-in is
+        # guaranteed to be needed from here.
+        self.far_point = box[0]
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _svc_at(self, lat, lon, heading_deg=0.0):
+        import math
+        svc = _service(self.tmp, nav_payload={
+            "nav": {"Lat": math.radians(lat), "Lon": math.radians(lon), "Heading": heading_deg},
+            "connection": {}})
+        svc.driver = _FakeDriver()
+        return svc
+
+    def test_saves_core_and_approach_as_two_separate_jobs(self):
+        svc = self._svc_at(self.far_point["lat"], self.far_point["lon"])
+        built = svc.build_capture_job("Boresight limits", layouts.RECOMMENDED_HEIGHT_M, layouts.INS_HEIGHT_M)
+        self.assertTrue(built["has_lead_in"])
+        self.assertEqual([s["job_name"] for s in svc.driver.saved],
+                         [drive_mod.JOB_NAME, drive_mod.APPROACH_JOB_NAME])
+
+    def test_core_job_does_not_contain_the_approach_leg(self):
+        svc = self._svc_at(self.far_point["lat"], self.far_point["lon"])
+        svc.build_capture_job("Boresight limits", layouts.RECOMMENDED_HEIGHT_M, layouts.INS_HEIGHT_M)
+        core = svc.driver.saved[0]
+        self.assertEqual(core["job_name"], drive_mod.JOB_NAME)
+        self.assertNotIn(f"{drive_mod.LEG_PATH_PREFIX} approach", [name for name, _ in core["legs"]])
+
+    def test_approach_job_has_no_numbered_fan_leg(self):
+        svc = self._svc_at(self.far_point["lat"], self.far_point["lon"])
+        svc.build_capture_job("Boresight limits", layouts.RECOMMENDED_HEIGHT_M, layouts.INS_HEIGHT_M)
+        approach = svc.driver.saved[1]
+        self.assertEqual(approach["job_name"], drive_mod.APPROACH_JOB_NAME)
+        run_paths = [s["path"] for s in approach["steps"] if s["type"] == "run_path"]
+        self.assertTrue(run_paths)
+        for p in run_paths:
+            self.assertEqual(p, f"{drive_mod.LEG_PATH_PREFIX} approach")
+
+    def test_no_lead_in_saved_without_a_position_fix(self):
+        svc = _service(self.tmp, nav_payload={"nav": {}, "connection": {}})
+        svc.driver = _FakeDriver()
+        built = svc.build_capture_job("Boresight limits", layouts.RECOMMENDED_HEIGHT_M, layouts.INS_HEIGHT_M)
+        self.assertFalse(built["has_lead_in"])
+        self.assertEqual(len(svc.driver.saved), 1)
+        self.assertEqual(svc.driver.saved[0]["job_name"], drive_mod.JOB_NAME)
+
+
+class RunLoopSequencingTestCase(unittest.TestCase):
+    """The approach must be driven exactly once, before any pass — not
+    repeated, and not skipped when it's actually needed."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.svc = _service(self.tmp)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_approach_runs_once_then_every_pass_uses_the_core_job(self):
+        self.svc.driver = _FakeDriver()
+        self.svc._run_loop(passes=3, has_lead_in=True)
+        self.assertEqual(self.svc.driver.started,
+                         [drive_mod.APPROACH_JOB_NAME, drive_mod.JOB_NAME,
+                          drive_mod.JOB_NAME, drive_mod.JOB_NAME])
+        self.assertEqual(self.svc.run_state["state"], "done")
+
+    def test_no_approach_step_when_none_was_built(self):
+        self.svc.driver = _FakeDriver()
+        self.svc._run_loop(passes=2, has_lead_in=False)
+        self.assertEqual(self.svc.driver.started, [drive_mod.JOB_NAME, drive_mod.JOB_NAME])
+
+    def test_a_failed_approach_blocks_before_any_pass_runs(self):
+        self.svc.driver = _FakeDriver(idle_results=[{"state": "aborted", "abort_reason": "no segment within entry tolerance"}])
+        self.svc._run_loop(passes=4, has_lead_in=True)
+        self.assertEqual(self.svc.driver.started, [drive_mod.APPROACH_JOB_NAME])  # no pass ever started
+        self.assertEqual(self.svc.run_state["state"], "blocked")
+        self.assertIn("approach failed", self.svc.run_state["message"])
+        self.assertEqual(self.svc.run_state["passes_done"], 0)
 
 
 class DetectionRateTestCase(unittest.TestCase):

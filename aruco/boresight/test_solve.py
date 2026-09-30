@@ -282,6 +282,50 @@ class GeometryCheckTestCase(unittest.TestCase):
         self.assertGreater(out["heading_spread_deg"], 150.0)
 
 
+def _obs_with_t_and_heading(t, heading):
+    """Minimal Observations for total_rotation_deg — only t and the
+    heading column matter to it."""
+    n = len(t)
+    hpr = np.column_stack([heading, np.zeros(n), np.zeros(n)])
+    return solve.Observations(
+        np.asarray(t, dtype=float), np.zeros((n, 3)), hpr,
+        np.zeros(n, dtype=int), np.zeros((n, 4, 2)), np.full(n, 0.097), [20])
+
+
+class TotalRotationDegTestCase(unittest.TestCase):
+    def test_zero_with_fewer_than_two_samples(self):
+        self.assertEqual(solve.total_rotation_deg(_obs_with_t_and_heading([0.0], [10.0])), 0.0)
+
+    def test_sums_absolute_heading_changes(self):
+        obs = _obs_with_t_and_heading([0, 1, 2], [0.0, 90.0, 180.0])
+        self.assertAlmostEqual(solve.total_rotation_deg(obs), 180.0, places=6)
+
+    def test_wraps_the_short_way_across_plus_minus_180(self):
+        """170 -> -170 is a 20 degree turn, not 340 - the same wrap
+        geometry_check's heading_spread already relies on."""
+        obs = _obs_with_t_and_heading([0, 1], [170.0, -170.0])
+        self.assertAlmostEqual(solve.total_rotation_deg(obs), 20.0, places=6)
+
+    def test_a_full_reversal_and_back_counts_both_turns(self):
+        obs = _obs_with_t_and_heading([0, 1, 2], [0.0, 180.0, 0.0])
+        self.assertAlmostEqual(solve.total_rotation_deg(obs), 360.0, places=6)
+
+    def test_ignores_row_order_and_uses_time(self):
+        """Rows arrive grouped by marker as often as by time (see
+        Observations' own docstring) - sorting on t must happen inside,
+        not be assumed of the caller."""
+        obs = _obs_with_t_and_heading([2, 0, 1], [180.0, 0.0, 90.0])
+        self.assertAlmostEqual(solve.total_rotation_deg(obs), 180.0, places=6)
+
+    def test_deduplicates_markers_sharing_one_timestamp(self):
+        """Three markers seen in the same frame are three rows sharing
+        one t - that frame's heading must count once, not three times."""
+        t = [0, 0, 0, 1, 1, 1]
+        heading = [0.0, 0.0, 0.0, 90.0, 90.0, 90.0]
+        obs = _obs_with_t_and_heading(t, heading)
+        self.assertAlmostEqual(solve.total_rotation_deg(obs), 90.0, places=6)
+
+
 class SplitCheckTestCase(unittest.TestCase):
     def test_reports_one_estimate_per_group_and_a_scatter(self):
         obs, _bias = _observations(noise=sim.NoiseModel())

@@ -4,6 +4,7 @@ holds everything behind them, so the routes stay thin and this stays
 testable without a Flask app.
 """
 
+import csv
 import logging
 import math
 import re
@@ -307,34 +308,59 @@ class BoresightService:
         save both — so the run can also be started by hand from the jobs
         page if anything goes wrong here.
 
-        Includes a lead-in from wherever the robot is actually parked:
-        without it the chain just starts at leg 0 wherever that happens
-        to fall, and Ben had to drive the robot to the start by hand
-        (2026-09-16)."""
+        The lead-in (turn towards the start, drive to it, turn onto leg
+        0's heading) is saved as its own separate one-off job,
+        APPROACH_JOB_NAME, NOT folded into the repeated JOB_NAME job —
+        a multi-pass run starts JOB_NAME again for every pass, and after
+        pass 1 the robot is wherever the last leg left it, not back at
+        the position the lead-in was built for. Baking it into the
+        repeated job worked for pass 1 and then failed navigate's entry
+        check on every pass after, since the saved approach leg still
+        targeted the original starting spot (found live 2026-09-23).
+        start_run runs the approach job once, before looping over
+        JOB_NAME `passes` times.
+        """
         plan = self.placement_plan(box_path_name, height_m, ins_height_m)
         if plan.get("error") or not plan["is_box"]:
             return {"error": plan.get("error") or "boundary path is not a box",
                     "problems": plan.get("problems", [])}
         panel = plan["targets"][len(plan["targets"]) // 2]  # middle marker = panel centre
         file = self.paths_dir / f"{box_path_name}.yaml"
+        box_points = yaml.safe_load(file.read_text()) or []
+
+        leg_paths, steps, info = drive_mod.build_job(
+            box_points, plan["face_bearing_deg"], panel["lat"], panel["lon"])
+        if leg_paths is None:
+            return {"error": "boundary path is not a box"}
+
         robot_lat = robot_lon = robot_heading_deg = None
         nav = self.nav_client.latest().get("nav", {})
         if "Lat" in nav and "Lon" in nav and "Heading" in nav:
             robot_lat, robot_lon = math.degrees(nav["Lat"]), math.degrees(nav["Lon"])
             robot_heading_deg = nav["Heading"]
-        leg_paths, steps, info = drive_mod.build_job(
-            yaml.safe_load(file.read_text()) or [],
-            plan["face_bearing_deg"], panel["lat"], panel["lon"],
-            robot_lat=robot_lat, robot_lon=robot_lon, robot_heading_deg=robot_heading_deg)
-        if leg_paths is None:
-            return {"error": "boundary path is not a box"}
+
+        approach_legs, approach_steps = [], []
+        if robot_lat is not None:
+            # Same call with the robot's position added; build_job's own
+            # lead-in logic decides whether one is even needed (see its
+            # MIN_APPROACH_LEG_M) - diff its output against the plain
+            # core job above rather than duplicating that logic here.
+            full_legs, full_steps, _ = drive_mod.build_job(
+                box_points, plan["face_bearing_deg"], panel["lat"], panel["lon"],
+                robot_lat=robot_lat, robot_lon=robot_lon, robot_heading_deg=robot_heading_deg)
+            approach_legs = full_legs[: len(full_legs) - len(leg_paths)]
+            approach_steps = full_steps[: len(full_steps) - len(steps)]
+
         warnings = {}
         if self.driver is not None:
-            warnings = self.driver.save(leg_paths, steps) or {}
+            warnings = self.driver.save(leg_paths, steps, job_name=drive_mod.JOB_NAME) or {}
+            if approach_steps:
+                self.driver.save(approach_legs, approach_steps, job_name=drive_mod.APPROACH_JOB_NAME)
         real_warnings = _continuity_warnings_worth_showing(warnings.get("warnings", []), steps)
         minutes = info["seconds"] / 60.0
         return {
             "job_name": drive_mod.JOB_NAME,
+            "has_lead_in": bool(approach_steps),
             "legs": info["leg_count"],
             "steps": len(steps),
             "turns": info["turn_count"],
@@ -363,15 +389,28 @@ class BoresightService:
         if started.get("error"):
             return started
         self.run_state = {"state": "starting", "message": "", "passes_done": 0, "passes": passes}
-        threading.Thread(target=self._run_loop, args=(passes,), daemon=True).start()
+        threading.Thread(target=self._run_loop, args=(passes, built["has_lead_in"]), daemon=True).start()
         return {"built": built, "capture": started}
 
-    def _run_loop(self, passes):
+    def _run_loop(self, passes, has_lead_in):
         try:
+            if has_lead_in:
+                # One-off: get to the pattern's actual start, wherever the
+                # robot is now. Never repeated - see build_capture_job's
+                # docstring for why folding this into the per-pass job
+                # broke every pass after the first.
+                self.run_state = {"state": "starting", "passes_done": 0, "passes": passes,
+                                  "message": "driving to the start"}
+                self.driver.start(job_name=drive_mod.APPROACH_JOB_NAME)
+                approach_final = self.driver.wait_until_idle(should_stop=self._stop.is_set)
+                if approach_final.get("state") == "aborted" or self._stop.is_set():
+                    self.run_state = {"state": "blocked", "passes_done": 0, "passes": passes,
+                                      "message": f"approach failed: {approach_final.get('abort_reason')}"}
+                    return
             for i in range(passes):
                 if self._stop.is_set():
                     break
-                result = self.driver.start()
+                result = self.driver.start(job_name=drive_mod.JOB_NAME)
                 if result.get("state") not in ("running", None) and result.get("ok") is False:
                     self.run_state = {"state": "blocked", "passes_done": i, "passes": passes,
                                       "message": f"jobs won't start: {result.get('reason')}"}
@@ -460,6 +499,90 @@ class BoresightService:
         }
         self.last_result = result
         return result
+
+    # --- run log ----------------------------------------------------------
+    #
+    # A plain CSV, not a database — this is a handful of full-length runs
+    # a season, read by a human comparing one to the next, and CSV opens
+    # everywhere without a service to ask. Lives next to the session
+    # files themselves (self.data_dir), so both are backed up/copied
+    # together and neither is meaningful without the other nearby.
+    #
+    # Logging is a deliberate action (log_run), not automatic on every
+    # solve: plenty of solves are exploratory or aborted (see
+    # boresight-prd.md's "First real run"), and the log is only useful if
+    # every row is a run someone actually judged worth comparing against
+    # the others (Ben, 2026-09-23).
+    RUN_LOG_FIELDS = (
+        "timestamp", "session", "n_obs", "rotations",
+        "position_spread_m", "heading_spread_deg",
+        "hpr_cb_h", "hpr_cb_p", "hpr_cb_r",
+        "sigma_split_h", "sigma_split_p", "sigma_split_r",
+        "sigma_formal_h", "sigma_formal_p", "sigma_formal_r",
+        "rms_px", "implied_marker_size_m", "notes",
+    )
+
+    def log_run(self, session_name, notes=""):
+        """Solve `session_name` (if not already the last thing solved)
+        and append one row to the run log — the record Ben can come back
+        to and compare a new run against.
+
+        Re-solves rather than trusting self.last_result: the page may
+        have been reloaded, or a different session solved in between, so
+        the session actually being logged has to be the one just solved,
+        not whatever happens to be cached.
+        """
+        import solve as solve_mod  # local: same reason as solve_session
+
+        path = self.data_dir / session_name
+        if not path.is_file():
+            return {"error": f"no such session: {session_name}"}
+        result = self.solve_session(path)
+        if result.get("error"):
+            return result
+
+        header, rows = capture.load_session(path)
+        ref = rows[0]
+        obs = capture.session_to_observations(
+            rows, ref["lat"], ref["lon"], ref["alt"], marker_ids=MARKER_IDS)
+        rotations = round(solve_mod.total_rotation_deg(obs) / 360.0, 1)
+
+        row = {
+            "timestamp": datetime.now().strftime("%y%m%d_%H%M%S"),
+            "session": session_name,
+            "n_obs": result["n_obs"],
+            "rotations": rotations,
+            "position_spread_m": result["geometry"]["position_spread_m"],
+            "heading_spread_deg": result["geometry"]["heading_spread_deg"],
+            "hpr_cb_h": result["hpr_cb"][0], "hpr_cb_p": result["hpr_cb"][1],
+            "hpr_cb_r": result["hpr_cb"][2],
+            "sigma_split_h": result["sigma_split"][0], "sigma_split_p": result["sigma_split"][1],
+            "sigma_split_r": result["sigma_split"][2],
+            "sigma_formal_h": result["sigma_formal"][0], "sigma_formal_p": result["sigma_formal"][1],
+            "sigma_formal_r": result["sigma_formal"][2],
+            "rms_px": result["rms_px"],
+            "implied_marker_size_m": result["implied_marker_size_m"],
+            "notes": notes,
+        }
+        self._append_run_log(row)
+        return row
+
+    def _append_run_log(self, row):
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        path = self.data_dir / "runs.csv"
+        is_new = not path.is_file()
+        with open(path, "a", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=self.RUN_LOG_FIELDS)
+            if is_new:
+                writer.writeheader()
+            writer.writerow(row)
+
+    def list_runs(self):
+        path = self.data_dir / "runs.csv"
+        if not path.is_file():
+            return []
+        with open(path, newline="") as f:
+            return list(csv.DictReader(f))
 
     def list_sessions(self):
         if not self.data_dir.is_dir():

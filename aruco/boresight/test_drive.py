@@ -214,6 +214,22 @@ class JobDriverTestCase(unittest.TestCase):
             self.assertEqual(post.call_args_list[1].kwargs["json"],
                              {"steps": [{"type": "run_path", "path": "Leg 00"}]})
 
+    def test_save_and_start_use_an_explicit_job_name(self):
+        """The approach's one-off job must save/start under its own name
+        (APPROACH_JOB_NAME), separate from the repeated capture job —
+        see build_capture_job's docstring for why the two must never
+        share a job."""
+        with unittest.mock.patch.object(drive.requests, "post") as post:
+            post.return_value = MagicMock(content=b"", status_code=204)
+            self.driver.save([], [{"type": "turn_to_heading", "heading_deg": 10.0}],
+                             job_name=drive.APPROACH_JOB_NAME)
+            self.assertEqual(post.call_args_list[0].args[0],
+                             f"http://jobs/api/jobs/{drive.APPROACH_JOB_NAME}")
+        with unittest.mock.patch.object(drive.requests, "post") as post:
+            post.return_value = MagicMock(json=lambda: {"state": "running"})
+            self.driver.start(job_name=drive.APPROACH_JOB_NAME)
+            self.assertEqual(post.call_args_list[0].kwargs["json"], {"name": drive.APPROACH_JOB_NAME})
+
     def test_wait_until_idle_returns_when_not_running(self):
         self.driver.status = MagicMock(return_value={"state": "idle"})
         self.assertEqual(self.driver.wait_until_idle(poll_s=0)["state"], "idle")

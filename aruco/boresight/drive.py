@@ -56,6 +56,16 @@ R_NEAR_M = 1.3
 
 LEG_PATH_PREFIX = "Boresight leg"
 JOB_NAME = "Boresight capture"
+# The lead-in is a ONE-OFF drive to wherever the pattern happens to
+# start - valid only for the position the robot was standing in when
+# the job was built. A multi-pass run reuses the same saved JOB_NAME job
+# for every pass via driver.start(), and after pass 1 the robot is
+# wherever the last leg left it, not back at that original position -
+# so the lead-in must be its own separate job, run once before the pass
+# loop starts, never folded into the job that repeats (found live
+# 2026-09-23: pass 3 failed navigate's entry check trying to re-run a
+# stale "Boresight leg approach" leg built for pass 1's starting spot).
+APPROACH_JOB_NAME = "Boresight approach"
 # Below this, the robot is already close enough to leg 0's start that a
 # dedicated approach leg would be a near-zero-length run_path step (which
 # navigate's entry check would reject anyway) - just turn onto leg 0's
@@ -326,19 +336,19 @@ class JobDriver:
         self.jobs = jobs_base_url
         self.timeout_s = timeout_s
 
-    def save(self, leg_paths, steps):
+    def save(self, leg_paths, steps, job_name=JOB_NAME):
         for name, points in leg_paths:
             # navigate's api_save_path wants {"points": [...]}, not a bare list.
             r = requests.post(f"{self.navigate}/api/paths/{name}",
                               json={"points": points}, timeout=self.timeout_s)
             r.raise_for_status()
-        r = requests.post(f"{self.jobs}/api/jobs/{JOB_NAME}",
+        r = requests.post(f"{self.jobs}/api/jobs/{job_name}",
                           json={"steps": steps}, timeout=self.timeout_s)
         r.raise_for_status()
         return r.json() if r.content else {}
 
-    def start(self):
-        return requests.post(f"{self.jobs}/control/start", json={"name": JOB_NAME},
+    def start(self, job_name=JOB_NAME):
+        return requests.post(f"{self.jobs}/control/start", json={"name": job_name},
                              timeout=self.timeout_s).json()
 
     def stop(self):

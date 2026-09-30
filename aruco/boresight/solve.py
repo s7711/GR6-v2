@@ -319,6 +319,33 @@ def geometry_check(obs):
     }
 
 
+def total_rotation_deg(obs):
+    """Total heading swept during the session, in degrees - the sum of
+    |heading change| between consecutive time-ordered samples, unwrapped
+    so a turn past +/-180 isn't miscounted as a huge reversal.
+
+    Not the same thing as geometry_check's heading_spread (the net
+    circular spread, which caps out well under 360 no matter how much
+    driving happened) - this is cumulative, so it keeps growing with
+    every turn-to-heading manoeuvre and every fan leg's approach/return.
+    It's the number that answers "how much did the robot actually spin
+    around today", which is what a run log wants (Ben, 2026-09-23) -
+    divide by 360 for a count of equivalent full rotations.
+
+    Two markers seen in the same frame are two rows sharing one
+    timestamp (see Observations' docstring) - de-duplicated by t first,
+    or every shared frame would count its own heading twice.
+    """
+    order = np.argsort(obs.t)
+    t_sorted, h_sorted = obs.t[order], obs.nav_hpr[order, 0]
+    _, first = np.unique(t_sorted, return_index=True)
+    headings = np.radians(h_sorted[np.sort(first)])
+    if len(headings) < 2:
+        return 0.0
+    delta = np.angle(np.exp(1j * np.diff(headings)))  # wrap to (-pi, pi]
+    return float(np.degrees(np.sum(np.abs(delta))))
+
+
 def split_check(obs, hpr_cb0, dxc_b, camera_matrix, dist_coeffs, n_groups=4, **kwargs):
     """Solve independently on `n_groups` contiguous time slices and
     return the per-group hpr_cb estimates plus their scatter.

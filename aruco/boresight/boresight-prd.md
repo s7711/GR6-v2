@@ -550,6 +550,34 @@ each numerically rather than by argument:
    current facing (73/253) is fixed by the box's long axis regardless of
    sun angle.
 
+## Run log (2026-09-23)
+
+For comparing one full test run against the next, ahead of a real run
+with the motors now rested. A plain CSV, `data/boresight/runs.csv` —
+not a database, since it's a handful of rows a season and CSV opens
+everywhere without asking a service. One row per run someone actually
+judged worth recording (a "Log this run" button on the solve result,
+not automatic on every solve — plenty of solves are exploratory or
+aborted, and the log is only useful if every row is comparable to the
+others).
+
+Columns: `timestamp` (when it was logged — yymmdd_hhmmss, deliberately
+distinct from the session filename, which is when it was captured),
+`session`, `n_obs`, `rotations`, `position_spread_m`,
+`heading_spread_deg`, `hpr_cb_{h,p,r}`, `sigma_split_{h,p,r}`,
+`sigma_formal_{h,p,r}`, `rms_px`, `implied_marker_size_m`, `notes`.
+
+`rotations` is new: `solve.total_rotation_deg()` sums |heading change|
+between consecutive time-ordered samples (de-duplicated by timestamp
+first, since several markers seen in one frame share a row's worth of
+`t`), divided by 360 for a count of equivalent full turns. Not the same
+thing as `geometry_check`'s `heading_spread_deg` — that's the net
+circular spread and caps out well under 360 regardless of how much
+driving happened; this is cumulative, so it actually answers "how much
+did the robot spin around today", the number worth tracking now that a
+full run means a lot of turn-to-heading manoeuvres on motors that were
+resting for a reason.
+
 ## Still to do
 
 - **After calibration**: markers 10/11/12/17/19 were surveyed under

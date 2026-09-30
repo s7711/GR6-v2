@@ -290,16 +290,46 @@ def _detection_loop():
             logging.exception("[aruco] Detection loop hit an unexpected error, skipping this frame")
 
 
+MJPEG_MIN_PERIOD_S = 0.2  # 5fps cap per open stream - the camera itself only runs at camera_fps: 5
+
+
 def _mjpeg_generator(get_frame):
+    # Unlike camera's own stream (cam.latest() blocks until a new frame),
+    # get_frame() returns instantly, so this used to encode JPEGs flat out
+    # for every open tab: a full core each, plus ~26 Mbit/s over wifi.
+    # Found 2026-09-30 - one tab left open for a week held a thread at
+    # 100% CPU, and the saturated USB wifi dongle dropped off the network.
+    # Frames are replaced, never mutated (see _SharedState.update), so an
+    # identity check reliably means "nothing new to send".
+    last_frame = None
     while True:
         frame = get_frame()
-        if frame is None:
-            time.sleep(0.1)
+        if frame is None or frame is last_frame:
+            time.sleep(0.05)
             continue
-        buf = io.BytesIO()
-        # BGR -> RGB for display, same picamera2-quirk reversal camera/app.py uses.
-        Image.fromarray(frame[:, :, ::-1]).save(buf, format="JPEG")
-        yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + buf.getvalue() + b"\r\n"
+        last_frame = frame
+        yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + _jpeg_for(frame) + b"\r\n"
+        time.sleep(MJPEG_MIN_PERIOD_S)
+
+
+_jpeg_cache = {"frame": None, "jpeg": None}
+_jpeg_lock = threading.Lock()
+
+
+def _jpeg_for(frame):
+    """JPEG bytes for `frame`, encoded once and shared by every open
+    stream. Measured 2026-09-30: with ~6 browser tabs open, re-encoding
+    the same frame per tab was ~36% of this process's CPU. The lock is
+    held across the encode on purpose, so a second tab arriving for the
+    same frame waits and reuses the result instead of encoding it too."""
+    with _jpeg_lock:
+        if _jpeg_cache["frame"] is not frame:
+            buf = io.BytesIO()
+            # BGR -> RGB for display, same picamera2-quirk reversal camera/app.py uses.
+            Image.fromarray(frame[:, :, ::-1]).save(buf, format="JPEG")
+            _jpeg_cache["frame"] = frame
+            _jpeg_cache["jpeg"] = buf.getvalue()
+        return _jpeg_cache["jpeg"]
 
 
 @app.route("/aruco.mjpg")
@@ -539,6 +569,17 @@ def boresight_solve():
 def boresight_apply():
     from shared.config import CONFIG_PATH
     return jsonify(boresight.apply_to_config(CONFIG_PATH, request.get_json(force=True)["hpr_cb"]))
+
+
+@app.route("/boresight/runs")
+def boresight_runs():
+    return jsonify(boresight.list_runs())
+
+
+@app.route("/boresight/runs/log", methods=["POST"])
+def boresight_runs_log():
+    body = request.get_json(force=True)
+    return jsonify(boresight.log_run(body["session"], notes=body.get("notes", "")))
 
 
 register_pages(app, PAGES_DIR, index_slug="home")
