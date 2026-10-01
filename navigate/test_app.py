@@ -10,6 +10,7 @@ so tests never touch this robot's real recorded paths.
 import json
 import math
 import os
+import queue
 import tempfile
 import time
 import unittest
@@ -334,6 +335,31 @@ class NavigateAppTestCase(unittest.TestCase):
         self.client.post("/control/start")
         self.assertIsNotNone(app._debug_log_path)
         self.assertEqual(app._debug_log_path.read_text(), "")
+
+    def test_start_does_not_touch_the_disk_itself(self):
+        # The file is created by the writer thread, not the request
+        # handler - a slow SD card must not delay the reply jobs waits on.
+        paths_module.save_path(app.PATHS_DIR, "loop", SAMPLE_POINTS)
+        self.client.post("/control/load/loop")
+        self._set_position(52.2, -1.5, 0)
+        app._debug_log_queue = queue.Queue()  # a real queue, nothing draining it
+        self.client.post("/control/start")
+        self.assertFalse(app._debug_log_path.exists())
+        app._drain_debug_log_queue()
+        self.assertTrue(app._debug_log_path.exists())
+
+    def test_two_starts_before_the_writer_runs_get_different_logs(self):
+        # The collision check can't rely on exists() alone once creation
+        # is queued - the first file may not be on disk yet.
+        paths_module.save_path(app.PATHS_DIR, "loop", SAMPLE_POINTS)
+        self.client.post("/control/load/loop")
+        self._set_position(52.2, -1.5, 0)
+        app._debug_log_queue = queue.Queue()
+        self.client.post("/control/start")
+        first = app._debug_log_path
+        self.client.post("/control/stop")
+        self.client.post("/control/start")
+        self.assertNotEqual(first, app._debug_log_path)
 
     def test_failed_start_does_not_create_a_debug_log(self):
         # No path loaded -> entry_check fails -> start() returns ok: False

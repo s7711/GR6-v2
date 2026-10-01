@@ -32,7 +32,14 @@ from control import JobRunner  # noqa: E402
 
 PAGES_DIR = Path(__file__).resolve().parent / "templates" / "pages"
 JOBS_STATUS_HZ = 2
-NAVIGATE_TIMEOUT_S = 2.0
+# Was 2.0s. navigate's control endpoints normally answer in a few ms, but
+# this robot's SD card was measured stalling a single small file write for
+# up to 3.2s (2026-10-01), and anything synchronous on that path inherits
+# the stall - at 2.0s that aborted two bore-sight runs whose step navigate
+# had in fact already started. navigate no longer writes to disk inside
+# /control/start or /control/turn; this extra margin is for whatever
+# synchronous read/write is left (loading a path file, its flags).
+NAVIGATE_TIMEOUT_S = 5.0
 # Waterbutt's /go doesn't just ack the request - it blocks synchronously
 # on QC_SETTLE_S (waterbutt/app.py, 5s as of 2026-09-14) letting its QC
 # reading settle, then on send_open() reaching the ESP8266 valve (see

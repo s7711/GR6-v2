@@ -229,6 +229,7 @@ def _current_position():
 
 
 _debug_log_path = None
+_issued_debug_log_paths = set()  # see _start_new_debug_log
 
 
 def _start_new_debug_log():
@@ -264,14 +265,22 @@ def _start_new_debug_log():
     stem = f"{timestamp}_{label}" if label else timestamp
     candidate = LOGS_DIR / f"{stem}.jsonl"
     suffix = 1
-    while candidate.exists():
+    while candidate.exists() or candidate in _issued_debug_log_paths:
         # Two starts within the same second (e.g. a quick real Start,
         # Stop, Start again, or two tests running fast) — never
-        # silently overwrite an existing run's log.
+        # silently overwrite an existing run's log. _issued_debug_log_paths
+        # covers a file whose creation is still sitting in the queue.
         candidate = LOGS_DIR / f"{stem}_{suffix}.jsonl"
         suffix += 1
     _debug_log_path = candidate
-    _debug_log_path.write_text("")
+    _issued_debug_log_paths.add(candidate)
+    # Created by the writer thread, NOT here: this runs inside the
+    # /control/start and /control/turn request handlers, and creating a
+    # file on this SD card was measured taking up to 3.2s (2026-10-01).
+    # jobs gives navigate 2s to reply, so a slow create made jobs report
+    # "couldn't reach navigate" and abort a run that navigate had in fact
+    # already started - twice in one afternoon's bore-sight runs.
+    _debug_log_queue.put((candidate, ""))
 
 
 # Every debug/stall log write funnels through this queue instead of
