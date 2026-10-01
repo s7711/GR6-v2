@@ -597,3 +597,28 @@ resting for a reason.
 - Making the markers plumb or measuring their angles as an *input*. The
   solve beats a 0.5 deg spirit-level reading comfortably; the measurement
   is useful only as an independent check.
+
+## Survey-based placement (2026-09-30 / 2026-10-01)
+
+The page no longer tells Ben where to put the markers. He places the plank
+where the light suits, points the stationary robot at it and presses
+**Survey markers**: each marker's pose is taken from several sightings
+(median, same survey_marker as Add Marker), giving the plank's centre and
+facing, saved to `data/boresight/panel.json`. **Plan route** builds the
+capture route around that plank as a dry run and checks it fits inside the
+boundary; the plan view draws the boundary, the inner limit legs are
+clipped to, the pattern as designed and the route as it will be driven.
+Run refuses a route that doesn't fit unless "run even if clipped" is
+ticked. Step 6 deletes the generated legs/jobs, never Ben's own
+"Boresight limits"/"Boresight figure8".
+
+Sessions are never deleted automatically. A trim is a note beside the
+session (`<name>.meta.json`), applied by every solve and run-log row; the
+recorded data is never edited. Sessions can be deleted by hand from the
+Solve card.
+
+Results so far (run log, 2026-10-01): runs agree to ~±0.5 deg within a
+day and ~1 deg between days, consistent with a per-power-up INS heading
+bias being absorbed into hpr_cb (see boresight-maths.md). Not yet good
+enough to write to config; the robot is also due to be rebuilt, which
+will change the mount.

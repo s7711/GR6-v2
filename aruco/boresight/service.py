@@ -5,6 +5,7 @@ testable without a Flask app.
 """
 
 import csv
+import json
 import logging
 import math
 import re
@@ -28,6 +29,8 @@ import capture  # noqa: E402
 import drive as drive_mod  # noqa: E402
 import placement  # noqa: E402
 
+from shared.geodesy import lla_to_ned, ned_to_lla  # noqa: E402
+
 DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "boresight"
 # Where manager keeps its config backups — reused rather than inventing a
 # second backup location, so every config change on this robot lands in
@@ -36,6 +39,13 @@ CONFIG_BACKUP_DIR = Path(__file__).resolve().parent.parent.parent / "manager" / 
 
 MARKER_IDS = (20, 21, 22)
 MARKER_SPACING_M = 0.5
+# Survey: how many sightings of each marker to take the median of, and
+# how long to wait for them. The robot is stationary, so each one is an
+# independent look at the same thing; the median shrugs off a bad frame.
+SURVEY_MIN_SIGHTINGS = 5
+SURVEY_TIMEOUT_S = 20.0
+SURVEY_SPACING_TOLERANCE_M = 0.15
+SURVEY_FACING_TOLERANCE_DEG = 15.0
 
 
 def _continuity_warnings_worth_showing(warnings, steps):
@@ -98,6 +108,7 @@ class BoresightService:
         self._thread = None
         self._lock = threading.Lock()
         self.last_result = None
+        self.panel = self._load_panel()
 
     # --- placement ------------------------------------------------------
 
@@ -189,6 +200,105 @@ class BoresightService:
             except (KeyError, ZeroDivisionError, ValueError):
                 continue
         return poses
+
+    # --- survey ---------------------------------------------------------
+
+    @property
+    def _panel_file(self):
+        return self.data_dir / "panel.json"
+
+    def _load_panel(self):
+        try:
+            return json.loads(self._panel_file.read_text())
+        except (OSError, ValueError):
+            return None
+
+    def survey_panel(self, timeout_s=SURVEY_TIMEOUT_S):
+        """Measure where the marker plank is, from the robot's own fix.
+
+        Ben places the markers and points the (stationary) robot at all
+        of them; each sighting is turned into a marker pose by the same
+        survey_marker Add Marker uses, and the median over several
+        sightings is taken per marker. From the three positions come the
+        panel centre and its facing, which is all the route planner
+        needs. Uses the CURRENT hpr_cb, so a few degrees of mount error
+        shows up as ~10 cm at 2.5 m — irrelevant for planning, and the
+        solve fits every marker pose anyway.
+        """
+        if self.run_state.get("state") in ("starting", "driving"):
+            return {"error": "a run is in progress"}
+        sightings = {i: [] for i in MARKER_IDS}
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            nav = self.nav_client.latest().get("nav", {})
+            if not nav.get("Lat"):
+                return {"error": "no nav fix"}
+            for marker_id, pose in self._visible_marker_poses(nav).items():
+                sightings[marker_id].append(pose)
+            if all(len(v) >= SURVEY_MIN_SIGHTINGS for v in sightings.values()):
+                break
+            time.sleep(self.min_frame_period_s or 0.1)
+        counts = {i: len(v) for i, v in sightings.items()}
+        missing = [i for i, n in counts.items() if n < SURVEY_MIN_SIGHTINGS]
+        if missing:
+            return {"error": f"need {SURVEY_MIN_SIGHTINGS} sightings of each marker; "
+                             f"got {counts}. Point the robot so all three are in view.",
+                    "counts": counts}
+
+        lat0 = float(np.median([p["lat"] for v in sightings.values() for p in v]))
+        lon0 = float(np.median([p["lon"] for v in sightings.values() for p in v]))
+        positions, faces, markers = {}, [], []
+        for marker_id in MARKER_IDS:
+            ne = np.median(
+                [lla_to_ned(p["lat"], p["lon"], 0.0, lat0, lon0, 0.0)[:2] for p in sightings[marker_id]],
+                axis=0)
+            # The marker map's heading puts X out the BACK of the marker, so
+            # the direction it faces is 180 degrees from it.
+            face = np.degrees(np.angle(np.mean(
+                [np.exp(1j * np.radians(p["heading"] + 180.0)) for p in sightings[marker_id]])))
+            positions[marker_id] = ne
+            faces.append(face)
+            lat, lon, _alt = ned_to_lla(float(ne[0]), float(ne[1]), 0.0, lat0, lon0, 0.0)
+            markers.append({"id": marker_id, "lat": lat, "lon": lon, "sightings": counts[marker_id],
+                            "face_bearing_deg": round(float(face), 1)})
+        face_bearing = float(np.degrees(np.angle(np.mean(np.exp(1j * np.radians(faces))))))
+
+        points = np.array([positions[i] for i in MARKER_IDS])
+        centre = points.mean(axis=0)
+        # Row direction: the principal axis of the three positions. The
+        # row is perpendicular to the facing, so it gives an independent
+        # check on the facing the markers themselves report.
+        axis = np.linalg.svd(points - centre)[2][0]
+        row_bearing = float(np.degrees(np.arctan2(axis[1], axis[0])))
+        candidates = [row_bearing + 90.0, row_bearing - 90.0]
+        off_by = [abs((c - face_bearing + 180.0) % 360.0 - 180.0) for c in candidates]
+        disagreement = float(min(off_by))
+        along = (points - centre) @ axis
+        spacings = np.abs(np.diff(np.sort(along)))
+        warnings = []
+        if disagreement > SURVEY_FACING_TOLERANCE_DEG:
+            warnings.append(f"the markers' own facing differs from the row's perpendicular by "
+                            f"{disagreement:.0f}° — is the plank square to the markers?")
+        for gap in spacings:
+            if abs(gap - MARKER_SPACING_M) > SURVEY_SPACING_TOLERANCE_M:
+                warnings.append(f"marker spacing {gap:.2f} m, expected about {MARKER_SPACING_M} m "
+                                "— check the ids are where you think")
+                break
+
+        lat, lon, _alt = ned_to_lla(float(centre[0]), float(centre[1]), 0.0, lat0, lon0, 0.0)
+        self.panel = {
+            "surveyed_at": datetime.now().isoformat(timespec="seconds"),
+            "lat": lat, "lon": lon,
+            "face_bearing_deg": round(face_bearing, 1),
+            "row_bearing_deg": round(row_bearing % 360.0, 1),
+            "facing_disagreement_deg": round(disagreement, 1),
+            "spacings_m": [round(float(g), 2) for g in spacings],
+            "markers": markers,
+            "warnings": warnings,
+        }
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        self._panel_file.write_text(json.dumps(self.panel, indent=1))
+        return self.panel
 
     # --- capture --------------------------------------------------------
 
@@ -303,10 +413,15 @@ class BoresightService:
 
     # --- drive + capture, as one operation ------------------------------
 
-    def build_capture_job(self, box_path_name, height_m, ins_height_m):
+    def build_capture_job(self, box_path_name, allow_clipped=False, save=True):
         """Generate the capture legs and the job that sequences them, and
         save both — so the run can also be started by hand from the jobs
         page if anything goes wrong here.
+
+        Built around the SURVEYED panel (survey_panel), wherever Ben put
+        it. `save=False` is the page's "Plan" button: same build and same
+        checks, nothing sent to navigate/jobs. A route that doesn't fit
+        inside the boundary is refused when saving unless `allow_clipped`.
 
         The lead-in (turn towards the start, drive to it, turn onto leg
         0's heading) is saved as its own separate one-off job,
@@ -320,18 +435,20 @@ class BoresightService:
         start_run runs the approach job once, before looping over
         JOB_NAME `passes` times.
         """
-        plan = self.placement_plan(box_path_name, height_m, ins_height_m)
-        if plan.get("error") or not plan["is_box"]:
-            return {"error": plan.get("error") or "boundary path is not a box",
-                    "problems": plan.get("problems", [])}
-        panel = plan["targets"][len(plan["targets"]) // 2]  # middle marker = panel centre
+        if self.panel is None:
+            return {"error": "survey the markers first"}
         file = self.paths_dir / f"{box_path_name}.yaml"
+        if not file.exists():
+            return {"error": f"no saved path named {box_path_name!r}"}
         box_points = yaml.safe_load(file.read_text()) or []
+        panel = self.panel
+        face_bearing = panel["face_bearing_deg"]
 
         leg_paths, steps, info = drive_mod.build_job(
-            box_points, plan["face_bearing_deg"], panel["lat"], panel["lon"])
+            box_points, face_bearing, panel["lat"], panel["lon"])
         if leg_paths is None:
-            return {"error": "boundary path is not a box"}
+            return {"error": info["problems"][0] if info.get("problems") else "boundary path is not a box",
+                    "problems": info.get("problems", [])}
 
         robot_lat = robot_lon = robot_heading_deg = None
         nav = self.nav_client.latest().get("nav", {})
@@ -346,34 +463,59 @@ class BoresightService:
             # MIN_APPROACH_LEG_M) - diff its output against the plain
             # core job above rather than duplicating that logic here.
             full_legs, full_steps, _ = drive_mod.build_job(
-                box_points, plan["face_bearing_deg"], panel["lat"], panel["lon"],
+                box_points, face_bearing, panel["lat"], panel["lon"],
                 robot_lat=robot_lat, robot_lon=robot_lon, robot_heading_deg=robot_heading_deg)
             approach_legs = full_legs[: len(full_legs) - len(leg_paths)]
             approach_steps = full_steps[: len(full_steps) - len(steps)]
 
-        warnings = {}
-        if self.driver is not None:
-            warnings = self.driver.save(leg_paths, steps, job_name=drive_mod.JOB_NAME) or {}
-            if approach_steps:
-                self.driver.save(approach_legs, approach_steps, job_name=drive_mod.APPROACH_JOB_NAME)
-        real_warnings = _continuity_warnings_worth_showing(warnings.get("warnings", []), steps)
-        minutes = info["seconds"] / 60.0
-        return {
+        fits = (info["legs_dropped"] == 0 and info["waypoints_pulled_in"] == 0
+                and info["panel_inside_box"])
+        problems = []
+        if not info["panel_inside_box"]:
+            problems.append("the markers are outside the boundary")
+        if info["legs_dropped"]:
+            problems.append(f"{info['legs_dropped']} leg(s) don't fit inside the boundary at all")
+        if info["waypoints_pulled_in"]:
+            problems.append(f"{info['waypoints_pulled_in']} leg end(s) had to be pulled inside the boundary")
+        result = {
             "job_name": drive_mod.JOB_NAME,
             "has_lead_in": bool(approach_steps),
+            "fits": fits,
+            "fit_problems": problems,
+            "clearance_ahead_m": round(info["clearance_ahead_m"], 1),
             "legs": info["leg_count"],
             "steps": len(steps),
             "turns": info["turn_count"],
             "turns_left": info["turns_left"],
             "turns_right": info["turns_right"],
             "waypoints_pulled_in": info["waypoints_pulled_in"],
+            "legs_dropped": info["legs_dropped"],
             "length_m": round(info["length_m"], 1),
-            "minutes_per_pass": round(minutes, 1),
-            "face_bearing_deg": plan["face_bearing_deg"],
-            "continuity_warnings": real_warnings,
+            "minutes_per_pass": round(info["seconds"] / 60.0, 1),
+            "face_bearing_deg": face_bearing,
+            "box": [{"lat": p["lat"], "lon": p["lon"]} for p in box_points],
+            "ideal_route": info["ideal_legs"],
+            "usable_box": info["usable_box"],
+            "route": [{"name": name, "points": [{"lat": q["lat"], "lon": q["lon"]} for q in pts]}
+                      for name, pts in list(approach_legs) + list(leg_paths)],
+            "continuity_warnings": [],
         }
+        if not save:
+            return result
+        if not fits and not allow_clipped:
+            return {**result, "error": "route doesn't fit inside the boundary: " + "; ".join(problems)
+                    + ". Move the markers, or tick \"run anyway\" to accept a clipped pattern."}
 
-    def start_run(self, box_path_name, height_m, ins_height_m, passes=4):
+        warnings = {}
+        if self.driver is not None:
+            warnings = self.driver.save(leg_paths, steps, job_name=drive_mod.JOB_NAME) or {}
+            if approach_steps:
+                self.driver.save(approach_legs, approach_steps, job_name=drive_mod.APPROACH_JOB_NAME)
+        result["continuity_warnings"] = _continuity_warnings_worth_showing(
+            warnings.get("warnings", []), steps)
+        return result
+
+    def start_run(self, box_path_name, passes=4, allow_clipped=False):
         """Build the path, start capturing, then drive the pattern
         `passes` times. ~20 minutes of driving is where the simulator
         showed accuracy plateauing."""
@@ -382,7 +524,7 @@ class BoresightService:
         with self._lock:
             if self._thread is not None and self._thread.is_alive():
                 return {"error": "already running"}
-        built = self.build_capture_job(box_path_name, height_m, ins_height_m)
+        built = self.build_capture_job(box_path_name, allow_clipped=allow_clipped)
         if built.get("error"):
             return built
         started = self.start_capture()
@@ -438,6 +580,17 @@ class BoresightService:
             finally:
                 self.stop_capture()
 
+    def cleanup_generated(self):
+        """Remove the legs and jobs that Run / Build job only saved into
+        navigate and jobs. Refused while anything is driving."""
+        if self.driver is None:
+            return {"error": "navigate URL not configured"}
+        if self.run_state.get("state") in ("starting", "driving"):
+            return {"error": "a run is in progress"}
+        if self.driver.status().get("state") == "running":
+            return {"error": "a job is running"}
+        return self.driver.cleanup()
+
     def stop_run(self):
         self._stop.set()
         if self.driver is not None:
@@ -450,9 +603,10 @@ class BoresightService:
     def solve_session(self, session_path, estimate_size_scale=True, n_groups=4):
         import solve as solve_mod  # local: keeps scipy off the import path until needed
 
-        header, rows = capture.load_session(session_path)
+        header, rows, trim = self._load_trimmed(session_path)
         if not rows:
-            return {"error": "no observations in that session"}
+            return {"error": "no observations in that session"
+                             + (" after trimming" if trim["rows_total"] else "")}
         ref = rows[0]
         obs = capture.session_to_observations(
             rows, ref["lat"], ref["lon"], ref["alt"], marker_ids=MARKER_IDS)
@@ -478,6 +632,7 @@ class BoresightService:
 
         result = {
             "session": str(session_path),
+            "trim": trim,
             "n_obs": out["n_obs"],
             "hpr_cb": [round(float(v), 4) for v in out["hpr_cb"]],
             # The formal sigma assumes independent corner noise and a
@@ -541,10 +696,12 @@ class BoresightService:
         if result.get("error"):
             return result
 
-        header, rows = capture.load_session(path)
+        header, rows, trim = self._load_trimmed(path)
         ref = rows[0]
         obs = capture.session_to_observations(
             rows, ref["lat"], ref["lon"], ref["alt"], marker_ids=MARKER_IDS)
+        if trim["trimmed"]:
+            notes = (notes + " " if notes else "") + f"[trimmed: {trim['description']}]"
         rotations = round(solve_mod.total_rotation_deg(obs) / 360.0, 1)
 
         row = {
@@ -589,10 +746,99 @@ class BoresightService:
             return []
         out = []
         for f in sorted(self.data_dir.glob("*.jsonl"), reverse=True):
-            header, rows = capture.load_session(f)
-            out.append({"name": f.name, "observations": len(rows),
+            header, rows, trim = self._load_trimmed(f)
+            out.append({"name": f.name, "observations": trim["rows_kept"],
+                        "observations_total": trim["rows_total"],
+                        "duration_s": trim["duration_s"], "trimmed": trim["trimmed"],
                         "started_at": header.get("started_at") if header else None})
         return out
+
+    # --- session trim and delete ------------------------------------------
+    #
+    # A trim is a note kept BESIDE the session file (<name>.meta.json), never
+    # an edit to it: the raw capture stays exactly as recorded, every solve
+    # and every run-log row applies the note automatically (so the trim is
+    # remembered, not something to recall), and it can be changed or
+    # removed later. Times are seconds since the session's first
+    # observation. Nothing deletes a session except delete_session(), and
+    # nothing calls that except Ben pressing the button (Ben, 2026-09-30).
+
+    _SESSION_NAME = re.compile(r"^[A-Za-z0-9_.-]+\.jsonl$")
+
+    def _session_path(self, name):
+        if not isinstance(name, str) or not self._SESSION_NAME.match(name) or ".." in name:
+            return None
+        return self.data_dir / name
+
+    @staticmethod
+    def _meta_path(session_path):
+        return Path(session_path).with_suffix(".meta.json")
+
+    def _read_meta(self, session_path):
+        try:
+            meta = json.loads(self._meta_path(session_path).read_text())
+        except (OSError, ValueError):
+            meta = {}
+        return {"trim_start_s": meta.get("trim_start_s"), "trim_end_s": meta.get("trim_end_s"),
+                "note": meta.get("note", "")}
+
+    def _load_trimmed(self, session_path):
+        """(header, rows within the trim, trim info)."""
+        header, rows = capture.load_session(session_path)
+        meta = self._read_meta(session_path)
+        start, end = meta["trim_start_s"], meta["trim_end_s"]
+        t0 = min((r["t"] for r in rows), default=0.0)
+        duration = max((r["t"] for r in rows), default=0.0) - t0
+        kept = [r for r in rows
+                if (start is None or r["t"] - t0 >= start) and (end is None or r["t"] - t0 <= end)]
+        parts = []
+        if start is not None:
+            parts.append(f"first {start:g} s excluded")
+        if end is not None:
+            parts.append(f"everything after {end:g} s excluded")
+        trim = {"trim_start_s": start, "trim_end_s": end, "note": meta["note"],
+                "trimmed": bool(parts), "description": ", ".join(parts),
+                "rows_total": len(rows), "rows_kept": len(kept), "duration_s": round(duration, 1)}
+        return header, kept, trim
+
+    def session_meta(self, name):
+        path = self._session_path(name)
+        if path is None or not path.is_file():
+            return {"error": f"no such session: {name}"}
+        return self._load_trimmed(path)[2]
+
+    def set_session_meta(self, name, trim_start_s=None, trim_end_s=None, note=""):
+        path = self._session_path(name)
+        if path is None or not path.is_file():
+            return {"error": f"no such session: {name}"}
+        try:
+            start = None if trim_start_s in (None, "") else float(trim_start_s)
+            end = None if trim_end_s in (None, "") else float(trim_end_s)
+        except (TypeError, ValueError):
+            return {"error": "trim times must be numbers of seconds"}
+        if start is not None and start < 0 or end is not None and end < 0:
+            return {"error": "trim times can't be negative"}
+        if start is not None and end is not None and end <= start:
+            return {"error": "the end of the trim must be after its start"}
+        meta_path = self._meta_path(path)
+        if start is None and end is None and not note:
+            meta_path.unlink(missing_ok=True)
+        else:
+            meta_path.write_text(json.dumps(
+                {"trim_start_s": start, "trim_end_s": end, "note": note}, indent=1))
+        return self._load_trimmed(path)[2]
+
+    def delete_session(self, name):
+        path = self._session_path(name)
+        if path is None or not path.is_file():
+            return {"error": f"no such session: {name}"}
+        capturing = (self._thread is not None and self._thread.is_alive()
+                     and self.session is not None and Path(self.session.path).name == name)
+        if capturing:
+            return {"error": "that session is being captured right now"}
+        path.unlink()
+        self._meta_path(path).unlink(missing_ok=True)
+        return {"deleted": name}
 
     # --- apply ----------------------------------------------------------
 

@@ -4,7 +4,20 @@
 
 {% block content %}
 <div class="card mb-3">
-  <div class="card-header">1. Where to put the markers</div>
+  <div class="card-header">1. Place &amp; survey the markers</div>
+  <div class="card-body">
+    <p class="small text-body-secondary">
+      Put the marker plank wherever suits (mind the sun), then drive the robot so all three
+      markers are in the camera's view and hold it still. Survey measures where the plank is
+      and which way it faces. <strong>Re-survey whenever the plank moves.</strong>
+    </p>
+    <button id="survey-btn" class="btn btn-sm btn-primary">Survey markers</button>
+    <div id="survey-result" class="mt-3"></div>
+  </div>
+</div>
+
+<div class="card mb-3">
+  <div class="card-header">2. Plan the route</div>
   <div class="card-body">
     <div class="row g-2 align-items-end mb-3">
       <div class="col-auto">
@@ -12,24 +25,19 @@
         <input id="box-path" class="form-control form-control-sm" value="Boresight limits">
       </div>
       <div class="col-auto">
-        <label class="form-label small mb-0">Marker height (m)</label>
-        <input id="height" type="number" step="0.05" class="form-control form-control-sm" value="0.25">
-      </div>
-      <div class="col-auto">
-        <button id="plan-btn" class="btn btn-sm btn-primary">Plan</button>
+        <button id="plan-btn" class="btn btn-sm btn-primary">Plan route</button>
       </div>
     </div>
     <div id="plan-result"></div>
-    <div id="guidance" class="mt-3"></div>
   </div>
 </div>
 
 <div class="card mb-3">
-  <div class="card-header">2. Drive &amp; capture</div>
+  <div class="card-header">3. Drive &amp; capture</div>
   <div class="card-body">
     <p class="small text-body-secondary">
-      Put the robot inside the rectangle, roughly facing the markers, then press Run.
-      It builds the path, drives it, and records — nothing else to do.
+      Once the planned route fits, press Run. It drives to the start of the route,
+      drives the pattern, and records — nothing else to do.
     </p>
     <div class="row g-2 align-items-end mb-2">
       <div class="col-auto">
@@ -39,6 +47,10 @@
       <div class="col-auto">
         <button id="run-start" class="btn btn-sm btn-success">Run</button>
         <button id="run-stop" class="btn btn-sm btn-outline-danger" disabled>Stop</button>
+      </div>
+      <div class="col-auto form-check mb-1 ms-2">
+        <input class="form-check-input" type="checkbox" id="allow-clipped">
+        <label class="form-check-label small" for="allow-clipped">Run even if the route is clipped</label>
       </div>
       <div class="col-auto">
         <button id="build-only" class="btn btn-sm btn-outline-secondary">Build job only</button>
@@ -50,7 +62,7 @@
 </div>
 
 <div class="card">
-  <div class="card-header">3. Solve</div>
+  <div class="card-header">4. Solve</div>
   <div class="card-body">
     <div class="row g-2 align-items-end mb-3">
       <div class="col-auto">
@@ -65,21 +77,56 @@
         <button id="solve-btn" class="btn btn-sm btn-primary">Solve</button>
       </div>
     </div>
+    <div class="row g-2 align-items-end mb-1">
+      <div class="col-auto">
+        <label class="form-label small mb-0">Exclude first (s)</label>
+        <input id="trim-start" type="number" min="0" step="1" class="form-control form-control-sm" style="width: 7rem;">
+      </div>
+      <div class="col-auto">
+        <label class="form-label small mb-0">Exclude after (s)</label>
+        <input id="trim-end" type="number" min="0" step="1" class="form-control form-control-sm" style="width: 7rem;">
+      </div>
+      <div class="col-auto">
+        <label class="form-label small mb-0">Why</label>
+        <input id="trim-note" class="form-control form-control-sm" style="width: 16rem;" placeholder="e.g. interference cut the run short">
+      </div>
+      <div class="col-auto">
+        <button id="trim-save" class="btn btn-sm btn-outline-primary">Save trim</button>
+        <button id="delete-session" class="btn btn-sm btn-outline-danger">Delete session…</button>
+      </div>
+    </div>
+    <div id="trim-info" class="small text-body-secondary mb-3">
+      The trim is a note kept beside the session; the recorded data is never changed, and every
+      solve and run-log row applies it. Leave both boxes empty to use all of the data.
+    </div>
     <div id="solve-result"></div>
   </div>
 </div>
 
 <div class="card mt-3">
-  <div class="card-header">4. Run log</div>
+  <div class="card-header">5. Run log</div>
   <div class="card-body">
     <div id="run-log-table"></div>
+  </div>
+</div>
+
+<div class="card mt-3 mb-3">
+  <div class="card-header">6. Clean up</div>
+  <div class="card-body">
+    <p class="small text-body-secondary">
+      Run and "Build job only" save the route's legs into navigate and the jobs into jobs. This
+      deletes those ("Boresight leg …", "Boresight approach", "Boresight capture"). Your
+      "Boresight limits" and "Boresight figure8" are left alone. Refused while anything is driving.
+    </p>
+    <button id="cleanup-btn" class="btn btn-sm btn-outline-danger">Clean up boresight paths</button>
+    <div id="cleanup-result" class="small mt-2"></div>
   </div>
 </div>
 {% endblock %}
 
 {% block scripts %}
 <script>
-let targets = [];
+let currentPanel = null;
 let lastSolvedSession = null;
 
 function fmt(x, n = 3) { return (x === null || x === undefined) ? "—" : Number(x).toFixed(n); }
@@ -105,90 +152,75 @@ function api(url, options, elId) {
     .catch((e) => { if (elId) showError(elId, e.message); throw e; });
 }
 
-function renderPlan(p) {
-  const el = document.getElementById("plan-result");
-  if (p.error) { el.innerHTML = `<div class="alert alert-danger py-2 mb-0">${p.error}</div>`; return; }
-  if (!p.is_box) {
-    el.innerHTML = `<div class="alert alert-warning py-2">
-        <strong>That path isn't a box.</strong>
-        <ul class="mb-1">${p.problems.map((x) => `<li>${x}</li>`).join("")}</ul>
-        <div class="small">Corners ${p.corners_deg.join("°, ")}° &middot; sides ${p.side_lengths_m.join(" m, ")} m</div>
-      </div>`;
-    targets = [];
+function ageText(iso) {
+  const min = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+  return min < 1 ? "just now" : min < 90 ? `${min} min ago` : `${(min / 60).toFixed(1)} h ago`;
+}
+
+function renderSurvey(p) {
+  const el = document.getElementById("survey-result");
+  if (!p || !p.markers) {
+    el.innerHTML = p && p.error
+      ? `<div class="alert alert-danger py-2 mb-0">${p.error}</div>`
+      : `<span class="text-body-secondary">Not surveyed yet.</span>`;
     return;
   }
-  targets = p.targets;
   el.innerHTML = `
+    <div>Panel facing <strong>${fmt(p.face_bearing_deg, 0)}°</strong>
+      &middot; marker spacing ${p.spacings_m.join(" m, ")} m
+      &middot; surveyed <strong>${ageText(p.surveyed_at)}</strong>
+      <span class="text-body-secondary">(${p.lat.toFixed(6)}, ${p.lon.toFixed(6)})</span></div>
+    <div class="small text-body-secondary">${p.markers.map((m) =>
+      `marker ${m.id}: ${m.sightings} sightings, facing ${fmt(m.face_bearing_deg, 0)}°`).join(" &middot; ")}</div>
+    ${(p.warnings || []).map((w) => `<div class="alert alert-warning py-1 mt-2 mb-0 small">${w}</div>`).join("")}`;
+}
+
+/* North-up plan view in local metres, so a clipped or off-box route is
+   obvious at a glance. Flat-earth projection is plenty over ~10 m. */
+function routeSvg(r, panel) {
+  const lat0 = r.box.reduce((a, p) => a + p.lat, 0) / r.box.length;
+  const lon0 = r.box.reduce((a, p) => a + p.lon, 0) / r.box.length;
+  const xy = (p) => [(p.lon - lon0) * 111320 * Math.cos(lat0 * Math.PI / 180),
+                     -(p.lat - lat0) * 110574];
+  const all = [...r.box, ...r.ideal_route.flat(), ...r.route.flatMap((l) => l.points), ...panel.markers].map(xy);
+  const pad = 1.0;
+  const x0 = Math.min(...all.map((q) => q[0])) - pad, x1 = Math.max(...all.map((q) => q[0])) + pad;
+  const y0 = Math.min(...all.map((q) => q[1])) - pad, y1 = Math.max(...all.map((q) => q[1])) + pad;
+  const pts = (list) => list.map(xy).map((q) => q.map((v) => v.toFixed(2)).join(",")).join(" ");
+  const c = xy(panel);
+  const f = panel.face_bearing_deg * Math.PI / 180;   // bearing: 0 = north = up
+  const arrow = [c[0] + Math.sin(f) * 1.0, c[1] - Math.cos(f) * 1.0];
+  const legs = r.route.map((l) => {
+    const isApproach = l.name.endsWith("approach");
+    return `<polyline points="${pts(l.points)}" fill="none" stroke="${isApproach ? "#e8890c" : "#2a7de1"}"
+      stroke-width="0.06" ${isApproach ? 'stroke-dasharray="0.2 0.15"' : ""}/>`;
+  }).join("");
+  return `<svg viewBox="${x0} ${y0} ${x1 - x0} ${y1 - y0}" style="width:100%;max-width:640px;background:var(--bs-tertiary-bg)">
+    <polygon points="${pts(r.box)}" fill="none" stroke="#888" stroke-width="0.08"/>
+    <polygon points="${pts(r.usable_box)}" fill="none" stroke="#888" stroke-width="0.04" stroke-dasharray="0.25 0.2"/>
+    ${r.ideal_route.map((l) => `<polyline points="${pts(l)}" fill="none" stroke="#d33" stroke-opacity="0.45" stroke-width="0.05"/>`).join("")}
+    ${legs}
+    ${panel.markers.map((m) => { const q = xy(m);
+      return `<circle cx="${q[0]}" cy="${q[1]}" r="0.12" fill="#d33"/>`; }).join("")}
+    <line x1="${c[0]}" y1="${c[1]}" x2="${arrow[0]}" y2="${arrow[1]}" stroke="#d33" stroke-width="0.08"/>
+    <text x="${x0 + 0.3}" y="${y0 + 0.9}" font-size="0.8" fill="#888">N ↑</text>
+  </svg>`;
+}
+
+function renderRoute(r) {
+  const el = document.getElementById("plan-result");
+  if (r.error && !r.route) { el.innerHTML = `<div class="alert alert-danger py-2 mb-0">${r.error}</div>`; return; }
+  const banner = r.fits
+    ? `<div class="alert alert-success py-2">Route fits inside the boundary
+        (${r.clearance_ahead_m} m clear in front of the markers).</div>`
+    : `<div class="alert alert-danger py-2"><strong>Route does not fit:</strong>
+        ${r.fit_problems.join("; ")}. Move the plank (and re-survey), or tick "run even if clipped".</div>`;
+  el.innerHTML = banner + `
     <div class="small text-body-secondary mb-2">
-      Box OK — corners ${p.corners_deg.join("°, ")}°, sides ${p.side_lengths_m.join(" m, ")} m.
-      Markers face bearing <strong>${p.face_bearing_deg}°</strong>, ${p.clearance_m} m clear ahead.
+      ${r.legs} legs, ${r.turns} turns, ${r.length_m} m, about ${r.minutes_per_pass} min per pass.
+      <span class="text-warning">blue = route that will be driven, orange dashed = drive to start, faint red = the pattern as designed (where it differs from blue it was clipped), dashed grey = the inner limit legs are clipped to, solid grey = your boundary, red dots = markers</span>
     </div>
-    <table class="table table-sm align-middle mb-2">
-      <thead>
-        <tr>
-          <th rowspan="2">Id</th><th rowspan="2">Height</th>
-          <th colspan="2" class="text-center border-start">Find the spot</th>
-          <th colspan="3" class="text-center border-start">Nudge the marker <span class="fw-normal small">(only while visible)</span></th>
-        </tr>
-        <tr>
-          <th class="border-start">Range</th><th>Bearing</th>
-          <th class="border-start">Towards robot</th><th>Robot's right</th><th>Rotate</th>
-        </tr>
-      </thead>
-      <tbody>${p.targets.map((t) => `<tr>
-        <td>${t.id}</td><td>${fmt(t.height_m, 2)} m</td>
-        <td class="border-start" id="g-range-${t.id}">—</td><td id="g-bearing-${t.id}">—</td>
-        <td class="border-start" id="m-fwd-${t.id}">—</td>
-        <td id="m-right-${t.id}">—</td>
-        <td id="m-rot-${t.id}">—</td>
-      </tr>`).join("")}</tbody>
-    </table>
-    <div class="alert alert-info py-2 small mb-0">
-      Placement doesn't need to be accurate — every marker's pose is solved for.
-      Get the row roughly centred, roughly facing ${p.face_bearing_deg}°, about 0.5 m apart.
-      <br><strong>${p.marker_size_note}.</strong>
-    </div>`;
-}
-
-/* A nudge reads better as a direction plus a magnitude than as a signed
-   number you have to decode while kneeling in the grass. */
-function nudge(value, positive, negative, unit, tolerance) {
-  if (Math.abs(value) < tolerance) return `<span class="text-success">ok</span>`;
-  const word = value > 0 ? positive : negative;
-  return `${Math.abs(value).toFixed(unit === "°" ? 0 : 2)}${unit === "°" ? "°" : " m"} ${word}`;
-}
-
-function pollGuidance() {
-  if (!targets.length) return;
-  fetch("/boresight/guidance", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ targets }),
-  }).then((r) => r.json()).then((g) => {
-    if (g.error) return;
-    g.targets.forEach((t) => {
-      const range = document.getElementById(`g-range-${t.id}`);
-      const bearing = document.getElementById(`g-bearing-${t.id}`);
-      if (!range) return;
-      range.textContent = `${fmt(t.range_m, 2)} m`;
-      range.className = (t.range_m < 0.3 ? "text-success fw-bold " : "") + "border-start";
-      bearing.textContent = `${fmt(t.bearing_deg, 0)}°`;
-    });
-    targets.forEach((t) => {
-      const m = (g.visible || {})[t.id];
-      const fwd = document.getElementById(`m-fwd-${t.id}`);
-      const right = document.getElementById(`m-right-${t.id}`);
-      const rot = document.getElementById(`m-rot-${t.id}`);
-      if (!fwd) return;
-      if (!m) {
-        fwd.innerHTML = `<span class="text-body-secondary">not seen</span>`;
-        right.textContent = "—"; rot.textContent = "—";
-        return;
-      }
-      fwd.innerHTML = nudge(m.towards_robot_m, "towards robot", "away from robot", "m", 0.1);
-      right.innerHTML = nudge(m.to_robot_right_m, "to robot's right", "to robot's left", "m", 0.1);
-      rot.innerHTML = nudge(m.rotate_deg, "clockwise", "anticlockwise", "°", 5);
-    });
-  });
+    ${routeSvg(r, currentPanel)}`;
 }
 
 function renderBuild(b) {
@@ -214,7 +246,7 @@ function renderCapture(s) {
     const cls = { blocked: "text-bg-warning", error: "text-bg-danger",
                   done: "text-bg-primary" }[run.state] || "text-bg-secondary";
     runLine = `<div><span class="badge ${cls}">${run.state}</span>
-      ${run.message || ""} ${run.passes ? `(${run.passes_done}/${run.passes} passes)` : ""}</div>`;
+      ${run.message || ""} ${run.passes ? `(${run.passes_done} complete)` : ""}</div>`;
   }
   if (!s.session) {
     el.innerHTML = runLine || `<span class="text-body-secondary">Idle.</span>`;
@@ -236,16 +268,35 @@ function renderCapture(s) {
 function runBody() {
   return JSON.stringify({
     path: document.getElementById("box-path").value,
-    height_m: Number(document.getElementById("height").value),
     passes: Number(document.getElementById("passes").value),
+    allow_clipped: document.getElementById("allow-clipped").checked,
   });
 }
 const JSON_POST = { method: "POST", headers: { "Content-Type": "application/json" } };
 
 function loadSessions() {
   fetch("/boresight/sessions").then((r) => r.json()).then((list) => {
-    document.getElementById("session").innerHTML = list
-      .map((s) => `<option value="${s.name}">${s.name} (${s.observations})</option>`).join("");
+    const sel = document.getElementById("session");
+    const keep = sel.value;
+    sel.innerHTML = list.map((s) =>
+      `<option value="${s.name}">${s.name} (${s.observations}${s.trimmed ? " of " + s.observations_total : ""}, ${Math.round(s.duration_s)} s${s.trimmed ? ", trimmed" : ""})</option>`).join("");
+    if (keep && list.some((s) => s.name === keep)) sel.value = keep;
+    loadTrim();
+  });
+}
+
+function loadTrim() {
+  const name = document.getElementById("session").value;
+  if (!name) return;
+  fetch(`/boresight/session-meta?session=${encodeURIComponent(name)}`).then((r) => r.json()).then((m) => {
+    if (m.error) return;
+    document.getElementById("trim-start").value = m.trim_start_s ?? "";
+    document.getElementById("trim-end").value = m.trim_end_s ?? "";
+    document.getElementById("trim-note").value = m.note || "";
+    document.getElementById("trim-info").innerHTML =
+      `Run is ${Math.round(m.duration_s)} s long; ${m.rows_kept} of ${m.rows_total} observations used` +
+      (m.trimmed ? ` (<strong>${m.description}</strong>)` : "") +
+      `. The trim is a note beside the session — the recorded data is never changed.`;
   });
 }
 
@@ -254,7 +305,9 @@ function renderSolve(r) {
   if (r.error) { el.innerHTML = `<div class="alert alert-danger py-2 mb-0">${r.error}</div>`; return; }
   lastSolvedSession = document.getElementById("session").value;
   const names = ["heading", "pitch", "roll"];
-  el.innerHTML = `
+  el.innerHTML = (r.trim && r.trim.trimmed
+    ? `<div class="alert alert-info py-1 small">Trimmed: ${r.trim.description} (${r.trim.rows_kept} of ${r.trim.rows_total} observations).</div>`
+    : "") + `
     <table class="table table-sm w-auto mb-3">
       <thead><tr><th></th><th class="text-end">hpr_cb</th><th class="text-end">± (split)</th><th class="text-end">± (formal)</th></tr></thead>
       <tbody>${names.map((n, i) => `<tr>
@@ -338,12 +391,18 @@ function loadRunLog() {
   fetch("/boresight/runs").then((r) => r.json()).then(renderRunLog);
 }
 
+document.getElementById("survey-btn").addEventListener("click", () => {
+  const btn = document.getElementById("survey-btn");
+  btn.disabled = true; btn.textContent = "Surveying… (hold still)";
+  api("/boresight/survey", { method: "POST" }, "survey-result")
+    .then((p) => { if (p.markers) currentPanel = p; renderSurvey(p); })
+    .catch(() => {})
+    .finally(() => { btn.disabled = false; btn.textContent = "Survey markers"; });
+});
 document.getElementById("plan-btn").addEventListener("click", () => {
-  const q = new URLSearchParams({
-    path: document.getElementById("box-path").value,
-    height_m: document.getElementById("height").value,
-  });
-  api(`/boresight/plan?${q}`, undefined, "plan-result").then(renderPlan).catch(() => {});
+  if (!currentPanel || !currentPanel.markers) { showError("plan-result", "Survey the markers first."); return; }
+  api("/boresight/plan-route", { ...JSON_POST, body: runBody() }, "plan-result")
+    .then(renderRoute).catch(() => {});
 });
 document.getElementById("build-only").addEventListener("click", () => {
   api("/boresight/build-path", { ...JSON_POST, body: runBody() }, "build-info")
@@ -360,6 +419,38 @@ document.getElementById("run-start").addEventListener("click", () => {
 document.getElementById("run-stop").addEventListener("click", () => {
   api("/boresight/run/stop", { method: "POST" }, "capture-status")
     .then((s) => { renderCapture(s); loadSessions(); }).catch(() => {});
+});
+document.getElementById("session").addEventListener("change", loadTrim);
+document.getElementById("trim-save").addEventListener("click", () => {
+  api("/boresight/session-meta", {
+    ...JSON_POST,
+    body: JSON.stringify({
+      session: document.getElementById("session").value,
+      trim_start_s: document.getElementById("trim-start").value,
+      trim_end_s: document.getElementById("trim-end").value,
+      note: document.getElementById("trim-note").value,
+    }),
+  }, "trim-info").then((m) => {
+    if (m.error) { showError("trim-info", m.error); return; }
+    loadSessions();
+  }).catch(() => {});
+});
+document.getElementById("delete-session").addEventListener("click", () => {
+  const name = document.getElementById("session").value;
+  if (!name || !confirm(`Permanently delete ${name}? This can't be undone.`)) return;
+  api("/boresight/sessions/delete", { ...JSON_POST, body: JSON.stringify({ session: name }) }, "trim-info")
+    .then((r) => {
+      if (r.error) { showError("trim-info", r.error); return; }
+      document.getElementById("solve-result").innerHTML = "";
+      loadSessions();
+    }).catch(() => {});
+});
+document.getElementById("cleanup-btn").addEventListener("click", () => {
+  api("/boresight/cleanup", { method: "POST" }, "cleanup-result").then((r) => {
+    document.getElementById("cleanup-result").innerHTML = r.error
+      ? `<div class="alert alert-danger py-2 mb-0">${r.error}</div>`
+      : `Removed ${r.removed_paths.length} path(s) and ${r.removed_jobs.length} job(s).`;
+  }).catch(() => {});
 });
 document.getElementById("solve-btn").addEventListener("click", () => {
   const btn = document.getElementById("solve-btn");
@@ -382,9 +473,9 @@ setInterval(() => {
     if (wasRunning && !running) loadSessions();  // a finished run has a new session to solve
     wasRunning = running;
   }).catch(() => {});
-  pollGuidance();
 }, 1000);
 loadSessions();
 loadRunLog();
+api("/boresight/panel").then((p) => { if (p.markers) currentPanel = p; renderSurvey(p); }).catch(() => {});
 </script>
 {% endblock %}

@@ -88,6 +88,15 @@ def _service(tmp, nav_payload=None, paths_dir=None):
     )
 
 
+def _panel_from_plan(svc):
+    """Stand in for a survey: put the panel where the old placement
+    planner would have, so the route tests have something to build on."""
+    plan = svc.placement_plan("Boresight limits", layouts.RECOMMENDED_HEIGHT_M, layouts.INS_HEIGHT_M)
+    mid = plan["targets"][len(plan["targets"]) // 2]
+    svc.panel = {"lat": mid["lat"], "lon": mid["lon"], "face_bearing_deg": plan["face_bearing_deg"]}
+    return svc.panel
+
+
 def _write_session(path, lat0=52.235464, lon0=-1.460508, seed=1):
     """A real-shaped session file — geometry good enough to pass
     geometry_check, same recipe test_solve.py uses for its own fixtures
@@ -329,25 +338,26 @@ class BuildCaptureJobLeadInTestCase(unittest.TestCase):
             "nav": {"Lat": math.radians(lat), "Lon": math.radians(lon), "Heading": heading_deg},
             "connection": {}})
         svc.driver = _FakeDriver()
+        _panel_from_plan(svc)
         return svc
 
     def test_saves_core_and_approach_as_two_separate_jobs(self):
         svc = self._svc_at(self.far_point["lat"], self.far_point["lon"])
-        built = svc.build_capture_job("Boresight limits", layouts.RECOMMENDED_HEIGHT_M, layouts.INS_HEIGHT_M)
+        built = svc.build_capture_job("Boresight limits")
         self.assertTrue(built["has_lead_in"])
         self.assertEqual([s["job_name"] for s in svc.driver.saved],
                          [drive_mod.JOB_NAME, drive_mod.APPROACH_JOB_NAME])
 
     def test_core_job_does_not_contain_the_approach_leg(self):
         svc = self._svc_at(self.far_point["lat"], self.far_point["lon"])
-        svc.build_capture_job("Boresight limits", layouts.RECOMMENDED_HEIGHT_M, layouts.INS_HEIGHT_M)
+        svc.build_capture_job("Boresight limits")
         core = svc.driver.saved[0]
         self.assertEqual(core["job_name"], drive_mod.JOB_NAME)
         self.assertNotIn(f"{drive_mod.LEG_PATH_PREFIX} approach", [name for name, _ in core["legs"]])
 
     def test_approach_job_has_no_numbered_fan_leg(self):
         svc = self._svc_at(self.far_point["lat"], self.far_point["lon"])
-        svc.build_capture_job("Boresight limits", layouts.RECOMMENDED_HEIGHT_M, layouts.INS_HEIGHT_M)
+        svc.build_capture_job("Boresight limits")
         approach = svc.driver.saved[1]
         self.assertEqual(approach["job_name"], drive_mod.APPROACH_JOB_NAME)
         run_paths = [s["path"] for s in approach["steps"] if s["type"] == "run_path"]
@@ -358,7 +368,8 @@ class BuildCaptureJobLeadInTestCase(unittest.TestCase):
     def test_no_lead_in_saved_without_a_position_fix(self):
         svc = _service(self.tmp, nav_payload={"nav": {}, "connection": {}})
         svc.driver = _FakeDriver()
-        built = svc.build_capture_job("Boresight limits", layouts.RECOMMENDED_HEIGHT_M, layouts.INS_HEIGHT_M)
+        _panel_from_plan(svc)
+        built = svc.build_capture_job("Boresight limits")
         self.assertFalse(built["has_lead_in"])
         self.assertEqual(len(svc.driver.saved), 1)
         self.assertEqual(svc.driver.saved[0]["job_name"], drive_mod.JOB_NAME)
@@ -460,3 +471,232 @@ class ContinuityWarningFilterTestCase(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _marker_pose(ne, face_bearing_deg, lat0=52.235464, lon0=-1.460508):
+    lat, lon, _ = ned_to_lla(float(ne[0]), float(ne[1]), 0.0, lat0, lon0, 0.0)
+    return {"lat": lat, "lon": lon, "heading": face_bearing_deg + 180.0}
+
+
+class SurveyPanelTestCase(unittest.TestCase):
+    """The panel position and facing come from the robot's own sightings
+    of the plank, not from a plan — so these feed in fake sightings."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        (self.tmp / "paths").mkdir()
+        shutil.copy2(REAL_BOX, self.tmp / "paths" / "Boresight limits.yaml")
+        self.svc = _service(self.tmp, nav_payload={"nav": {"Lat": 0.9, "Lon": -0.02}, "connection": {}})
+        self.svc.min_frame_period_s = 0.0
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _sight(self, face_bearing_deg, offsets=(-0.5, 0.0, 0.5), ids=service.MARKER_IDS, noise=0.0):
+        """A plank in a row perpendicular to `face_bearing_deg`, centred 10 m north."""
+        across = np.radians(face_bearing_deg - 90.0)
+        across_vec = np.array([np.cos(across), np.sin(across)])
+        rng = np.random.default_rng(3)
+        poses = {i: _marker_pose(np.array([10.0, 0.0]) + across_vec * o + rng.normal(0, noise, 2),
+                                 face_bearing_deg)
+                 for i, o in zip(ids, offsets)}
+        self.svc._visible_marker_poses = lambda nav: poses
+
+    def test_recovers_panel_facing_and_spacing(self):
+        self._sight(123.0)
+        panel = self.svc.survey_panel(timeout_s=2.0)
+        self.assertNotIn("error", panel)
+        self.assertAlmostEqual(panel["face_bearing_deg"], 123.0, delta=0.2)
+        self.assertEqual(panel["spacings_m"], [0.5, 0.5])
+        self.assertLess(panel["facing_disagreement_deg"], 1.0)
+        self.assertEqual(panel["warnings"], [])
+
+    def test_survives_a_restart(self):
+        self._sight(40.0)
+        panel = self.svc.survey_panel(timeout_s=2.0)
+        again = _service(self.tmp)
+        self.assertEqual(again.panel, panel)
+
+    def test_errors_when_a_marker_is_never_seen(self):
+        self._sight(0.0, offsets=(-0.5, 0.0), ids=(20, 21))
+        out = self.svc.survey_panel(timeout_s=0.3)
+        self.assertIn("error", out)
+        self.assertIsNone(self.svc.panel)
+
+    def test_warns_when_spacing_is_wrong(self):
+        self._sight(0.0, offsets=(-1.0, 0.0, 1.0))
+        panel = self.svc.survey_panel(timeout_s=2.0)
+        self.assertTrue(any("spacing" in w for w in panel["warnings"]))
+
+    def test_warns_when_markers_do_not_face_the_row_perpendicular(self):
+        across = np.radians(0.0 - 90.0)
+        across_vec = np.array([np.cos(across), np.sin(across)])
+        poses = {i: _marker_pose(np.array([10.0, 0.0]) + across_vec * o, 50.0)  # row says 0, markers say 50
+                 for i, o in zip(service.MARKER_IDS, (-0.5, 0.0, 0.5))}
+        self.svc._visible_marker_poses = lambda nav: poses
+        panel = self.svc.survey_panel(timeout_s=2.0)
+        self.assertTrue(any("facing differs" in w for w in panel["warnings"]))
+
+    def test_refuses_while_a_run_is_driving(self):
+        self._sight(0.0)
+        self.svc.run_state["state"] = "driving"
+        self.assertIn("error", self.svc.survey_panel(timeout_s=0.3))
+
+    def test_no_nav_fix(self):
+        svc = _service(self.tmp)
+        self.assertEqual(svc.survey_panel(timeout_s=0.3), {"error": "no nav fix"})
+
+
+class RouteCheckTestCase(unittest.TestCase):
+    """The route must sit inside the boundary; Plan shows it without
+    sending anything, Run refuses a route that doesn't fit."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        (self.tmp / "paths").mkdir()
+        shutil.copy2(REAL_BOX, self.tmp / "paths" / "Boresight limits.yaml")
+        self.svc = _service(self.tmp)
+        self.svc.driver = _FakeDriver()
+        self.box = yaml.safe_load(REAL_BOX.read_text())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_needs_a_survey_first(self):
+        self.assertIn("survey", self.svc.build_capture_job("Boresight limits")["error"])
+
+    def test_plan_saves_nothing_and_returns_a_route(self):
+        _panel_from_plan(self.svc)
+        out = self.svc.build_capture_job("Boresight limits", save=False)
+        self.assertEqual(self.svc.driver.saved, [])
+        self.assertTrue(out["fits"])
+        self.assertTrue(out["route"])
+        self.assertEqual(len(out["box"]), len(self.box))
+
+    def test_panel_outside_the_box_does_not_fit(self):
+        self.svc.panel = {"lat": self.box[0]["lat"] + 0.001, "lon": self.box[0]["lon"],
+                          "face_bearing_deg": 0.0}
+        out = self.svc.build_capture_job("Boresight limits", save=False)
+        self.assertFalse(out["fits"])
+        self.assertTrue(any("outside" in p for p in out["fit_problems"]))
+
+    def test_run_refuses_a_route_that_does_not_fit(self):
+        self.svc.panel = {"lat": self.box[0]["lat"], "lon": self.box[0]["lon"],
+                          "face_bearing_deg": 0.0}  # in a corner, facing out
+        out = self.svc.build_capture_job("Boresight limits")
+        self.assertIn("doesn't fit", out["error"])
+        self.assertEqual(self.svc.driver.saved, [])
+
+    def test_allow_clipped_saves_anyway(self):
+        self.svc.panel = {"lat": self.box[0]["lat"], "lon": self.box[0]["lon"],
+                          "face_bearing_deg": 0.0}
+        out = self.svc.build_capture_job("Boresight limits", allow_clipped=True)
+        self.assertNotIn("error", out)
+        self.assertFalse(out["fits"])
+        self.assertTrue(self.svc.driver.saved)
+
+
+class CleanupGuardTestCase(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.svc = _service(self.tmp)
+        self.svc.driver = _FakeDriver()
+        self.svc.driver.status = lambda: {"state": "idle"}
+        self.svc.driver.cleanup = lambda: {"removed_jobs": [], "removed_paths": []}
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_runs_when_idle(self):
+        self.assertEqual(self.svc.cleanup_generated(), {"removed_jobs": [], "removed_paths": []})
+
+    def test_refused_during_a_run(self):
+        self.svc.run_state["state"] = "driving"
+        self.assertIn("error", self.svc.cleanup_generated())
+
+    def test_refused_while_a_job_is_running(self):
+        self.svc.driver.status = lambda: {"state": "running"}
+        self.assertIn("error", self.svc.cleanup_generated())
+
+
+class SessionTrimAndDeleteTestCase(unittest.TestCase):
+    """A trim is a note beside the session, never an edit to it, and only
+    an explicit delete_session removes anything."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.svc = _service(self.tmp)
+        self.svc.camera_cal_fn = lambda: (sim.CAMERA_MATRIX, sim.DIST_COEFFS)
+        self.path = self.tmp / "data" / "260101_000000.jsonl"
+        _write_session(self.path)
+        self.raw = self.path.read_bytes()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_trim_reduces_observations_and_leaves_the_raw_file_alone(self):
+        full = self.svc.session_meta("260101_000000.jsonl")
+        self.assertFalse(full["trimmed"])
+        cut = full["duration_s"] / 2
+        out = self.svc.set_session_meta("260101_000000.jsonl", trim_end_s=cut, note="interference")
+        self.assertTrue(out["trimmed"])
+        self.assertLess(out["rows_kept"], out["rows_total"])
+        self.assertEqual(self.path.read_bytes(), self.raw)
+
+    def test_solve_uses_the_trim(self):
+        full = self.svc.solve_session(self.path)
+        duration = self.svc.session_meta("260101_000000.jsonl")["duration_s"]
+        self.svc.set_session_meta("260101_000000.jsonl", trim_end_s=duration * 0.8)
+        trimmed = self.svc.solve_session(self.path)
+        self.assertLess(trimmed["n_obs"], full["n_obs"])
+        self.assertTrue(trimmed["trim"]["trimmed"])
+
+    def test_log_run_records_the_trim_in_the_notes(self):
+        duration = self.svc.session_meta("260101_000000.jsonl")["duration_s"]
+        self.svc.set_session_meta("260101_000000.jsonl", trim_end_s=duration * 0.8)
+        row = self.svc.log_run("260101_000000.jsonl", notes="test")
+        self.assertIn("trimmed", row["notes"])
+        self.assertIn("after", row["notes"])
+
+    def test_clearing_the_trim_removes_the_note_file(self):
+        self.svc.set_session_meta("260101_000000.jsonl", trim_start_s=5)
+        meta = self.path.with_suffix(".meta.json")
+        self.assertTrue(meta.is_file())
+        self.svc.set_session_meta("260101_000000.jsonl")
+        self.assertFalse(meta.exists())
+
+    def test_rejects_bad_trims(self):
+        name = "260101_000000.jsonl"
+        self.assertIn("error", self.svc.set_session_meta(name, trim_start_s=10, trim_end_s=5))
+        self.assertIn("error", self.svc.set_session_meta(name, trim_start_s=-1))
+        self.assertIn("error", self.svc.set_session_meta(name, trim_start_s="abc"))
+        self.assertFalse(self.path.with_suffix(".meta.json").exists())
+
+    def test_delete_removes_session_and_its_trim_note(self):
+        self.svc.set_session_meta("260101_000000.jsonl", trim_start_s=5)
+        self.assertEqual(self.svc.delete_session("260101_000000.jsonl"), {"deleted": "260101_000000.jsonl"})
+        self.assertFalse(self.path.exists())
+        self.assertFalse(self.path.with_suffix(".meta.json").exists())
+
+    def test_delete_refuses_the_session_being_captured(self):
+        class _Alive:
+            def is_alive(self):
+                return True
+        self.svc._thread = _Alive()
+        self.svc.session = type("S", (), {"path": self.path})()
+        self.assertIn("error", self.svc.delete_session("260101_000000.jsonl"))
+        self.assertTrue(self.path.exists())
+
+    def test_names_that_escape_the_data_dir_are_refused(self):
+        outside = self.tmp / "secret.jsonl"
+        outside.write_text("x")
+        for bad in ("../secret.jsonl", "/etc/passwd", "a/b.jsonl", "..", "", None, "x.txt"):
+            self.assertIn("error", self.svc.delete_session(bad), bad)
+        self.assertTrue(outside.exists())
+
+    def test_list_shows_trim_state(self):
+        self.svc.set_session_meta("260101_000000.jsonl", trim_start_s=5)
+        listed = self.svc.list_sessions()
+        self.assertEqual(len(listed), 1)
+        self.assertTrue(listed[0]["trimmed"])
+        self.assertEqual(self.svc.list_sessions()[0]["name"], "260101_000000.jsonl")

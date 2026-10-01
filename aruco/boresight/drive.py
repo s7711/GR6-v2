@@ -246,19 +246,23 @@ def build_job(box_points, face_bearing_deg, panel_lat, panel_lon, inside_margin_
                 return candidate
         return None
 
-    leg_paths, steps, pulled_in = [], [], 0
+    leg_paths, steps, pulled_in, dropped = [], [], 0, 0
+    ideal_legs = []  # the pattern as designed, before any clipping - for the plan view
     turn_signs = []
     previous_end, previous_heading = None, None
     for index, (start, end) in enumerate(build_chain(face_bearing_deg)):
+        ideal_legs.append([_ne_to_lla(panel_ne + start, lat0, lon0), _ne_to_lla(panel_ne + end, lat0, lon0)])
         s = pull_inside(panel_ne + start)
         e = pull_inside(panel_ne + end)
         if s is None or e is None:
+            dropped += 1
             continue
         if not np.allclose(panel_ne + start, s) or not np.allclose(panel_ne + end, e):
             pulled_in += 1
         if previous_end is not None:
             s = previous_end  # keep the chain connected after any shortening
         if float(np.linalg.norm(e - s)) < 0.8:
+            dropped += 1
             continue  # too short to be worth a leg of its own
         name = f"{LEG_PATH_PREFIX} {index:02d}"
         approaching = float(np.linalg.norm(end)) < float(np.linalg.norm(start))
@@ -305,6 +309,16 @@ def build_job(box_points, face_bearing_deg, panel_lat, panel_lon, inside_margin_
 
     info = dict(info)
     info["waypoints_pulled_in"] = pulled_in
+    info["legs_dropped"] = dropped
+    info["ideal_legs"] = [[{"lat": a[0], "lon": a[1]}, {"lat": b[0], "lon": b[1]}] for a, b in ideal_legs]
+    info["usable_box"] = [dict(zip(("lat", "lon"), _ne_to_lla(q, lat0, lon0))) for q in shrunk]
+    # The panel itself must be inside the box, or the fan has nowhere to
+    # start from. Same convex-edge test as inside() but on the unshrunk box.
+    info["panel_inside_box"] = all(
+        (local[(i + 1) % len(local)][0] - local[i][0]) * (panel_ne[1] - local[i][1])
+        - (local[(i + 1) % len(local)][1] - local[i][1]) * (panel_ne[0] - local[i][0]) <= 0
+        for i in range(len(local)))
+    info["clearance_ahead_m"] = float(placement._clearance(local, panel_ne, face_bearing_deg))
     info["leg_count"] = len(leg_paths)
     leg_lengths_m = [
         float(np.linalg.norm(np.array(lla_to_ned(p[1]["lat"], p[1]["lon"], 0.0, lat0, lon0, 0.0)[:2])
@@ -350,6 +364,32 @@ class JobDriver:
     def start(self, job_name=JOB_NAME):
         return requests.post(f"{self.jobs}/control/start", json={"name": job_name},
                              timeout=self.timeout_s).json()
+
+    def cleanup(self):
+        """Delete the paths and jobs this module generates, and nothing else.
+
+        Ben's own recorded "Boresight limits" and "Boresight figure8"
+        share the "Boresight" prefix, so this matches exactly what
+        build_job creates (numbered legs, the approach leg, and the path
+        an early version saved under the job's name) rather than
+        anything starting with "Boresight". Jobs go first so no job is
+        left pointing at a deleted path.
+        """
+        removed_jobs, removed_paths = [], []
+        for name in (JOB_NAME, APPROACH_JOB_NAME):
+            r = requests.delete(f"{self.jobs}/api/jobs/{name}", timeout=self.timeout_s)
+            if r.status_code != 404:
+                r.raise_for_status()
+                removed_jobs.append(name)
+        listed = requests.get(f"{self.navigate}/api/paths", timeout=self.timeout_s).json()
+        for entry in listed:
+            name = entry["name"]
+            if name.startswith(f"{LEG_PATH_PREFIX} ") or name == JOB_NAME:
+                r = requests.delete(f"{self.navigate}/api/paths/{name}", timeout=self.timeout_s)
+                if r.status_code != 404:
+                    r.raise_for_status()
+                    removed_paths.append(name)
+        return {"removed_jobs": removed_jobs, "removed_paths": removed_paths}
 
     def stop(self):
         requests.post(f"{self.jobs}/control/stop", timeout=self.timeout_s)

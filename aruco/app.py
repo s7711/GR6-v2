@@ -496,13 +496,29 @@ boresight = BoresightService(
 )
 
 
+@app.route("/boresight/survey", methods=["POST"])
+def boresight_survey():
+    return jsonify(boresight.survey_panel())
+
+
+@app.route("/boresight/panel")
+def boresight_panel():
+    return jsonify(boresight.panel or {})
+
+
+@app.route("/boresight/plan-route", methods=["POST"])
+def boresight_plan_route():
+    body = request.get_json(force=True)
+    return jsonify(boresight.build_capture_job(
+        body.get("path", "Boresight limits"), save=False))
+
+
 @app.route("/boresight/build-path", methods=["POST"])
 def boresight_build_path():
     body = request.get_json(force=True)
     return jsonify(boresight.build_capture_job(
         body.get("path", "Boresight limits"),
-        float(body.get("height_m", boresight_layouts.RECOMMENDED_HEIGHT_M)),
-        boresight_layouts.INS_HEIGHT_M,
+        allow_clipped=bool(body.get("allow_clipped", False)),
     ))
 
 
@@ -511,10 +527,14 @@ def boresight_run_start():
     body = request.get_json(force=True)
     return jsonify(boresight.start_run(
         body.get("path", "Boresight limits"),
-        float(body.get("height_m", boresight_layouts.RECOMMENDED_HEIGHT_M)),
-        boresight_layouts.INS_HEIGHT_M,
         passes=int(body.get("passes", 4)),
+        allow_clipped=bool(body.get("allow_clipped", False)),
     ))
+
+
+@app.route("/boresight/cleanup", methods=["POST"])
+def boresight_cleanup():
+    return jsonify(boresight.cleanup_generated())
 
 
 @app.route("/boresight/run/stop", methods=["POST"])
@@ -554,6 +574,24 @@ def boresight_capture_status():
 @app.route("/boresight/sessions")
 def boresight_sessions():
     return jsonify(boresight.list_sessions())
+
+
+@app.route("/boresight/session-meta")
+def boresight_session_meta():
+    return jsonify(boresight.session_meta(request.args.get("session", "")))
+
+
+@app.route("/boresight/session-meta", methods=["POST"])
+def boresight_set_session_meta():
+    body = request.get_json(force=True)
+    return jsonify(boresight.set_session_meta(
+        body.get("session", ""), body.get("trim_start_s"), body.get("trim_end_s"),
+        body.get("note", "")))
+
+
+@app.route("/boresight/sessions/delete", methods=["POST"])
+def boresight_delete_session():
+    return jsonify(boresight.delete_session(request.get_json(force=True).get("session", "")))
 
 
 @app.route("/boresight/solve", methods=["POST"])

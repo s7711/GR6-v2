@@ -245,3 +245,43 @@ class JobDriverTestCase(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CleanupTestCase(unittest.TestCase):
+    """cleanup() must remove what build_job generates and never Ben's own
+    recorded paths/jobs that share the "Boresight" prefix. Uses mocked
+    HTTP only - nothing here touches the live navigate/jobs services."""
+
+    def test_deletes_only_generated_items(self):
+        listed = [{"name": n} for n in (
+            "Boresight limits", "Boresight figure8", "Boresight capture",
+            "Boresight leg 00", "Boresight leg 07", "Boresight leg approach", "Water kitchen bed 1")]
+        driver = drive.JobDriver("http://nav", "http://jobs")
+        deleted = []
+
+        def fake_delete(url, timeout=None):
+            deleted.append(url)
+            return unittest.mock.Mock(status_code=204, raise_for_status=lambda: None)
+
+        with unittest.mock.patch.object(drive.requests, "get",
+                                        return_value=unittest.mock.Mock(json=lambda: listed)), \
+             unittest.mock.patch.object(drive.requests, "delete", side_effect=fake_delete):
+            out = driver.cleanup()
+
+        self.assertEqual(out["removed_jobs"], ["Boresight capture", "Boresight approach"])
+        self.assertEqual(out["removed_paths"],
+                         ["Boresight capture", "Boresight leg 00", "Boresight leg 07", "Boresight leg approach"])
+        for keep in ("Boresight limits", "Boresight figure8", "Water kitchen bed 1"):
+            self.assertFalse(any(u.endswith("/" + keep.replace(" ", " ")) for u in deleted), keep)
+        self.assertNotIn("http://jobs/api/jobs/Boresight figure8", deleted)
+        # jobs are deleted before the paths they reference
+        self.assertLess(deleted.index("http://jobs/api/jobs/Boresight capture"),
+                        deleted.index("http://nav/api/paths/Boresight leg 00"))
+
+    def test_missing_items_are_not_an_error(self):
+        driver = drive.JobDriver("http://nav", "http://jobs")
+        with unittest.mock.patch.object(drive.requests, "get",
+                                        return_value=unittest.mock.Mock(json=lambda: [])), \
+             unittest.mock.patch.object(drive.requests, "delete",
+                                        return_value=unittest.mock.Mock(status_code=404)):
+            self.assertEqual(driver.cleanup(), {"removed_jobs": [], "removed_paths": []})
