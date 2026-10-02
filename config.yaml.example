@@ -170,7 +170,7 @@ services:
     log_retention_days: 2
     scale_factor_distance_m: 1.0  # re-estimate the wheel-vs-INS scale factor every ~this many metres of travel — see scale_factor.py
     scale_factor_min_wheel_ratio: 0.9  # reject (skip logging, start again) if left/right wheel distances disagree by more than this — a tight turn/spin has no single meaningful scale factor
-    scale_factor_min_wheel_ins_ratio: 0.1  # reject if wheel-vs-INS distance disagree by more than this — catches the robot being carried (INS moves, wheels don't) or a free-spinning wheel
+    scale_factor_min_wheel_ins_ratio: 0.5  # only accept wheel-vs-INS distance within 50%-200% of each other (raised from 0.1 = 10:1, Ben 2026-10-02 - out-of-range results were all nonsense: wheels barely turning while the INS moved, or wheelspin). No wheel pulses at all = ratio 0, always rejected
 
   waterbutt:
     unit: robot-waterbutt.service

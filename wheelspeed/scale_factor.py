@@ -21,8 +21,9 @@ reading:
     interval; there's no meaningful single "scale factor" for that shape
     of motion, and we don't want it polluting the log.
   - wheel-vs-INS distance disagreeing by more than `min_wheel_ins_ratio`
-    allows (default 10%, i.e. reject anything below a 1:10 ratio either
-    way) - catches the robot being picked up and carried (INS keeps
+    allows (10% at first, i.e. 1:10 either way; tightened to 50%, i.e.
+    only 50%-200%, on 2026-10-02 - everything outside that was nonsense)
+    - catches the robot being picked up and carried (INS keeps
     integrating real motion, wheels don't turn at all) or, symmetrically,
     a wheel spinning free with no ground contact.
 Both checks use the same min/max ratio shape, just different thresholds -
