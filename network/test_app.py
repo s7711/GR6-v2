@@ -1,7 +1,10 @@
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 import app
+from scanner_state import ScannerState
 
 
 def _iface(device, iface_type, connection, state="connected", matching=None):
@@ -49,6 +52,17 @@ class TestValidateBatch(unittest.TestCase):
 
 
 class TestApplyBatch(unittest.TestCase):
+    def setUp(self):
+        # _apply_batch() reads and clears the scanner state - never this
+        # robot's real network/data/scanner.json. Found 2026-10-02: two
+        # tests here wrote "off" into it, and a full test run on
+        # 2026-10-01 20:28 silently switched the live Scanner off.
+        self._real_scanner_state = app.scanner_state
+        app.scanner_state = ScannerState(Path(tempfile.mkdtemp()) / "scanner.json")
+
+    def tearDown(self):
+        app.scanner_state = self._real_scanner_state
+
     def test_swap_sets_both_chosen_profiles_to_selected_priority(self):
         iface_by_device = {
             "wlan0": _iface("wlan0", "wifi", "CoffeebeanWifi", matching=["CoffeebeanWifi", "AmundsenHotspot"]),
