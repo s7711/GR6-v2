@@ -19,6 +19,7 @@ from flask_sock import Sock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from shared.config import load_config  # noqa: E402
+from shared.queued_writer import QueuedWriter  # noqa: E402
 from shared.web import register_pages, service_url, use_shared_static, use_shared_templates  # noqa: E402
 
 import missions as missions_module  # noqa: E402
@@ -26,7 +27,15 @@ from control import MissionRunner  # noqa: E402
 
 PAGES_DIR = Path(__file__).resolve().parent / "templates" / "pages"
 MISSIONS_STATUS_HZ = 2
-JOBS_TIMEOUT_S = 2.0
+JOBS_TIMEOUT_S = 2.0  # /control/status - jobs answers that from memory
+# jobs' /control/start runs the job's first step before it replies (see
+# jobs' control_start -> JobRunner.go), and /control/stop stops whatever
+# is running: either can mean a navigate load+start (5s timeout each) or a
+# waterbutt fill (12s - see jobs/app.py's WATERBUTT_TIMEOUT_S). At 2s a
+# job whose first step was a fill was reported "couldn't reach jobs", and
+# the mission aborted, while jobs went on and ran it (found in review
+# 2026-10-01).
+JOBS_START_STOP_TIMEOUT_S = 20.0
 
 cfg = load_config()
 service_cfg = cfg["services"]["missions"]
@@ -51,7 +60,7 @@ def start_job(name):
     # this project returns, so MissionRunner doesn't need to know about
     # jobs' particular response shape.
     try:
-        resp = requests.post(f"{JOBS_BASE_URL}/control/start", json={"name": name}, timeout=JOBS_TIMEOUT_S)
+        resp = requests.post(f"{JOBS_BASE_URL}/control/start", json={"name": name}, timeout=JOBS_START_STOP_TIMEOUT_S)
         data = resp.json()
     except requests.exceptions.RequestException:
         return {"ok": False, "reason": "couldn't reach jobs"}
@@ -78,7 +87,7 @@ def start_job(name):
 
 def stop_job():
     try:
-        requests.post(f"{JOBS_BASE_URL}/control/stop", timeout=JOBS_TIMEOUT_S)
+        requests.post(f"{JOBS_BASE_URL}/control/stop", timeout=JOBS_START_STOP_TIMEOUT_S)
     except requests.exceptions.RequestException:
         logging.warning("[missions] Couldn't reach jobs to stop")
 
@@ -88,12 +97,16 @@ def job_status():
         resp = requests.get(f"{JOBS_BASE_URL}/control/status", timeout=JOBS_TIMEOUT_S)
         return resp.json()
     except requests.exceptions.RequestException:
-        return {"state": "idle", "abort_reason": None}
+        # Not "idle" - see control.py's JOBS_UNREACHABLE_ABORT_S.
+        return {"state": "unreachable", "abort_reason": None}
 
 
 runner = MissionRunner(start_job, stop_job, job_status)
 
-_log_lock = threading.Lock()
+# Through log_writer (shared/queued_writer.py), never written inline -
+# _append_log runs in _tick_loop (which starts each next job) and in
+# request handlers. Same reasoning as jobs/app.py's log_writer.
+log_writer = QueuedWriter("missions")
 _log_path = None
 _logged_step_count = 0
 
@@ -104,7 +117,6 @@ def _start_new_log(mission_name):
     run needs to be diagnosable after the fact, not just while someone
     happens to be watching."""
     global _log_path, _logged_step_count
-    LOGS_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.datetime.now().strftime("%y%m%d_%H%M%S")
     _log_path = LOGS_DIR / f"{mission_name}_{timestamp}.jsonl"
     _logged_step_count = 0
@@ -114,9 +126,7 @@ def _start_new_log(mission_name):
 def _append_log(entry: dict):
     if _log_path is None:
         return
-    with _log_lock:
-        with open(_log_path, "a") as f:
-            f.write(json.dumps({"t": time.time(), **entry}, default=str) + "\n")
+    log_writer.put(_log_path, json.dumps({"t": time.time(), **entry}, default=str) + "\n")
 
 
 def _sweep_old_logs():
@@ -325,6 +335,7 @@ register_pages(
 
 if __name__ == "__main__":
     _sweep_old_logs()
+    log_writer.start()
     threading.Thread(target=_tick_loop, daemon=True).start()
 
     app.run(host=service_cfg["host"], port=service_cfg["port"], threaded=True)

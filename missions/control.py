@@ -39,6 +39,15 @@ import time
 
 RUN_JOB_STATUS_GRACE_S = 1.0  # see _tick_run_job's comment, and control.py's own module docstring
 
+# job_status() reports {"state": "unreachable"} when the poll itself
+# failed (app.py's job_status). That says nothing about the job - jobs
+# may well still be driving the robot - so it's not treated as the job
+# having ended. It used to come back as "idle", which aborted the whole
+# mission on a single late reply ("jobs is unexpectedly 'idle'") while
+# the job carried on regardless (found in review 2026-10-01, before the
+# first endurance test). Only a sustained loss of jobs ends the mission.
+JOBS_UNREACHABLE_ABORT_S = 30.0
+
 
 class MissionRunner:
     def __init__(self, start_job, stop_job, job_status, now=time.monotonic):
@@ -58,6 +67,7 @@ class MissionRunner:
         self.step_log = []  # [{"index", "type", "job", "outcome", "reason"}, ...] - this run only
         self._run_job_seen_running = False  # see module docstring
         self._run_job_started_at = None
+        self._last_job_status_at = None  # last time job_status() actually answered - see JOBS_UNREACHABLE_ABORT_S
 
     def go(self, mission_name: str, steps: list, start_index: int = 0):
         """Starts (or resumes, from start_index) a mission."""
@@ -90,6 +100,7 @@ class MissionRunner:
         with self.lock:
             self._run_job_seen_running = False
             self._run_job_started_at = self.now()
+            self._last_job_status_at = self._run_job_started_at
 
         result = self.start_job(step["job"])
         if not result.get("ok"):
@@ -123,6 +134,17 @@ class MissionRunner:
         with self.lock:
             if self.state != "running" or self.current_step_index != step_index:
                 return  # stop() (or another tick) already handled this
+
+            if job_state == "unreachable":
+                silent_s = self.now() - self._last_job_status_at
+                if silent_s <= JOBS_UNREACHABLE_ABORT_S:
+                    return  # no news - ask again next tick
+                reason = f"couldn't reach jobs for {silent_s:.0f}s"
+                self.state = "aborted"
+                self.abort_reason = reason
+                self.step_log.append({"index": step_index, **self._step_summary(step_index), "outcome": "aborted", "reason": reason})
+                return
+            self._last_job_status_at = self.now()
 
             if job_state == "running":
                 self._run_job_seen_running = True

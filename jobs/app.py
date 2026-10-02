@@ -21,6 +21,7 @@ from flask_sock import Sock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from shared.config import load_config  # noqa: E402
 from shared.feed_client import FeedClient  # noqa: E402
+from shared.queued_writer import QueuedWriter  # noqa: E402
 from shared.web import register_pages, service_url, use_shared_static, use_shared_templates  # noqa: E402
 
 sys.path.append(str(Path(__file__).resolve().parent.parent / "navigate"))  # append, not insert(0) - see continuity.py's comment
@@ -211,7 +212,12 @@ runner = JobRunner(
     pump_on, waterbutt_go, waterbutt_stop, gnss_aruco_priority, gnss_normal,
 )
 
-_log_lock = threading.Lock()
+# Every log line goes through log_writer (shared/queued_writer.py) rather
+# than being written here: _append_log runs in _tick_loop (the thread that
+# notices a step has finished and starts the next) and in the /control/
+# start and /control/stop handlers, which missions waits on. This SD card
+# was measured stalling a file create for up to 4.2s (2026-10-01).
+log_writer = QueuedWriter("jobs")
 _log_path = None
 _logged_step_count = 0
 
@@ -220,9 +226,9 @@ def _start_new_log(job_name):
     """Fresh log per job run, unlike navigate's own debug log
     (overwritten each run) — a job run isn't watched live the way a
     single path run is, so there's nothing to compare a stale file
-    against; see jobs-prd.md's "Logging"."""
+    against; see jobs-prd.md's "Logging". The file itself is created
+    by log_writer's thread, with its first line."""
     global _log_path, _logged_step_count
-    LOGS_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.datetime.now().strftime("%y%m%d_%H%M%S")
     _log_path = LOGS_DIR / f"{job_name}_{timestamp}.jsonl"
     _logged_step_count = 0
@@ -232,9 +238,7 @@ def _start_new_log(job_name):
 def _append_log(entry: dict):
     if _log_path is None:
         return
-    with _log_lock:
-        with open(_log_path, "a") as f:
-            f.write(json.dumps({"t": time.time(), **entry}, default=str) + "\n")
+    log_writer.put(_log_path, json.dumps({"t": time.time(), **entry}, default=str) + "\n")
 
 
 def _sweep_old_logs():
@@ -465,6 +469,7 @@ register_pages(
 
 if __name__ == "__main__":
     _sweep_old_logs()
+    log_writer.start()
     navigate_feed.start()
     threading.Thread(target=_tick_loop, daemon=True).start()
 

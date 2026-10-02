@@ -8,16 +8,16 @@ logs) - see viewer-prd.md.
 
 import json
 import logging
-import threading
+import sys
 from pathlib import Path
 
-# Cached per file (keyed by absolute path string, so the same cache
-# serves every source directory viewer discovers), invalidated by
-# mtime+size rather than a TTL - a file that hasn't changed doesn't
-# need rescanning at all, one that has (still being actively written
-# to) always gets a fresh read. Added 2026-09-14: viewer's own
-# refreshSources() polls GET /api/logs every 5s, which used to mean
-# log_file_summary() re-read-and-JSON-parsed *every* line of *every*
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from shared.file_cache import FileCache  # noqa: E402
+
+# Cached per file, invalidated by mtime+size rather than a TTL (see
+# shared/file_cache.py, promoted from here 2026-10-01). Added 2026-09-14:
+# viewer's own refreshSources() polls GET /api/logs every 5s, which used to
+# mean log_file_summary() re-read-and-JSON-parsed *every* line of *every*
 # log file of *every* service on *every single poll*, forever, for as
 # long as the page stayed open - found live pegging a whole CPU core
 # once enough log history had accumulated (most of it long-finished
@@ -25,8 +25,7 @@ from pathlib import Path
 # there's only one viewer process, and this is exactly the kind of
 # read to share across concurrent requests (multiple browser tabs)
 # rather than repeat per-request.
-_cache_lock = threading.Lock()
-_cache = {}  # path (str) -> {"mtime_ns", "size", "summary"}
+_cache = FileCache()
 
 
 def _read_log_file_summary(path: Path) -> dict:
@@ -56,24 +55,7 @@ def _read_log_file_summary(path: Path) -> dict:
 
 
 def log_file_summary(path: Path) -> dict:
-    stat = path.stat()
-    key = str(path)
-    with _cache_lock:
-        cached = _cache.get(key)
-        if cached is not None and cached["mtime_ns"] == stat.st_mtime_ns and cached["size"] == stat.st_size:
-            return cached["summary"]
-
-    # Deliberately outside the lock - the (potentially large) read/parse
-    # itself shouldn't block every other file's cache lookup, only the
-    # dict access around it needs to be serialised. Two requests racing
-    # to (re-)compute the exact same freshly-changed file just do the
-    # same work twice occasionally, rather than one blocking on the
-    # other - a much smaller cost than serialising every file read.
-    summary = _read_log_file_summary(path)
-
-    with _cache_lock:
-        _cache[key] = {"mtime_ns": stat.st_mtime_ns, "size": stat.st_size, "summary": summary}
-    return summary
+    return _cache.get(path, _read_log_file_summary)
 
 
 def log_summaries(logs_dir: Path) -> list:

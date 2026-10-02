@@ -12,7 +12,7 @@ import logs
 class TestLogFileSummaryCaching(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
-        logs._cache = {}
+        logs._cache = logs.FileCache()
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)

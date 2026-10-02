@@ -1,6 +1,6 @@
 import unittest
 
-from control import RUN_JOB_STATUS_GRACE_S, MissionRunner
+from control import JOBS_UNREACHABLE_ABORT_S, RUN_JOB_STATUS_GRACE_S, MissionRunner
 
 STEPS = [{"job": "A"}, {"job": "B"}, {"job": "C"}]
 
@@ -232,6 +232,60 @@ class TestStepLog(unittest.TestCase):
         log = runner.status()["step_log"]
         self.assertEqual(len(log), 1)
         self.assertEqual(log[0]["outcome"], "failed_to_start")
+
+
+
+class TestJobsUnreachable(unittest.TestCase):
+    """A failed status poll is "no news", not "the job ended" - see
+    control.py's JOBS_UNREACHABLE_ABORT_S."""
+
+    def _running(self):
+        clock = FakeClock()
+        runner, stub = make_runner(clock)
+        runner.go("m", STEPS)
+        stub.set_status("running")
+        runner.tick()
+        return runner, stub, clock
+
+    def test_a_brief_loss_of_jobs_does_not_abort(self):
+        runner, stub, clock = self._running()
+        stub.set_status("unreachable")
+        clock.advance(JOBS_UNREACHABLE_ABORT_S - 1)
+        runner.tick()
+        self.assertEqual(runner.status()["state"], "running")
+        stub.set_status("stopped_ok")
+        runner.tick()
+        self.assertEqual(runner.status()["current_step_index"], 1)
+        self.assertEqual(stub.started, ["A", "B"])
+
+    def test_a_sustained_loss_of_jobs_aborts(self):
+        runner, stub, clock = self._running()
+        stub.set_status("unreachable")
+        clock.advance(JOBS_UNREACHABLE_ABORT_S + 1)
+        runner.tick()
+        status = runner.status()
+        self.assertEqual(status["state"], "aborted")
+        self.assertIn("couldn't reach jobs", status["abort_reason"])
+
+    def test_the_clock_restarts_whenever_jobs_answers(self):
+        runner, stub, clock = self._running()
+        for _ in range(3):
+            stub.set_status("unreachable")
+            clock.advance(JOBS_UNREACHABLE_ABORT_S - 1)
+            runner.tick()
+            stub.set_status("running")
+            runner.tick()
+        self.assertEqual(runner.status()["state"], "running")
+
+    def test_unreachable_right_after_start_is_not_a_finish(self):
+        clock = FakeClock()
+        runner, stub = make_runner(clock)
+        runner.go("m", STEPS)
+        stub.set_status("unreachable")
+        clock.advance(RUN_JOB_STATUS_GRACE_S + 1)
+        runner.tick()
+        self.assertEqual(runner.status()["state"], "running")
+        self.assertEqual(stub.started, ["A"])
 
 
 if __name__ == "__main__":

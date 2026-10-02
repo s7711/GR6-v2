@@ -24,6 +24,7 @@ from simple_websocket import Client as WsClient
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from shared.config import load_config  # noqa: E402
 from shared.feed_client import FeedClient  # noqa: E402
+from shared.queued_writer import QueuedWriter  # noqa: E402
 from shared.web import register_pages, service_url, use_shared_static, use_shared_templates  # noqa: E402
 
 sys.path.append(str(Path(__file__).resolve().parent.parent / "aruco"))  # append, not insert(0) - see jobs/continuity.py's comment: insert(0) here risked shadowing this directory's own same-named modules in a same-process test run
@@ -140,7 +141,11 @@ valve = ValveController(send_open, send_close)
 _qc_lock = threading.Lock()
 _qc_reading = {"state": "not_configured"}
 
-_qc_log_lock = threading.Lock()
+# The QC log's lines go through log_writer (shared/queued_writer.py): a
+# reading is appended for every aruco message, from _qc_loop, and a slow
+# SD card write there would leave get_qc_reading() - what /go's QC gate
+# trusts - stale for as long as the write took.
+log_writer = QueuedWriter("waterbutt")
 _qc_log_path = None
 _qc_log_opened_at = None  # time.monotonic() - drives the periodic rotation below
 
@@ -194,9 +199,7 @@ def _append_qc_log(reading):
         # docstring for why this exists at all.
         _sweep_old_qc_logs()
         _start_new_qc_log()
-    with _qc_log_lock:
-        with open(_qc_log_path, "a") as f:
-            f.write(json.dumps({"t": time.time(), **reading}, default=str) + "\n")
+    log_writer.put(_qc_log_path, json.dumps({"t": time.time(), **reading}, default=str) + "\n")
 
 
 def _sweep_old_qc_logs():
@@ -365,6 +368,7 @@ register_pages(app, PAGES_DIR, index_slug="run", context_providers={"run": run_c
 if __name__ == "__main__":
     _sweep_old_qc_logs()
     _start_new_qc_log()
+    log_writer.start()
     drive_client.start()
     threading.Thread(target=_tick_loop, daemon=True).start()
     threading.Thread(target=_qc_loop, daemon=True).start()

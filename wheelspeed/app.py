@@ -9,6 +9,7 @@ and the placeholder (unmeasured) lever arms.
 
 import json
 import math
+import queue
 import sys
 import threading
 import time
@@ -88,8 +89,30 @@ scale_factor_map = ScaleFactorMap(service_cfg["scale_factor_distance_m"], servic
 _last_gnss_status = {}
 
 
+# Every log record - the periodic one from _log_loop and each scale-factor
+# result - goes through this queue to _log_writer_loop, the only thread
+# that calls log.append(). _on_scale_factor_result runs inside
+# _update_loop (the GAD-sending CRITICAL THREAD), and log.append() opens
+# the file, and on the hour also creates the next one and sweeps old
+# ones: on this SD card a create was measured stalling 4.2s
+# (2026-10-01), which here would have been 4.2s with no wheelspeed
+# aiding. Found in review 2026-10-01 - the loop's own comment already
+# said "no disk I/O", but this callback was the one way in. Same
+# queue-plus-writer shape as network/scanner.py's scan log, which also
+# keeps RotatingJsonlLog single-threaded (it isn't safe to append from
+# two threads at once around an hourly rotation).
+_log_queue = queue.Queue()
+
+
+def _log_writer_loop():
+    while True:
+        log.append(_log_queue.get())
+
+
 def _on_scale_factor_result(record):
-    log.append({"event": "scale_factor", **record})
+    # "t" stamped now, not when the writer gets to it (RotatingJsonlLog
+    # keeps a record's own "t") - so a slow card delays the line, not its time.
+    _log_queue.put({"t": time.time(), "event": "scale_factor", **record})
 
     lat, lon = record.get("lat"), record.get("lon")
     left_wheel, right_wheel = record.get("left_wheel_distance_m"), record.get("right_wheel_distance_m")
@@ -234,7 +257,8 @@ def _log_loop():
     period = 1.0 / service_cfg["log_hz"]
     while True:
         snap = _snapshot()
-        log.append({
+        _log_queue.put({
+            "t": time.time(),  # see _on_scale_factor_result
             "left_counts_s": snap["left_counts_s"],
             "right_counts_s": snap["right_counts_s"],
             "left_mps": snap["left_mps"],
@@ -340,5 +364,6 @@ if __name__ == "__main__":
     _load_scale_factor_map()
     threading.Thread(target=_update_loop, daemon=True).start()
     threading.Thread(target=_log_loop, daemon=True).start()
+    threading.Thread(target=_log_writer_loop, daemon=True).start()
     threading.Thread(target=_scale_factor_map_save_loop, daemon=True).start()
     app.run(host=service_cfg["host"], port=service_cfg["port"], threaded=True)

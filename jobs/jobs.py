@@ -5,9 +5,13 @@ convention — see jobs-prd.md's "Job file format".
 """
 
 import re
+import sys
 from pathlib import Path
 
 import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from shared.file_cache import FileCache, load_yaml  # noqa: E402
 
 # Same reasoning as navigate/paths.py's _SAFE_NAME — only real
 # path-traversal characters are excluded, everything else (spaces,
@@ -30,6 +34,16 @@ def _file_for(jobs_dir, name: str) -> Path:
     return Path(jobs_dir) / f"{_validate_name(name)}.yaml"
 
 
+# Per-file step count (shared/file_cache.py), so listing re-parses only
+# the jobs that have actually been re-saved - same as navigate's
+# list_paths (2026-10-01).
+_step_counts = FileCache()
+
+
+def _load_step_count(file: Path) -> int:
+    return len((load_yaml(file) or {}).get("steps", []))
+
+
 def list_jobs(jobs_dir) -> list:
     """[{"name":, "step_count":}, ...] for every saved job, sorted
     by name."""
@@ -38,8 +52,11 @@ def list_jobs(jobs_dir) -> list:
         return []
     result = []
     for file in sorted(jobs_dir.glob("*.yaml")):
-        data = yaml.safe_load(file.read_text()) or {}
-        result.append({"name": file.stem, "step_count": len(data.get("steps", []))})
+        try:
+            step_count = _step_counts.get(file, _load_step_count)
+        except FileNotFoundError:
+            continue  # deleted between glob() and stat()
+        result.append({"name": file.stem, "step_count": step_count})
     return result
 
 

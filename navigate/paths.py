@@ -4,14 +4,36 @@ storage" for the per-point schema (lat/lon/speed_mps/pump/clearance_m)
 and why lat/lon (not local XY) is what's persisted.
 """
 
+import copy
 import json
 import math
 import re
+import sys
 from pathlib import Path
 
 import yaml
 
 import geometry
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from shared.file_cache import FileCache, load_yaml  # noqa: E402
+
+# Parsed points per path file (shared/file_cache.py) - list_paths() used
+# to read and YAML-parse every path on every call, measured at ~750ms for
+# 59 small paths on 2026-10-01 and growing with each one saved (bore-sight
+# route planning alone saves a dozen at a time). Now a file is only parsed
+# again once it's actually been re-saved.
+_cache = FileCache()
+_summaries = FileCache()  # list_paths()'s per-file {point_count, length_m}
+
+
+def _summary(points: list) -> dict:
+    return {"point_count": len(points), "length_m": path_length_m(points)}
+
+
+def _load_summary(file: Path) -> dict:
+    return _summary(load_yaml(file) or [])
+
 
 DEFAULT_FLAGS = {"aruco_priority": False}
 
@@ -73,18 +95,18 @@ def list_paths(paths_dir) -> list:
         return []
     result = []
     for file in sorted(paths_dir.glob("*.yaml")):
-        points = yaml.safe_load(file.read_text()) or []
-        result.append({
-            "name": file.stem,
-            "point_count": len(points),
-            "length_m": path_length_m(points),
-        })
+        try:
+            summary = _summaries.get(file, _load_summary)
+        except FileNotFoundError:
+            continue  # deleted between glob() and stat() - gone from the next listing anyway
+        result.append({"name": file.stem, **summary})
     return result
 
 
 def load_path(paths_dir, name: str) -> list:
-    """Raises FileNotFoundError if the path doesn't exist."""
-    return yaml.safe_load(_file_for(paths_dir, name).read_text()) or []
+    """Raises FileNotFoundError if the path doesn't exist. A fresh copy
+    each call - callers (PathRunner, jobs' continuity check) own it."""
+    return copy.deepcopy(_cache.get(_file_for(paths_dir, name), lambda f: load_yaml(f) or []))
 
 
 def save_path(paths_dir, name: str, points: list) -> None:

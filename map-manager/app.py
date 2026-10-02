@@ -21,6 +21,7 @@ from flask_sock import Sock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from shared.config import load_config  # noqa: E402
+from shared.queued_writer import QueuedWriter  # noqa: E402
 from shared.feed_client import FeedClient  # noqa: E402
 from shared.web import register_pages, service_url, use_shared_static, use_shared_templates  # noqa: E402
 
@@ -233,11 +234,16 @@ def _start_new_raw_log():
     _raw_log_path = candidate
 
 
+# Raw-capture lines go through log_writer (shared/queued_writer.py), not
+# written inline from _tick - same rule as every other service's logs
+# (2026-10-01): a slow SD card write must never stall a tick loop.
+log_writer = QueuedWriter("map-manager")
+
+
 def _append_raw_log(record):
     if _raw_log_path is None:
         return
-    with open(_raw_log_path, "a") as f:
-        f.write(json.dumps(record) + "\n")
+    log_writer.put(_raw_log_path, json.dumps(record) + "\n")
 
 
 def _sweep_old_raw_logs():
@@ -351,6 +357,7 @@ register_pages(app, PAGES_DIR, index_slug="home", context_providers={"reprocess"
 if __name__ == "__main__":
     _load_grid()
     _sweep_old_raw_logs()
+    log_writer.start()
     nav_client.start()
     drive_client.start()
     threading.Thread(target=_tick_loop, daemon=True).start()
