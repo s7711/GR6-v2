@@ -6,7 +6,6 @@ and surveying new markers.
 See aruco-prd.md for the requirements this implements.
 """
 
-import io
 import json
 import logging
 import sys
@@ -17,12 +16,12 @@ from pathlib import Path
 import numpy as np
 from flask import Flask, Response, abort, jsonify, request
 from flask_sock import Sock
-from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from shared.config import load_config  # noqa: E402
 from shared.feed_client import FeedClient  # noqa: E402
 from shared.frame_ipc import FrameReader  # noqa: E402
+from shared.stream_jpeg import encode_stream_jpeg  # noqa: E402
 from shared.web import register_pages, service_url, use_shared_static, use_shared_templates  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "oxts-nav"))
@@ -45,6 +44,7 @@ STATUS_HZ = 5  # /ws/aruco update rate — independent of camera_fps
 cfg = load_config()
 service_cfg = cfg["services"]["aruco"]
 oxtsnav_cfg = cfg["services"]["oxts-nav"]
+camera_cfg = cfg["services"]["camera"]
 xnav_ip = cfg["xnav_ip"]
 
 hpr_cb = tuple(service_cfg["camera_extrinsics"]["hpr_cb"])
@@ -324,11 +324,12 @@ def _jpeg_for(frame):
     same frame waits and reuses the result instead of encoding it too."""
     with _jpeg_lock:
         if _jpeg_cache["frame"] is not frame:
-            buf = io.BytesIO()
-            # BGR -> RGB for display, same picamera2-quirk reversal camera/app.py uses.
-            Image.fromarray(frame[:, :, ::-1]).save(buf, format="JPEG")
+            # Same browser-only scaling/quality as camera's stream - see
+            # shared/stream_jpeg.py. Detection uses the full-size frame.
             _jpeg_cache["frame"] = frame
-            _jpeg_cache["jpeg"] = buf.getvalue()
+            _jpeg_cache["jpeg"] = encode_stream_jpeg(
+                frame, camera_cfg["stream_width"], camera_cfg["stream_jpeg_quality"]
+            )
         return _jpeg_cache["jpeg"]
 
 

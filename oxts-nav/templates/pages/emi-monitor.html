@@ -1,0 +1,140 @@
+{# title: EMI monitor #}
+{% extends "base.html" %}
+{% block title %}GR6 — EMI monitor{% endblock %}
+
+{#
+  Temporary page (2026-10-02) for watching GNSS health while the robot is
+  pulled or driven during interference testing - see oxts-nav-prd.md's
+  "Interference diagnostics". Everything comes from /ws/nav, the same feed
+  as Home; nothing here is logged that oxts-nav's decoded log doesn't
+  already record.
+#}
+
+{% block content %}
+<div class="row row-cols-2 row-cols-md-3 row-cols-xl-6 g-3 mb-3">
+  <div class="col"><div class="card text-center"><div class="card-body py-2">
+    <div class="text-body-secondary small">GPS Position Mode</div>
+    <div class="fs-5"><span id="status-GnssPosMode">—</span></div>
+  </div></div></div>
+  <div class="col"><div class="card text-center"><div class="card-body py-2">
+    <div class="text-body-secondary small">Satellites</div>
+    <div class="fs-5"><span id="status-GnssPosNumSats">—</span></div>
+  </div></div></div>
+  <div class="col"><div class="card text-center"><div class="card-body py-2">
+    <div class="text-body-secondary small">Differential age</div>
+    <div class="fs-5"><span id="stat-age">—</span> s</div>
+  </div></div></div>
+  <div class="col"><div class="card text-center"><div class="card-body py-2">
+    <div class="text-body-secondary small">Rejected positions</div>
+    <div class="fs-5"><span id="stat-reject">—</span></div>
+  </div></div></div>
+  <div class="col"><div class="card text-center"><div class="card-body py-2">
+    <div class="text-body-secondary small">Core noise (pri / sec)</div>
+    <div class="fs-5"><span id="stat-noise-p">—</span> / <span id="stat-noise-s">—</span></div>
+  </div></div></div>
+  <div class="col"><div class="card text-center"><div class="card-body py-2">
+    <div class="text-body-secondary small">Speed</div>
+    <div class="fs-5"><span id="stat-speed">—</span> m/s</div>
+  </div></div></div>
+</div>
+
+<div class="card mb-3"><div class="card-body py-2">
+  <div class="text-body-secondary small mb-1">Speed (m/s)</div>
+  <div id="graph-speed"></div>
+</div></div>
+<div class="card mb-3"><div class="card-body py-2">
+  <div class="text-body-secondary small mb-1">Position innovations, filtered (std devs) — 6.4 is the top of the range</div>
+  <div id="graph-inn"></div>
+</div></div>
+<div class="card mb-3"><div class="card-body py-2">
+  <div class="text-body-secondary small mb-1">Consecutive rejected positions, and differential age (s)</div>
+  <div id="graph-rej"></div>
+</div></div>
+<div class="card mb-3"><div class="card-body py-2">
+  <div class="text-body-secondary small mb-1">Core noise</div>
+  <div id="graph-noise"></div>
+</div></div>
+
+<link href="/static/vendor/uplot-1.6.31/uPlot.min.css" rel="stylesheet">
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/uplot-utils.js"></script>
+<script src="/static/vendor/uplot-1.6.31/uPlot.iife.min.js"></script>
+<script>
+const HISTORY_SECONDS = 120;
+const updateHz = {{ nav_update_hz }};
+const maxPoints = Math.ceil(HISTORY_SECONDS * updateHz);
+const HEIGHT = 170;
+
+// One scrolling chart per card. `fields` pulls each series' value out of
+// a /ws/nav message; a missing value is pushed as null so it shows as a
+// gap rather than a misleading line.
+function liveChart(elId, series, fields, yRange) {
+  const el = document.getElementById(elId);
+  const data = [[], ...series.map(() => [])];
+  const scales = { x: { time: true } };
+  if (yRange) scales.y = { range: yRange };
+  const plot = new uPlot({
+    width: el.clientWidth,
+    height: HEIGHT,
+    scales,
+    axes: [{ values: hhmmssAxisValues }, {}],
+    series: [{}, ...series],
+  }, data, el);
+  window.addEventListener("resize", () => plot.setSize({ width: el.clientWidth, height: HEIGHT }));
+  return (t, msg) => {
+    data[0].push(t);
+    fields.forEach((f, i) => {
+      const v = f(msg);
+      data[i + 1].push(v === undefined || v === null ? null : v);
+    });
+    if (data[0].length > maxPoints) data.forEach((s) => s.shift());
+    plot.setData(data);
+  };
+}
+
+const nav = (k) => (m) => (m.nav || {})[k];
+const st = (k) => (m) => (m.status || {})[k];
+const speedOf = (m) => {
+  const n = m.nav || {};
+  return n.Vn !== undefined && n.Ve !== undefined ? Math.hypot(n.Vn, n.Ve) : undefined;
+};
+
+const charts = [
+  liveChart("graph-speed", [{ label: "Speed", stroke: "#ff8c42" }], [speedOf]),
+  liveChart("graph-inn", [
+    { label: "X", stroke: "#e45756" },
+    { label: "Y", stroke: "#4c78a8" },
+    { label: "Z", stroke: "#54a24b" },
+  ], [st("InnPosXFilt"), st("InnPosYFilt"), st("InnPosZFilt")], [0, 7]),
+  liveChart("graph-rej", [
+    { label: "Rejected", stroke: "#e45756" },
+    { label: "Diff age (s)", stroke: "#888888" },
+  ], [st("GnssPosReject"), st("GnssDiffAge")]),
+  liveChart("graph-noise", [
+    { label: "Primary", stroke: "#4c78a8" },
+    { label: "Secondary", stroke: "#f58518" },
+  ], [st("GpsPrimaryCoreNoise"), st("GpsSecondaryCoreNoise")]),
+];
+
+const show = (id, v, digits) => {
+  document.getElementById(id).textContent =
+    v === undefined || v === null ? "—" : (digits === undefined ? v : v.toFixed(digits));
+};
+
+connectWs("/ws/nav", (msg) => {
+  const status = msg.status || {};
+  fillFields("status-", status);
+  translateNcomCodes("status-", status);
+  show("stat-age", status.GnssDiffAge, 1);
+  show("stat-reject", status.GnssPosReject);
+  show("stat-noise-p", status.GpsPrimaryCoreNoise);
+  show("stat-noise-s", status.GpsSecondaryCoreNoise);
+  show("stat-speed", speedOf(msg), 2);
+
+  const t = Date.now() / 1000;
+  charts.forEach((push) => push(t, msg));
+});
+</script>
+{% endblock %}

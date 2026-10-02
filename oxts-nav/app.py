@@ -175,6 +175,7 @@ register_pages(
     index_slug="home",
     context_providers={
         "home": lambda: {"nav_update_hz": nav_update_hz},
+        "emi-monitor": lambda: {"nav_update_hz": nav_update_hz},  # temporary interference-testing page, 2026-10-02
         "xnav-config": xnav_config_context,
     },
 )

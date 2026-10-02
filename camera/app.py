@@ -19,6 +19,7 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from shared.config import load_config  # noqa: E402
 from shared.frame_ipc import FrameWriter  # noqa: E402
+from shared.stream_jpeg import encode_stream_jpeg  # noqa: E402
 from shared.web import manager_url, register_pages, service_url, use_shared_static, use_shared_templates  # noqa: E402
 
 from bg_camera import RESOLUTION, BgCamera  # noqa: E402
@@ -65,12 +66,10 @@ def inject_manager_url():
 def mjpeg_generator():
     while True:
         frame, _timestamp, _exposure_us, _gain, _sequence = cam.latest()
-        # picamera2's "RGB888" format is actually BGR byte order (a known
-        # picamera2 quirk, kept for cv2 compatibility elsewhere) — reverse
-        # the channel axis so colours display correctly here.
-        buf = io.BytesIO()
-        Image.fromarray(frame[:, :, ::-1]).save(buf, format="JPEG")
-        yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + buf.getvalue() + b"\r\n"
+        # Scaled/compressed for the browser only (see shared/stream_jpeg.py,
+        # which also does the BGR->RGB reversal picamera2's "RGB888" needs).
+        jpeg = encode_stream_jpeg(frame, service_cfg["stream_width"], service_cfg["stream_jpeg_quality"])
+        yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg + b"\r\n"
 
 
 @app.route("/camera.mjpg")

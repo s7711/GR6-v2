@@ -1,0 +1,39 @@
+#!/bin/sh
+# NOT INSTALLED (removed 2026-10-02, same day): a parked full-power wifi
+# blast didn't disturb the GNSS at all, so the power cap only cost wifi
+# coverage. Kept in case the question comes back.
+#
+# Deploy: copy to /etc/NetworkManager/dispatcher.d/91-wlan1-txpower,
+# owned by root, mode 0755 (NetworkManager refuses to run dispatcher
+# scripts that are group/world-writable).
+#
+#   sudo cp network/wlan1-txpower.dispatcher.example \
+#       /etc/NetworkManager/dispatcher.d/91-wlan1-txpower
+#   sudo chown root:root /etc/NetworkManager/dispatcher.d/91-wlan1-txpower
+#   sudo chmod 755 /etc/NetworkManager/dispatcher.d/91-wlan1-txpower
+#
+# Caps the wifi dongle's (wlan1, RT5370) transmit power - added
+# 2026-10-02 while chasing GNSS trouble: the dongle sits ~20-40cm from
+# the GNSS antennas, and RTK went wrong (xNAV rejecting GNSS) even with
+# the motors unplugged and the robot pulled by hand. Wifi transmitting
+# hard - streaming camera video, more so on a weak link - is the suspect.
+# 20 dBm (the UK limit, and the driver's default) is 100 mW.
+#
+# Set on the phy, not the interface: on rt2800usb `iw dev wlan1 set
+# txpower` is accepted but changes nothing; `iw phy <phy> set txpower`
+# takes. Re-applied every time wlan1 comes up, since a reconnect (common
+# out in the garden) or a reboot puts it back to the default.
+#
+# To undo: delete the installed file, then `sudo iw phy <phy> set
+# txpower auto` (or just reconnect/reboot).
+
+TXPOWER_MBM=1000  # 1/100 dBm - 1000 = 10 dBm = 10 mW
+
+[ "$1" = "wlan1" ] || exit 0
+case "$2" in
+    up|reapply|dhcp4-change) ;;
+    *) exit 0 ;;
+esac
+
+PHY=$(cat /sys/class/net/wlan1/phy80211/name 2>/dev/null) || exit 0
+/usr/sbin/iw phy "$PHY" set txpower fixed "$TXPOWER_MBM"

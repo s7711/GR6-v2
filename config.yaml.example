@@ -64,6 +64,8 @@ services:
       - GpsPrimarySupplyVolt
       - GpsSecondarySupplyVolt
       - GnssDiffAge
+      - GpsPrimaryCoreNoise    # per-antenna GNSS "core noise" (added 2026-10-02 for an EMC sweep) - units/meaning on the u-blox not documented (an OXTS figure from the Novatel days); parked readings ~40 primary, ~40-50 secondary; didn't move during a 42 Mbit/s wifi blast
+      - GpsSecondaryCoreNoise
 
   camera:
     unit: robot-camera.service
@@ -72,6 +74,8 @@ services:
     web_ui: true
     camera_fps: 5  # Resolution is fixed (1280x960), not configurable — see camera-prd.md
     camera_shm_name: gr6-camera-frame
+    stream_width: 640           # browser video (camera.mjpg/aruco.mjpg) is scaled to this width - 1280x960 frames are still what detection/calibration use, see shared/stream_jpeg.py
+    stream_jpeg_quality: 50     # browser video JPEG quality - ~40KB/frame at 640 wide vs ~190KB full-size at the old default (75); less wifi airtime near the GNSS antennas (2026-10-02)
 
   aruco:
     unit: robot-aruco.service
