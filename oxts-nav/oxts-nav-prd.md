@@ -368,6 +368,8 @@ actual xNAV command and the safety net:
 
 ## Interference diagnostics (added 2026-09-14)
 
+Ongoing investigation (2026-10-02 onwards): see [GNSS-EMI-problems.md](GNSS-EMI-problems.md) for what's been ruled out, where events happen, and the next tests.
+
 `decoded_log_fields` now also includes `GnssPosReject`/`GnssVelReject`/
 `GnssAttReject` (the xNAV's own consecutive-rejected-update counters —
 NCOM manual/`ncomrx.py`'s `decodeStatus0`) and `InnPosXFilt`/
