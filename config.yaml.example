@@ -129,6 +129,10 @@ services:
     motor_max_speed_mps: 0.4           # hard per-wheel cap, applied after path_max_speed_mps/turn - see navigate-prd.md's "Max speed"
     path_max_speed_mps: 0.4            # caps the input speed to the turn/differential-drive calc, so a heading correction rides on top of a steady baseline instead of reducing it - see navigate-prd.md's "Max speed"
     turn_tolerance_deg: 10.0           # default heading tolerance for a turn_to_heading job step that doesn't specify its own
+    # GNSS-rejection hold (2026-10-02) - stop a path run while the xNAV is rejecting GNSS, see navigate/gnss_hold.py
+    gnss_hold_reject_threshold: 12  # GnssPosReject at/above this starts a hold - 12 = ~3s of rejected updates at the u-blox's 4Hz
+    gnss_hold_settle_s: 30          # resume this long after GnssPosReject drops back to 0 (timer restarts if it climbs back to the threshold)
+    gnss_hold_max_s: 300            # abort the path run if a hold has lasted this long - jobs has no step timeout of its own
 
   network:
     unit: robot-network.service

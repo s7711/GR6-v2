@@ -151,6 +151,30 @@ class PathRunner:
                 return
             self._abort(reason)
 
+    def hold(self, reason):
+        """Called by app.py every tick, instead of step(), while the xNAV
+        is rejecting GNSS (see gnss_hold.py): stop, pump off, and stay
+        "running" - so jobs simply waits, the same as for a slow path -
+        until app.py goes back to calling step(). No-op unless running.
+
+        The stall window and the distance-travelled baseline are both
+        restarted, so the stop isn't taken for being stuck and the
+        position step the xNAV makes as it recovers isn't counted as
+        distance driven. Nothing else needs undoing: the next step()
+        tracks from wherever the settled position puts the robot, with
+        all its usual limits - if that's outside the clearance, it
+        aborts then, like any other run."""
+        with self.lock:
+            if self.state != "running":
+                return
+            self._stall_guard.clear()
+            self._last_robot_local = None
+            self.last_status["gnss_hold"] = reason
+            self.last_status["left_mps"] = 0.0
+            self.last_status["right_mps"] = 0.0
+        self.send_velocity(0.0, 0.0)
+        self.send_pump(False)  # don't water one spot while stopped
+
     def preview(self, robot_lat, robot_lon, robot_heading_deg):
         """Live cross-track/heading error against the loaded path, for
         the Run page's display to stay meaningful even with no run in
@@ -201,6 +225,7 @@ class PathRunner:
         with self.lock:
             if self.state != "running":
                 return
+            self.last_status["gnss_hold"] = None  # see hold()
 
             robot_north, robot_east = geometry.to_local(robot_lat, robot_lon, *self.path_ref)
             if self._last_robot_local is not None:

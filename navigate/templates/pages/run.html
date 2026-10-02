@@ -29,7 +29,7 @@
       <div class="card-body">
         <table class="table table-sm mb-0">
           <tbody>
-            <tr><th scope="row">State</th><td><span id="stat-state">—</span> <span id="stat-abort_reason" class="text-danger small"></span></td></tr>
+            <tr><th scope="row">State</th><td><span id="stat-state">—</span> <span id="stat-abort_reason" class="text-danger small"></span><span id="stat-gnss_hold" class="text-warning-emphasis small"></span></td></tr>
             <tr><th scope="row">Speed</th><td><span id="stat-speed">—</span> m/s</td></tr>
             <tr><th scope="row">Lateral error</th><td><span id="stat-cross_track_error_m">—</span> m (clearance headroom <span id="stat-clearance_headroom_m">—</span> m)</td></tr>
             <tr><th scope="row">Heading error</th><td><span id="stat-heading_error_deg">—</span> deg</td></tr>
@@ -163,6 +163,12 @@ let displayedPathName = null; // whichever path's points are currently drawn on 
 
 connectWs("/ws/navigate", (msg) => {
   fillFields("stat-", msg);
+  // Paused for the GNSS-rejection hold (see gnss_hold.py): navigate's
+  // state stays "running" (jobs relies on that), but say what's actually
+  // happening here. gnss_hold itself is the reason text, shown beside it.
+  if (msg.state === "running" && msg.gnss_hold) {
+    document.getElementById("stat-state").textContent = "GNSS recovery";
+  }
   // Jogging while a run is in progress would fight navigate's own
   // auto commands via drive's control arbiter (manual briefly
   // overriding auto on every drag) — the joystick here is only for

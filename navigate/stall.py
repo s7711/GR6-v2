@@ -23,6 +23,11 @@ class StallGuard:
     def reset(self, value, now: float):
         self._checkpoint = (value, now)
 
+    def clear(self):
+        """Forget the checkpoint - the next stalled() call starts a fresh
+        window from wherever things are then (see PathRunner.hold)."""
+        self._checkpoint = None
+
     def stalled(self, value, now: float, progress_fn):
         """Call every tick with the current progress-tracking value
         (e.g. an (north, east) position tuple, or a heading in degrees)

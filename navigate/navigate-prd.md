@@ -739,6 +739,44 @@ journal) — no new plumbing needed in `jobs`/`missions`: the existing
 abort propagation (navigate aborts -> `jobs` fails the step -> `missions`
 aborts the round) already covers it.
 
+## GNSS-rejection hold (added 2026-10-02)
+
+With the DC motors running, the u-blox sometimes holds an RTK "integer"
+fix that is wrong (an undetected cycle slip or two). The xNAV rejects it
+(`GnssPosReject` climbs), then after a few seconds its recovery logic
+follows GNSS anyway and its output position steps 0.2-0.5m; the u-blox
+may then refix, which is another step. Seen 2026-10-02 09:13:49 and
+09:18:08 - three steps in ~10s each time; the second aborted "Water
+kitchen bed 2a" on cross-track (0.52m against 0.5m clearance). The root
+cause (motor interference) hasn't yielded to hardware fixes, so navigate
+side-steps it (Ben's design):
+
+- `GnssPosReject >= gnss_hold_reject_threshold` (12, ~3s at the
+  u-blox's 4Hz) starts an event. A running **path** is held: zero
+  velocity, pump off, state stays `running` so jobs just waits. The
+  status/feed carries `gnss_hold` (a text reason, else null).
+- The settle timer starts when `GnssPosReject` drops back to 0; the run
+  resumes `gnss_hold_settle_s` (30s) later. Climbing back to the
+  threshold while settling waits for the next reset (a relapse, same
+  event).
+- On resume the run carries on from wherever the settled position puts
+  it, with every normal limit - if that's outside the clearance it aborts
+  then, like any other run. The stall window and distance-travelled
+  baseline restart at the hold, so neither the stop nor the recovery step
+  counts.
+- A hold lasting `gnss_hold_max_s` (300s) aborts the run - jobs has no
+  step timeout of its own.
+- Turns aren't held (they steer on heading, not position), but every
+  event is still tracked and logged, whatever is running.
+- Each event writes a `start` and an `end` (or `gave_up`) line to
+  `navigate/data/gnss_hold_log.jsonl` (never swept, like
+  `control_stall_log.jsonl`) and a warning to the journal.
+  `GnssPosReject` is also on every debug-log line, as `gnss_pos_reject`.
+
+Replayed against the 2026-10-02 xNAV log, this triggers at 09:03:01
+(42s), 09:13:52 (52s) and 09:18:13 (126s) - each time before the xNAV's
+first recovery step.
+
 ## Turn in place (added 2026-08-18)
 
 `jobs` steps could only ever run a saved path or sit stationary

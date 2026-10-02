@@ -27,6 +27,7 @@ import geometry  # noqa: E402
 import paths  # noqa: E402
 from control import PathRunner  # noqa: E402
 from feed import NavigateFeedServer  # noqa: E402
+from gnss_hold import GnssHold  # noqa: E402
 from turn_control import TurnRunner  # noqa: E402
 
 PAGES_DIR = Path(__file__).resolve().parent / "templates" / "pages"
@@ -68,6 +69,16 @@ LOGS_DIR = PATHS_DIR / "logs"  # one retained file per run — see jobs'/mission
 # CMD_TIMEOUT_MS), sailing the robot straight through the target heading.
 STALL_LOG_PATH = PATHS_DIR / "control_stall_log.jsonl"
 STALL_THRESHOLD_S = 0.5  # 5x control_hz's own 0.1s period - well above normal scheduling jitter
+
+# GNSS-rejection hold - see gnss_hold.py. One line when an event starts
+# and one when it ends, in a never-swept file beside STALL_LOG_PATH's for
+# the same reason: "how often does this happen" (Ben, 2026-10-02). Named
+# here and joined to PATHS_DIR when written, so tests that point PATHS_DIR
+# at a temp dir never write to this robot's real file.
+GNSS_HOLD_LOG_NAME = "gnss_hold_log.jsonl"
+gnss_hold = GnssHold(service_cfg["gnss_hold_reject_threshold"], service_cfg["gnss_hold_settle_s"])
+GNSS_HOLD_MAX_S = service_cfg["gnss_hold_max_s"]
+_gnss_hold_event = {}  # the current event's start details, for its "end" line
 
 CONTROL_CONFIG = {
     "entry_max_distance_m": service_cfg["entry_max_distance_m"],
@@ -225,6 +236,7 @@ def _current_position():
         "horizontal_speed_mps": horizontal_speed_mps,
         "wheel_left_mps": drive_state.get("LM_vel_filt_mps"),
         "wheel_right_mps": drive_state.get("RM_vel_filt_mps"),
+        "gnss_pos_reject": status.get("GnssPosReject"),  # drives the GNSS-rejection hold - see gnss_hold.py
     }
 
 
@@ -358,11 +370,84 @@ _terminal_state_entered_at = None
 LOG_TAIL_AFTER_STOP_S = 5.0  # raised from 2.0 (2026-09-14) - 2s cut off before the robot had actually settled after an abort; still deliberately short - "let me see what happens right after it stops", not an unbounded idle recording. If a new run starts before this tail elapses (nothing stops that - see _start_new_debug_log's docstring), the previous run's tail is simply cut short at that point, not corrupted or merged with the new run's own log.
 
 
+def _write_gnss_hold_event(entry):
+    _debug_log_queue.put((PATHS_DIR / GNSS_HOLD_LOG_NAME, json.dumps({"t": time.time(), **entry}, default=str) + "\n"))
+
+
+def _active_run_label():
+    """What was running when a GNSS-rejection event started - "path",
+    "turn", or None - for its log line."""
+    if _active_kind == "turn":
+        return "turn" if turn_runner.status()["state"] == "running" else None
+    return "path" if runner.status()["state"] == "running" else None
+
+
+def _track_gnss_hold(position, now):
+    """Updates gnss_hold from this tick's GnssPosReject and logs an
+    event's start/end. Runs every tick with a position, whatever is
+    running, so the log counts every event, not only ones that held a
+    run."""
+    global _gnss_hold_event
+    change = gnss_hold.update(position.get("gnss_pos_reject"), now)
+    if change == "started":
+        running = _active_run_label()
+        _gnss_hold_event = {
+            "running": running,
+            "path_name": _current_path_name if running == "path" else None,
+            "held_path_run": False,
+        }
+        logging.warning(
+            "[navigate] xNAV rejecting GNSS (GnssPosReject %s >= %s)%s",
+            position.get("gnss_pos_reject"), gnss_hold.threshold,
+            " - holding the path run" if running == "path" else "",
+        )
+        _write_gnss_hold_event({
+            "event": "start", **_gnss_hold_event, "reject": position.get("gnss_pos_reject"),
+            "lat": position["lat"], "lon": position["lon"],
+        })
+    elif change == "ended":
+        duration_s = now - gnss_hold.started_at
+        logging.warning("[navigate] GNSS settled after %.0fs - resuming", duration_s)
+        _write_gnss_hold_event({
+            "event": "end", **_gnss_hold_event, "duration_s": round(duration_s, 1),
+            "peak_reject": gnss_hold.peak_reject, "relapses": gnss_hold.relapses,
+            "lat": position["lat"], "lon": position["lon"],
+        })
+        _gnss_hold_event = {}
+
+
+def _step_path_run(position, now):
+    """runner.step(), unless the xNAV is rejecting GNSS - then hold the
+    run instead (stopped, still "running"), and abort it only if things
+    haven't settled within gnss_hold_max_s (jobs has no step timeout of
+    its own, so an event that never settled would otherwise wait
+    forever)."""
+    if gnss_hold.active and runner.status()["state"] == "running":
+        duration_s = gnss_hold.duration_s(now)
+        if duration_s > GNSS_HOLD_MAX_S:
+            runner.abort_if_running(
+                f"GNSS still not settled after a {duration_s:.0f}s hold (gnss_hold_max_s {GNSS_HOLD_MAX_S:.0f})"
+            )
+            _write_gnss_hold_event({"event": "gave_up", **_gnss_hold_event, "duration_s": round(duration_s, 1)})
+            return
+        remaining = gnss_hold.settle_remaining_s(now)
+        if remaining is None:
+            reason = f"xNAV rejecting GNSS (GnssPosReject {position.get('gnss_pos_reject')}) - holding"
+        else:
+            reason = f"GNSS settling - resuming in {remaining:.0f}s"
+        runner.hold(reason)
+        _gnss_hold_event["held_path_run"] = True
+        return
+    runner.step(position["lat"], position["lon"], position["heading_deg"], position["horizontal_accuracy_m"])
+
+
 def _control_tick():
     """One control-loop iteration, factored out of _control_loop so it
     can be called directly in tests without the thread/sleep."""
     global _control_loop_last_state, _terminal_state_entered_at
     position = _current_position()
+    if position is not None:
+        _track_gnss_hold(position, time.monotonic())
     if position is None:
         # oxts-nav's feed has gone stale (xNAV disconnected/rebooting) -
         # a run in progress used to just silently stop being stepped,
@@ -381,7 +466,10 @@ def _control_tick():
         turn_runner.step(position["heading_deg"])
         state = turn_runner.status()["state"]
     else:
-        runner.step(position["lat"], position["lon"], position["heading_deg"], position["horizontal_accuracy_m"])
+        # Turns aren't held (above): they steer on heading, which the
+        # dual-antenna attitude keeps good through these events - only the
+        # position steps.
+        _step_path_run(position, time.monotonic())
         runner.preview(position["lat"], position["lon"], position["heading_deg"])
         state = runner.status()["state"]
     # A path/turn can end by finishing or aborting entirely inside

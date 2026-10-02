@@ -107,6 +107,10 @@ class NavigateAppTestCase(unittest.TestCase):
         app._active_kind = "path"
         app._aruco_priority_active_for_run = False
         app._control_loop_last_state = "idle"
+        # Module-level, like runner - a test that leaves it mid-event
+        # would otherwise hold (or abort) every later test's run.
+        app.gnss_hold = app.GnssHold(12, 30.0)
+        app._gnss_hold_event = {}
         app.nav_client = FakeNavClient()
         self.client = app.app.test_client()
 
@@ -665,6 +669,118 @@ class NavigateAppTestCase(unittest.TestCase):
         for path in ["/", "/pages/create-path", "/pages/paths", "/pages/config", "/pages/edit-path"]:
             resp = self.client.get(path)
             self.assertEqual(resp.status_code, 200, path)
+
+
+class GnssHoldTestCase(unittest.TestCase):
+    """The GNSS-rejection hold, end to end through _control_tick() - see
+    gnss_hold.py for the state machine itself. Borrows
+    NavigateAppTestCase's setup without inheriting (and re-running) its
+    tests."""
+
+    _set_position = NavigateAppTestCase._set_position
+
+    def setUp(self):
+        NavigateAppTestCase.setUp(self)
+        self.clock = 1000.0
+        self.runner_clock = [0.0]
+        app.runner = PathRunner(app.CONTROL_CONFIG, self.recorder.send_velocity, self.recorder.send_pump,
+                                now=lambda: self.runner_clock[0])
+        paths_module.save_path(app.PATHS_DIR, "loop", SAMPLE_POINTS)
+        self.client.post("/control/load/loop")
+
+    def _tick(self, reject, dt=0.1, lat=52.2, lon=-1.5, heading=0):
+        self.clock += dt
+        self.runner_clock[0] += dt
+        self._set_position(lat, lon, heading)
+        app.nav_client.payload["status"]["GnssPosReject"] = reject
+        with patch.object(app.time, "monotonic", return_value=self.clock):
+            app._control_tick()
+
+    def _events(self):
+        path = app.PATHS_DIR / app.GNSS_HOLD_LOG_NAME
+        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+    def _start_run(self):
+        self._set_position(52.2, -1.5, 0)
+        self.assertTrue(self.client.post("/control/start").get_json()["ok"])
+        self._tick(0)
+        self.assertEqual(app.runner.status()["state"], "running")
+
+    def test_rejecting_holds_a_path_run_stopped_but_still_running(self):
+        self._start_run()
+        self.assertNotEqual(self.recorder.velocity_calls[-1], (0.0, 0.0))
+        self._tick(12)
+        status = app.runner.status()
+        self.assertEqual(status["state"], "running")  # jobs just waits
+        self.assertIn("rejecting GNSS", status["gnss_hold"])
+        self.assertEqual(self.recorder.velocity_calls[-1], (0.0, 0.0))
+        self.assertEqual(self.recorder.pump_calls[-1], False)
+        [start] = self._events()
+        self.assertEqual(start["event"], "start")
+        self.assertEqual(start["running"], "path")
+        self.assertEqual(start["path_name"], "loop")
+
+    def test_resumes_settle_s_after_the_reject_count_resets(self):
+        self._start_run()
+        self._tick(12)
+        self._tick(20, dt=5.0)
+        self._tick(0)            # reset - the settle timer starts here
+        self._tick(0, dt=29.0)
+        self.assertIn("settling", app.runner.status()["gnss_hold"])
+        self.assertEqual(self.recorder.velocity_calls[-1], (0.0, 0.0))
+        self._tick(0, dt=1.5)
+        status = app.runner.status()
+        self.assertEqual(status["state"], "running")
+        self.assertIsNone(status["gnss_hold"])
+        self.assertNotEqual(self.recorder.velocity_calls[-1], (0.0, 0.0))
+        start, end = self._events()
+        self.assertEqual(end["event"], "end")
+        self.assertTrue(end["held_path_run"])
+        self.assertEqual(end["peak_reject"], 20)
+        self.assertGreater(end["duration_s"], 30)
+
+    def test_a_hold_longer_than_the_stall_window_is_not_taken_for_being_stuck(self):
+        self._start_run()
+        self._tick(12)
+        for _ in range(6):
+            self._tick(12, dt=app.CONTROL_CONFIG["stall_check_window_s"])
+        self._tick(0)
+        self._tick(0, dt=31.0)
+        self._tick(0)
+        self.assertEqual(app.runner.status()["state"], "running")
+
+    def test_a_hold_that_never_settles_aborts_after_gnss_hold_max_s(self):
+        self._start_run()
+        self._tick(12)
+        self._tick(15, dt=app.GNSS_HOLD_MAX_S + 1)
+        status = app.runner.status()
+        self.assertEqual(status["state"], "aborted")
+        self.assertIn("not settled", status["abort_reason"])
+        self.assertEqual([e["event"] for e in self._events()], ["start", "gave_up"])
+
+    def test_turns_are_not_held_but_the_event_is_logged(self):
+        self._set_position(52.2, -1.5, 0)
+        self.client.post("/control/turn", json={"heading_deg": 90})
+        self._tick(0)
+        self._tick(12)
+        self.assertEqual(app.turn_runner.status()["state"], "running")
+        self.assertNotEqual(self.recorder.velocity_calls[-1], (0.0, 0.0))
+        [start] = self._events()
+        self.assertEqual(start["running"], "turn")
+
+    def test_an_event_while_idle_is_logged_too(self):
+        self._tick(13)
+        self._tick(0)
+        self._tick(0, dt=31.0)
+        start, end = self._events()
+        self.assertIsNone(start["running"])
+        self.assertFalse(end["held_path_run"])
+
+    def test_gnss_pos_reject_is_in_the_debug_log(self):
+        self._start_run()
+        self._tick(3)
+        last = json.loads(app._debug_log_path.read_text().splitlines()[-1])
+        self.assertEqual(last["gnss_pos_reject"], 3)
 
 
 if __name__ == "__main__":
