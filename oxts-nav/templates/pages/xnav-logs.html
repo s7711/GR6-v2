@@ -1,0 +1,59 @@
+{# title: xNAV Logs #}
+{% extends "base.html" %}
+{% block title %}GR6 — xNAV Logs{% endblock %}
+{% block content %}
+<p class="text-body-secondary small">
+  The xNAV's own raw logs, newest first; a new one starts at every power-on or reset. Each is
+  named by its start time, in UTC: the xNAV has no clock battery, so each log is
+  <code>mobile.rd</code> (not listed) until GNSS time arrives, about a minute after the reset. Downloads stream straight from the xNAV, so a reset part-way
+  through cuts the download short, and the newest file is still being written.
+</p>
+<button id="rd-refresh" type="button" class="btn btn-sm btn-outline-secondary mb-2">Refresh list</button>
+<div id="rd-status" class="small text-body-secondary mb-2"></div>
+<ul id="rd-list" class="list-group"></ul>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function rdStartTime(name) {
+  // YYMMDD_HHMMSS.rd -> "20YY-MM-DD HH:MM:SS UTC" (the xNAV names them in UTC)
+  const d = name.slice(0, 6), t = name.slice(7, 13);
+  return `20${d.slice(0, 2)}-${d.slice(2, 4)}-${d.slice(4, 6)} ${t.slice(0, 2)}:${t.slice(2, 4)}:${t.slice(4, 6)} UTC`;
+}
+
+async function loadRdList() {
+  const status = document.getElementById("rd-status");
+  const list = document.getElementById("rd-list");
+  status.textContent = "Listing files on the xNAV...";
+  list.replaceChildren();
+  let body;
+  try {
+    const resp = await fetch("/xnav-rd/list");
+    body = await resp.json();
+  } catch (e) {
+    body = { ok: false, reason: String(e) };
+  }
+  if (!body.ok) {
+    status.textContent = "Couldn't list the xNAV's files: " + body.reason;
+    return;
+  }
+  status.textContent = body.files.length + " files";
+  for (const f of body.files) {
+    const li = document.createElement("li");
+    li.className = "list-group-item d-flex justify-content-between align-items-center";
+    const a = document.createElement("a");
+    a.href = "/xnav-rd/" + f.name;
+    a.download = f.name;
+    a.textContent = f.name;
+    const info = document.createElement("span");
+    info.className = "text-body-secondary small";
+    info.textContent = `${rdStartTime(f.name)} · ${(f.size / 1e6).toFixed(1)} MB`;
+    li.append(a, info);
+    list.append(li);
+  }
+}
+
+document.getElementById("rd-refresh").addEventListener("click", loadRdList);
+loadRdList();
+</script>
+{% endblock %}

@@ -22,7 +22,7 @@ import threading
 import time
 from pathlib import Path
 
-from flask import Flask, abort, jsonify, request, send_from_directory
+from flask import Flask, Response, abort, jsonify, request, send_from_directory
 from flask_sock import Sock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -34,6 +34,7 @@ import ucomrx_thread  # noqa: E402
 import nav_feed  # noqa: E402
 import gnss_mode  # noqa: E402
 import data_log  # noqa: E402
+import xnav_ftp  # noqa: E402
 
 XNAV_COMMAND_PORT = 3001
 # mobile.rd is the xNAV's raw data recording, not a config file — it's
@@ -108,14 +109,14 @@ def download_xnav_config() -> None:
         with ftplib.FTP(xnav_ip, timeout=10) as ftp:
             ftp.login()
             try:
-                names = ftp.nlst()
+                names = list(xnav_ftp.list_files(ftp))
             except ftplib.all_errors as e:
                 logging.info("Cannot list xNAV650 FTP directory: %s", e)
                 return
             filenames = sorted(
                 n for n in names if n.startswith("mobile.") and n not in XNAV_CONFIG_EXCLUDE
             )
-            others = sorted(n for n in names if not n.startswith("mobile."))
+            others = sorted(n for n in names if not n.startswith("mobile.") and not xnav_ftp.RD_NAME.match(n))
             if others:
                 # e.g. a stray .ptp file — seen but not managed here.
                 logging.info("xNAV650 FTP also has non-config files, left alone: %s", others)
@@ -192,6 +193,57 @@ def xnav_config_file(filename):
     if not ok:
         return jsonify(ok=False, reason=reason), 502
     return jsonify(ok=True)
+
+
+@app.route("/xnav-rd/list")
+def xnav_rd_list():
+    """The xNAV's raw log (.rd) files, newest first - for the xNAV Config
+    page's download list (e.g. to send OxTS). Names are the xNAV's own
+    start time, YYMMDD_HHMMSS, so name order is time order."""
+    try:
+        with ftplib.FTP(xnav_ip, timeout=10) as ftp:
+            ftp.login()
+            files = xnav_ftp.list_files(ftp)
+    except (OSError, ftplib.all_errors) as e:
+        return jsonify(ok=False, reason=str(e)), 502
+    rd = sorted(((n, size) for n, size in files.items() if xnav_ftp.RD_NAME.match(n)), reverse=True)
+    return jsonify(ok=True, files=[{"name": n, "size": size} for n, size in rd])
+
+
+@app.route("/xnav-rd/<name>")
+def xnav_rd_download(name):
+    """Streams one .rd file from the xNAV's FTP straight to the browser
+    (some are over 1GB, so nothing is staged on the Pi's SD card)."""
+    if not xnav_ftp.RD_NAME.match(name):
+        abort(404)
+    try:
+        ftp = ftplib.FTP(xnav_ip, timeout=30)
+        ftp.login()
+        ftp.voidcmd("TYPE I")
+        size = ftp.size(name)
+        conn = ftp.transfercmd(f"RETR {name}")
+    except (OSError, ftplib.all_errors):
+        abort(404)
+
+    def stream():
+        try:
+            while True:
+                chunk = conn.recv(256 * 1024)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            conn.close()
+            try:
+                ftp.voidresp()
+                ftp.quit()
+            except (OSError, ftplib.all_errors):
+                ftp.close()
+
+    headers = {"Content-Disposition": f'attachment; filename="{name}"'}
+    if size is not None:
+        headers["Content-Length"] = str(size)
+    return Response(stream(), mimetype="application/octet-stream", headers=headers)
 
 
 @app.route("/xnav-config/reset", methods=["POST"])

@@ -1,0 +1,36 @@
+"""Listing the xNAV650's FTP root.
+
+The xNAV's FTP server answers NLST with full `ls -l`-style lines (plus a
+couple of MLSD-style "Type=cdir;..." entries for `/` and `..`), not bare
+names - so `name.startswith("mobile.")` on NLST output matches nothing.
+LIST (`ftp.dir`) gives the same `ls -l` lines without the MLSD noise;
+parse the name and size from those. Every file's date is "Oct 9 1999"
+(no real clock behind it), so dates aren't parsed. Found 2026-10-08.
+"""
+
+import re
+
+# -rw-r--r-- 1 owner group 530167296 Oct 9 1999 260928_235913.rd
+_LS_LINE = re.compile(r"^-\S*\s+\d+\s+\S+\s+\S+\s+(\d+)\s+\S+\s+\d+\s+\S+\s+(\S+)$")
+
+# Raw log files: named by their start time, YYMMDD_HHMMSS.rd (UTC). The
+# xNAV has no clock battery, so each log is "mobile.rd" until GNSS time
+# arrives (~1 min after power-on/reset), then renamed - hence the gap
+# between a reset and the next file's name.
+RD_NAME = re.compile(r"^\d{6}_\d{6}\.rd$")
+
+
+def parse_listing(lines):
+    """Regular files from LIST output, as {name: size_bytes}."""
+    files = {}
+    for line in lines:
+        m = _LS_LINE.match(line.strip())
+        if m:
+            files[m.group(2)] = int(m.group(1))
+    return files
+
+
+def list_files(ftp):
+    lines = []
+    ftp.dir(lines.append)
+    return parse_listing(lines)
