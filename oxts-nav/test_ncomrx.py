@@ -7,6 +7,7 @@ unchanged from GR6-v1's original and has no other test coverage yet.
 import struct
 import unittest
 
+import ncomrx
 from ncomrx import ANG2RAD, RAD2DEG, NcomRx
 
 SYNC = 0xE7
@@ -68,6 +69,20 @@ class TestStructureBHandling(unittest.TestCase):
         self.assertEqual(decoder.nav["InsNavMode"], 2)
         self.assertNotIn("Lat", decoder.nav)
         self.assertNotIn("Heading", decoder.nav)
+
+
+
+class TestInnovations(unittest.TestCase):
+    def test_invalid_innovation_clears_filtered_value(self):
+        decoder = NcomRx()
+        decoder._updateInnovation("InnPosX", bytes([(30 << 1) | 1]))  # valid, 30 * INNFACTOR
+        self.assertIn("InnPosXFilt", decoder.status)
+        decoder._updateInnovation("InnPosX", bytes([0]))  # one invalid sample: kept
+        self.assertNotIn("InnPosX", decoder.status)
+        self.assertIn("InnPosXFilt", decoder.status)
+        decoder._innValidAt["InnPosX"] -= ncomrx.INN_STALE_S + 1  # no valid one for a while
+        decoder._updateInnovation("InnPosX", bytes([0]))
+        self.assertNotIn("InnPosXFilt", decoder.status)
 
 
 if __name__ == "__main__":

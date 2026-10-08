@@ -63,6 +63,7 @@ Reference information:
 
 import struct
 import math
+import time
 import re
 import datetime
 
@@ -73,6 +74,7 @@ DEG2RAD = math.pi / 180.0
 
 UCOM_SYNC = b'UM'          # 0x55 0x4D - the first two bytes of every UCOM packet
 UCOM_HEADER_LENGTH = 16    # bytes, before the payload
+INN_STALE_S = 2.0          # no valid innovation for this long: drop its filtered value (as ncomrx.py)
 UCOM_CRC_LENGTH = 4        # bytes, after the payload
 
 # Same epoch ncomrx.py uses - GNSS/GPS time has no leap seconds, unlike UTC
@@ -149,6 +151,7 @@ class UcomRx:
         # todo: protect nav, status with a lock when multi-threaded
         self.nav = {}  # Dictionary for navigation measurements
         self.status = {} # Dictionary for status/configuration
+        self._innValidAt = {} # innovation key -> time.monotonic() of its last valid value
         self.connection = {} # Dictionary for decoding status variables
         self.ucomBytes = b'' # Holds bytes waiting to be decoded
 
@@ -335,7 +338,12 @@ class UcomRx:
         # packed single-byte ones), so there's no unpacking to do here,
         # just the same filtering NCOM applies client-side after decoding.
         if math.isnan(rawValue):
+            # No such update - after INN_STALE_S without a valid one,
+            # drop the filtered value (same rule as ncomrx.py)
+            if time.monotonic() - self._innValidAt.get(key, 0.0) > INN_STALE_S:
+                self.status.pop(key + 'Filt', None)
             return
+        self._innValidAt[key] = time.monotonic()
         inn = abs(rawValue)
         key = key + 'Filt'
         if key not in self.status:

@@ -22,6 +22,7 @@ Decodes measurements into dictionaries
 import struct
 import datetime
 import math
+import time
 import numpy as np
 
 ########################################################################
@@ -39,6 +40,7 @@ RATE2RPS            = 1e-5                # Units of 0.01 mrad/s
 VEL2MPS             = 1e-4                # Units of 0.1 mm/s
 ANG2RAD             = 1e-6                # Units of 0.001 mrad
 INNFACTOR           = 0.1                 # Resolution of 0.1
+INN_STALE_S         = 2.0                 # No valid innovation for this long: drop its filtered value
 POSA2M              = 1e-3                # Units of 1 mm
 VELA2MPS            = 1e-3                # Units of 1 mm/s
 ANGA2RAD            = 1e-5                # Units of 0.01 mrad
@@ -145,6 +147,7 @@ class NcomRx:
         # todo: protect nav, status with a lock when multi-threaded
         self.nav = {}  # Dictionary for navigation measurements
         self.status = {} # Dictionary for status/configuration
+        self._innValidAt = {} # innovation key -> time.monotonic() of its last valid value
         self.connection = {} # Dictionary for decoding status variables
         self.ncomBytes = b'' # Holds bytes waiting to be decoded
         
@@ -431,9 +434,18 @@ class NcomRx:
         # b is the bytes array from statusBytes
         inn = (int.from_bytes(b, byteorder = 'little', signed=True)>>1) * INNFACTOR
         if b[0]&0x1 == 0x0:
-            if k in self.status:
-                del self.status[k]
+            # Invalid: the xNAV made no such update this time. Single
+            # invalid samples happen between good updates, so keep the
+            # filtered value through those; but once there's been no
+            # valid one for INN_STALE_S (not initialised, GNSS not being
+            # used), drop it - left in place it froze at its last value
+            # and the EMI monitor kept drawing innovations the xNAV
+            # wasn't producing (found 2026-10-08, after a reset).
+            self.status.pop(k, None)
+            if time.monotonic() - self._innValidAt.get(k, 0.0) > INN_STALE_S:
+                self.status.pop(k + 'Filt', None)
         else:
+            self._innValidAt[k] = time.monotonic()
             self.status[k] = inn # add/update this innovation
             
             inn = abs(inn)       # abs() for filtering
