@@ -210,6 +210,29 @@ def xnav_rd_list():
     return jsonify(ok=True, files=[{"name": n, "size": size} for n, size in rd])
 
 
+_rd_firmware_cache = {}  # .rd name -> versions; a named file's start never changes
+
+
+@app.route("/xnav-rd/<name>/firmware")
+def xnav_rd_firmware(name):
+    """u-blox firmware version(s) recorded in a raw log - for checking an
+    update (or a downgrade) actually took. Reads just the start of the file."""
+    if not xnav_ftp.RD_NAME.match(name):
+        abort(404)
+    if name not in _rd_firmware_cache:
+        try:
+            ftp = ftplib.FTP(xnav_ip, timeout=10)
+            try:
+                ftp.login()
+                head = xnav_ftp.read_head(ftp, name)
+            finally:
+                ftp.close()
+        except (OSError, ftplib.all_errors) as e:
+            return jsonify(ok=False, reason=str(e)), 502
+        _rd_firmware_cache[name] = xnav_ftp.firmware_versions(head)
+    return jsonify(ok=True, firmware=_rd_firmware_cache[name])
+
+
 @app.route("/xnav-rd/<name>")
 def xnav_rd_download(name):
     """Streams one .rd file from the xNAV's FTP straight to the browser

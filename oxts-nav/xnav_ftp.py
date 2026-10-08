@@ -34,3 +34,35 @@ def list_files(ftp):
     lines = []
     ftp.dir(lines.append)
     return parse_listing(lines)
+
+
+# The u-blox receivers report their firmware (UBX MON-VER) when the xNAV
+# starts them, so it's in the first few kB of every .rd file (seen at
+# ~5kB). Reading this much is plenty and avoids pulling whole files.
+RD_HEAD_BYTES = 64 * 1024
+_FWVER = re.compile(rb"FWVER=([A-Z]+ [0-9]+\.[0-9]+)")
+
+
+def firmware_versions(data):
+    """Distinct u-blox firmware versions mentioned in raw log bytes, e.g.
+    ["HPG 1.13"]. One per receiver type, not per receiver: both
+    receivers on the same firmware give a single entry."""
+    return sorted({m.group(1).decode() for m in _FWVER.finditer(data)})
+
+
+def read_head(ftp, name, nbytes=RD_HEAD_BYTES):
+    """The first nbytes of a file (less if it's shorter). Abandons the
+    transfer part-way, so the caller should discard this ftp session."""
+    ftp.voidcmd("TYPE I")
+    conn = ftp.transfercmd(f"RETR {name}")
+    data = bytearray()
+    try:
+        while len(data) < nbytes:
+            chunk = conn.recv(nbytes - len(data))
+            if not chunk:
+                break
+            data.extend(chunk)
+    finally:
+        conn.close()
+    return bytes(data)
+

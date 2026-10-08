@@ -332,6 +332,29 @@ reset, never live — see "xNAV650 commands" above).
   modal warning that anything currently driving will lose its position
   feed, since a reset takes the xNAV offline for a while to reboot.
 
+## xNAV raw logs page (added 2026-10-08)
+
+An **xNAV Logs** page lists the xNAV's own raw logs (`YYMMDD_HHMMSS.rd`,
+UTC start time, newest first) and downloads one to the browser — for
+sending files to OxTS without FTPing in by hand.
+
+- `GET /xnav-rd/list`; `GET /xnav-rd/<name>` streams the file from the
+  xNAV's FTP straight through (some are over 1GB; nothing is staged on
+  the SD card). `mobile.rd` — the log being written before GNSS time
+  arrives (the xNAV has no clock battery) — isn't listed.
+- `GET /xnav-rd/<name>/firmware`: the u-blox firmware (`FWVER=HPG x.yy`
+  from UBX MON-VER) found in the first 64kB of the file, shown as a badge
+  per file and cached. The way to confirm a u-blox firmware update took —
+  the `ublox_zed_f9p_*.cfg` files OxTS supply are receiver setup files,
+  not a readback.
+- The xNAV's FTP answers NLST with `ls -l` lines, not bare names (which
+  silently broke the config mirror's `mobile.*` filter); listing now
+  parses LIST output (`xnav_ftp.py`), shared by both features.
+- u-blox firmware updates: FTP `ublox_zed_f9p.bin` plus OxTS's
+  `ublox_zed_f9p_pri.cfg`/`_sec.cfg` to the xNAV root and reset; the
+  flash takes ~2 minutes, both receivers are updated, and the xNAV
+  deletes the files afterwards.
+
 ## Aruco-priority GNSS mode (added 2026-08-14)
 
 `navigate` can ask this service (via `POST /gnss/aruco-priority` /

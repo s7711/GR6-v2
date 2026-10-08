@@ -6,7 +6,8 @@
   The xNAV's own raw logs, newest first; a new one starts at every power-on or reset. Each is
   named by its start time, in UTC: the xNAV has no clock battery, so each log is
   <code>mobile.rd</code> (not listed) until GNSS time arrives, about a minute after the reset. Downloads stream straight from the xNAV, so a reset part-way
-  through cuts the download short, and the newest file is still being written.
+  through cuts the download short, and the newest file is still being written. The badge is
+  the u-blox firmware recorded at the start of each file.
 </p>
 <button id="rd-refresh" type="button" class="btn btn-sm btn-outline-secondary mb-2">Refresh list</button>
 <div id="rd-status" class="small text-body-secondary mb-2"></div>
@@ -38,6 +39,7 @@ async function loadRdList() {
     return;
   }
   status.textContent = body.files.length + " files";
+  const pending = [];
   for (const f of body.files) {
     const li = document.createElement("li");
     li.className = "list-group-item d-flex justify-content-between align-items-center";
@@ -48,8 +50,23 @@ async function loadRdList() {
     const info = document.createElement("span");
     info.className = "text-body-secondary small";
     info.textContent = `${rdStartTime(f.name)} · ${(f.size / 1e6).toFixed(1)} MB`;
+    const fw = document.createElement("span");
+    fw.className = "badge text-bg-light ms-2";
+    fw.textContent = "…";
+    info.append(fw);
     li.append(a, info);
     list.append(li);
+    pending.push([f.name, fw]);
+  }
+  // u-blox firmware per file, one request at a time (each reads the
+  // start of a file over the xNAV's FTP).
+  for (const [name, fw] of pending) {
+    try {
+      const r = await (await fetch("/xnav-rd/" + name + "/firmware")).json();
+      fw.textContent = r.ok ? (r.firmware.join(", ") || "no version") : "?";
+    } catch (e) {
+      fw.textContent = "?";
+    }
   }
 }
 

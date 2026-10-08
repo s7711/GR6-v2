@@ -1,6 +1,6 @@
 import unittest
 
-from xnav_ftp import RD_NAME, parse_listing
+from xnav_ftp import RD_NAME, firmware_versions, parse_listing
 
 LISTING = [
     "Type=cdir;Modify=20091102000012;Perm=celmp;Unique=QgmbSvAh5T/Y/U4FbCVo18Lj/6g=; /",
@@ -22,6 +22,16 @@ class TestParseListing(unittest.TestCase):
         self.assertTrue(RD_NAME.match("260928_235913.rd"))
         self.assertFalse(RD_NAME.match("mobile.rd"))
         self.assertFalse(RD_NAME.match("../260928_235913.rd"))
+
+
+class TestFirmwareVersions(unittest.TestCase):
+    def test_finds_each_version_once(self):
+        data = b"\x00junk FWVER=HPG 1.13\x00\x00PROTVER=27.12 more FWVER=HPG 1.13\x00"
+        self.assertEqual(firmware_versions(data), ["HPG 1.13"])
+
+    def test_mixed_and_none(self):
+        self.assertEqual(firmware_versions(b"FWVER=HPG 1.50 x FWVER=HPG 1.13"), ["HPG 1.13", "HPG 1.50"])
+        self.assertEqual(firmware_versions(b"no version here"), [])
 
 
 if __name__ == "__main__":
