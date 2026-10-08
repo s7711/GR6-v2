@@ -386,6 +386,19 @@ it neither uses nor rejects GNSS (raw innovations steady, e.g. −4.5σ, with
 `GnssPosReject` 0; possibly GNSS velocity holding it), with the RD
 files. `mobile.cfg` may be put back to a standard version.
 
+**u-blox firmware ruled out (2026-10-08 afternoon).** The 22 July
+xNAV update had moved the receivers from HPG 1.13 to HPG 1.50 (OxTS's
+setup `.cfg` files for both versions have the same key settings). Flashed
+back to HPG 1.13 (confirmed in the RD files) and repeated both tests:
+
+| Test | HPG 1.50 | HPG 1.13 |
+|---|---|---|
+| Static dual-antenna resets near the Navimow base (settled / no Integer in 60 s / fights) | am: 4 / 3 / 1 of 7 | pm: 4 / 5 / 4 of 10, plus 1 never accepted |
+| Boresight loop, holds per loop | Wed eve 0.67; Thu am 0 | Thu pm 0.33 (4 in 12, all on the point 2 → 3 leg, both directions) |
+
+1.13 fixed more slowly (fewer usable signals) and fought more; wrong fixes
+on both. Back on HPG 1.50 (flashed 13:53, `261008_125513.rd` confirms).
+
 Tools added 2026-10-08: `oxts-nav/tools/reset_cycle.py` (the reset
 test); the oxts-nav **xNAV Logs** page (lists the xNAV's `.rd` files,
 newest first, and streams one to the browser).
