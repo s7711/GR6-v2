@@ -35,12 +35,11 @@ import nav_feed  # noqa: E402
 import gnss_mode  # noqa: E402
 import data_log  # noqa: E402
 import xnav_ftp  # noqa: E402
+import xnav_config_history  # noqa: E402
 
 XNAV_COMMAND_PORT = 3001
-# mobile.rd is the xNAV's raw data recording, not a config file — it's
-# renamed to a timestamped .rd file once time is available, so it should
-# never be synced/edited here even though it matches "mobile.*".
-XNAV_CONFIG_EXCLUDE = {"mobile.rd"}
+# Which files count as config: xnav_ftp.is_config_file. The mirror adds
+# ".txt" to each (for the browser), except comment.txt - already .txt.
 XNAV_CONFIG_DIR = Path(__file__).resolve().parent / "xnav-config"
 PAGES_DIR = Path(__file__).resolve().parent / "templates" / "pages"
 
@@ -71,6 +70,7 @@ nav_feed_server = nav_feed.NavFeedServer(
 )
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
+XNAV_HISTORY_DIR = DATA_DIR / "xnav-config-history"
 data_logger = data_log.DataLogger(
     nrxs=nrxs,
     xnav_ip=xnav_ip,
@@ -103,40 +103,55 @@ gnss_controller = gnss_mode.GnssModeController(
 )
 
 
-def download_xnav_config() -> None:
+def _mirror_name(xnav_name: str) -> str:
+    return xnav_name if xnav_name in xnav_ftp.CONFIG_EXTRA else f"{xnav_name}.txt"
+
+
+def _xnav_name(mirror_name: str) -> str:
+    return mirror_name if mirror_name in xnav_ftp.CONFIG_EXTRA else mirror_name[: -len(".txt")]
+
+
+def write_xnav_config_mirror(files: dict) -> None:
+    """Make the xnav-config/ mirror match {xnav_name: bytes} - including
+    removing local copies of files no longer on the xNAV."""
     XNAV_CONFIG_DIR.mkdir(exist_ok=True)
+    keep = {_mirror_name(n) for n in files}
+    for p in XNAV_CONFIG_DIR.glob("*.txt"):
+        if p.name not in keep:
+            p.unlink()
+    for name, data in files.items():
+        (XNAV_CONFIG_DIR / _mirror_name(name)).write_bytes(data)
+
+
+def fetch_xnav_config() -> dict:
+    """The xNAV's config files now, {xnav_name: bytes}. Raises OSError /
+    ftplib errors if it can't be reached."""
+    with ftplib.FTP(xnav_ip, timeout=10) as ftp:
+        ftp.login()
+        return xnav_ftp.fetch_config(ftp)
+
+
+def download_xnav_config() -> None:
     try:
         with ftplib.FTP(xnav_ip, timeout=10) as ftp:
             ftp.login()
-            try:
-                names = list(xnav_ftp.list_files(ftp))
-            except ftplib.all_errors as e:
-                logging.info("Cannot list xNAV650 FTP directory: %s", e)
-                return
-            filenames = sorted(
-                n for n in names if n.startswith("mobile.") and n not in XNAV_CONFIG_EXCLUDE
-            )
-            others = sorted(n for n in names if not n.startswith("mobile.") and not xnav_ftp.RD_NAME.match(n))
+            names = xnav_ftp.list_files(ftp)
+            others = sorted(n for n in names if not xnav_ftp.is_config_file(n) and not xnav_ftp.RD_NAME.match(n))
             if others:
-                # e.g. a stray .ptp file — seen but not managed here.
+                # e.g. ptpd.conf, oxts.dbs — seen but not managed here.
                 logging.info("xNAV650 FTP also has non-config files, left alone: %s", others)
-            for filename in filenames:
-                dest = XNAV_CONFIG_DIR / f"{filename}.txt"
-                try:
-                    with open(dest, "wb") as f:
-                        ftp.retrbinary(f"RETR {filename}", f.write)
-                except ftplib.all_errors as e:
-                    logging.info("Cannot download %s: %s", filename, e)
-    except OSError as e:
-        logging.info("Cannot connect to xNAV650 FTP: %s", e)
+            files = xnav_ftp.fetch_config(ftp)
+    except (OSError, ftplib.all_errors) as e:
+        logging.info("Cannot download xNAV650 config: %s", e)
+        return
+    write_xnav_config_mirror(files)
 
 
 def upload_xnav_config_file(filename: str, content: bytes) -> tuple[bool, str | None]:
-    ftp_name = filename[: -len(".txt")]
     try:
         with ftplib.FTP(xnav_ip, timeout=10) as ftp:
             ftp.login()
-            ftp.storbinary(f"STOR {ftp_name}", io.BytesIO(content))
+            ftp.storbinary(f"STOR {_xnav_name(filename)}", io.BytesIO(content))
     except ftplib.all_errors as e:
         return False, str(e)
     (XNAV_CONFIG_DIR / filename).write_bytes(content)
@@ -178,6 +193,7 @@ register_pages(
         "home": lambda: {"nav_update_hz": nav_update_hz},
         "emi-monitor": lambda: {"nav_update_hz": nav_update_hz},  # temporary interference-testing page, 2026-10-02
         "xnav-config": xnav_config_context,
+        "xnav-config-history": lambda: {"snapshots": xnav_config_history.list_snapshots(XNAV_HISTORY_DIR)},
     },
 )
 
@@ -193,6 +209,92 @@ def xnav_config_file(filename):
     if not ok:
         return jsonify(ok=False, reason=reason), 502
     return jsonify(ok=True)
+
+
+@app.route("/xnav-config-history/save", methods=["POST"])
+def xnav_config_history_save():
+    """Snapshot the xNAV's config as it is now - fetched fresh, not from
+    the mirror, which misses anything NAVconfig changed since startup.
+    Refreshes the mirror from the same fetch."""
+    name = (request.get_json(silent=True) or {}).get("name", "")
+    try:
+        files = fetch_xnav_config()
+    except (OSError, ftplib.all_errors) as e:
+        return jsonify(ok=False, reason=f"Can't read the xNAV's config: {e}"), 502
+    try:
+        saved = xnav_config_history.save_snapshot(XNAV_HISTORY_DIR, name, files)
+    except (xnav_config_history.InvalidName, FileExistsError) as e:
+        return jsonify(ok=False, reason=str(e)), 400
+    write_xnav_config_mirror(files)
+    return jsonify(ok=True, name=saved)
+
+
+@app.route("/xnav-config-history/<name>", methods=["DELETE"])
+def xnav_config_history_delete(name):
+    try:
+        xnav_config_history.delete_snapshot(XNAV_HISTORY_DIR, name)
+    except (xnav_config_history.InvalidName, FileNotFoundError):
+        abort(404)
+    return jsonify(ok=True)
+
+
+@app.route("/xnav-config-history/<name>/compare")
+def xnav_config_history_compare(name):
+    """The snapshot against the xNAV now, plus what uploading it would
+    write and delete - for the page's View and Upload confirmation."""
+    try:
+        snapshot = xnav_config_history.load_snapshot(XNAV_HISTORY_DIR, name)
+    except (xnav_config_history.InvalidName, FileNotFoundError):
+        abort(404)
+    try:
+        current = fetch_xnav_config()
+    except (OSError, ftplib.all_errors) as e:
+        return jsonify(ok=False, reason=f"Can't read the xNAV's config: {e}"), 502
+    return jsonify(
+        ok=True,
+        files=xnav_config_history.compare(name, snapshot, current),
+        **xnav_config_history.plan_upload(snapshot, current),
+    )
+
+
+@app.route("/xnav-config-history/<name>/upload", methods=["POST"])
+def xnav_config_history_upload(name):
+    """Write a snapshot to the xNAV. First saves what's there now as
+    "<YYMMDD_HHMMSS> before upload of <name>", so nothing is ever lost.
+    Deletes only the files the operator left ticked, and only ones the
+    plan says are the xNAV's extras. Doesn't reset - the page says to."""
+    try:
+        snapshot = xnav_config_history.load_snapshot(XNAV_HISTORY_DIR, name)
+    except (xnav_config_history.InvalidName, FileNotFoundError):
+        abort(404)
+    requested = set((request.get_json(silent=True) or {}).get("delete", []))
+    try:
+        with ftplib.FTP(xnav_ip, timeout=10) as ftp:
+            ftp.login()
+            current = xnav_ftp.fetch_config(ftp)
+            backup = xnav_config_history.save_snapshot(
+                XNAV_HISTORY_DIR, f"{time.strftime('%y%m%d_%H%M%S')} before upload of {name}", current
+            )
+            plan = xnav_config_history.plan_upload(snapshot, current)
+            for f in plan["upload"]:
+                ftp.storbinary(f"STOR {f}", io.BytesIO(snapshot[f]))
+            for f in plan["delete"]:
+                if f in requested:
+                    ftp.delete(f)
+            files = xnav_ftp.fetch_config(ftp)
+    except (OSError, ftplib.all_errors, xnav_config_history.InvalidName) as e:
+        return jsonify(ok=False, reason=str(e)), 502
+    write_xnav_config_mirror(files)
+    return jsonify(ok=True, backup=backup)
+
+
+@app.route("/xnav-config-history/<name>/<filename>")
+def xnav_config_history_file(name, filename):
+    try:
+        data = xnav_config_history.read_file(XNAV_HISTORY_DIR, name, filename)
+    except (xnav_config_history.InvalidName, FileNotFoundError):
+        abort(404)
+    return Response(data, mimetype="text/plain")
 
 
 @app.route("/xnav-rd/list")

@@ -66,3 +66,24 @@ def read_head(ftp, name, nbytes=RD_HEAD_BYTES):
         conn.close()
     return bytes(data)
 
+
+# The config files: every "mobile.*" except mobile.rd (the raw log being
+# recorded, renamed once GNSS time arrives - see RD_NAME), plus
+# comment.txt, the free-text setup log NAVconfig keeps with them.
+# Anything else (ptpd.conf, oxts.dbs/.dbu, info.txt) is left alone.
+CONFIG_EXCLUDE = {"mobile.rd"}
+CONFIG_EXTRA = {"comment.txt"}
+
+
+def is_config_file(name):
+    return (name.startswith("mobile.") and name not in CONFIG_EXCLUDE) or name in CONFIG_EXTRA
+
+
+def fetch_config(ftp):
+    """Every config file on the xNAV now, as {name: bytes}."""
+    files = {}
+    for name in sorted(n for n in list_files(ftp) if is_config_file(n)):
+        buf = bytearray()
+        ftp.retrbinary(f"RETR {name}", buf.extend)
+        files[name] = bytes(buf)
+    return files

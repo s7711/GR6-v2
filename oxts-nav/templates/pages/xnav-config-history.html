@@ -1,0 +1,176 @@
+{# title: xNAV Config History #}
+{% extends "base.html" %}
+{% block title %}GR6 — xNAV Config History{% endblock %}
+
+{% block content %}
+<p class="text-body-secondary">
+  Saved copies of the xNAV650's config files — save one with "Save this config" on the
+  xNAV Config page (edit comment.txt first to note what's changing). The note shown is the
+  last line of each copy's comment.txt. View compares a copy with what's on the xNAV now.
+</p>
+
+<div class="card">
+  <div class="card-body">
+    <table class="table align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Note</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in snapshots %}
+        <tr data-name="{{ s.name }}">
+          <td class="text-nowrap">{{ s.name }}</td>
+          <td class="small">{{ s.comment }}</td>
+          <td class="text-nowrap">
+            <button class="btn btn-sm btn-outline-secondary" data-action="view">View</button>
+            <button class="btn btn-sm btn-outline-primary" data-action="upload">Upload to xNAV</button>
+            <button class="btn btn-sm btn-outline-danger" data-action="delete">Delete</button>
+          </td>
+        </tr>
+        <tr class="d-none view-row" data-for="{{ s.name }}">
+          <td colspan="3"><div class="view-body small"></div></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="3" class="text-body-secondary">Nothing saved yet — use "Save this config" on the xNAV Config page.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="modal" id="upload-modal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="upload-title">Upload to xNAV</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="upload-body">Loading...</div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button id="upload-confirm" type="button" class="btn btn-primary" disabled>Upload</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const uploadModal = new bootstrap.Modal(document.getElementById("upload-modal"));
+const uploadBody = document.getElementById("upload-body");
+const uploadConfirm = document.getElementById("upload-confirm");
+let uploadingName = null;
+
+const STATUS_TEXT = {
+  same: "same",
+  changed: "changed",
+  snapshot_only: "only in this copy",
+  xnav_only: "only on the xNAV",
+};
+
+function el(tag, attrs = {}, text = "") {
+  const e = document.createElement(tag);
+  Object.assign(e, attrs);
+  if (text) e.textContent = text;
+  return e;
+}
+
+const fileUrl = (name, f) => `/xnav-config-history/${encodeURIComponent(name)}/${encodeURIComponent(f)}`;
+
+async function compare(name) {
+  const resp = await fetch(`/xnav-config-history/${encodeURIComponent(name)}/compare`);
+  return resp.json().catch(() => ({ok: false, reason: "Bad response from server"}));
+}
+
+async function showView(name, body) {
+  body.textContent = "Comparing with the xNAV...";
+  const result = await compare(name);
+  body.textContent = "";
+  if (!result.ok) {
+    body.append(el("div", {className: "text-danger"}, result.reason || "Couldn't compare"));
+    return;
+  }
+  for (const f of result.files) {
+    const line = el("div", {className: "mb-1"});
+    if (f.status === "xnav_only") {
+      line.append(el("span", {}, f.file));
+    } else {
+      line.append(el("a", {href: fileUrl(name, f.file), target: "_blank"}, f.file));
+    }
+    const badge = f.status === "same" ? "text-bg-light" : "text-bg-warning";
+    line.append(" ", el("span", {className: `badge ${badge}`}, STATUS_TEXT[f.status]));
+    body.append(line);
+    if (f.diff) body.append(el("pre", {className: "border rounded p-2 small bg-body-tertiary"}, f.diff));
+  }
+}
+
+async function showUpload(name) {
+  uploadingName = name;
+  document.getElementById("upload-title").textContent = `Upload "${name}" to the xNAV`;
+  uploadBody.textContent = "Comparing with the xNAV...";
+  uploadConfirm.disabled = true;
+  uploadModal.show();
+  const result = await compare(name);
+  uploadBody.textContent = "";
+  if (!result.ok) {
+    uploadBody.append(el("div", {className: "text-danger"}, result.reason || "Couldn't compare"));
+    return;
+  }
+  const changed = result.files.filter((f) => f.status !== "same" && f.status !== "xnav_only").map((f) => f.file);
+  uploadBody.append(
+    el("p", {}, "The xNAV's current config is saved here first, so this can be undone."),
+    el("p", {className: "mb-1"}, `Writes ${result.upload.length} files: ${result.upload.join(", ")}.`),
+    el("p", {}, changed.length ? `Of those, these differ from the xNAV now: ${changed.join(", ")}.` : "None of them differ from the xNAV now."),
+  );
+  if (result.delete.length) {
+    uploadBody.append(el("p", {className: "mb-1"}, "Deletes these from the xNAV, as this copy doesn't have them (untick to keep):"));
+    for (const f of result.delete) {
+      const div = el("div", {className: "form-check"});
+      const box = el("input", {type: "checkbox", className: "form-check-input delete-box", checked: true, id: `del-${f}`});
+      box.dataset.file = f;
+      div.append(box, el("label", {className: "form-check-label", htmlFor: `del-${f}`}, f));
+      uploadBody.append(div);
+    }
+  }
+  uploadBody.append(el("p", {className: "mt-3 mb-0"}, 'The xNAV only reads its config at power-on — hit "Reset xNAV now" on the xNAV Config page afterwards.'));
+  uploadConfirm.disabled = false;
+}
+
+uploadConfirm.addEventListener("click", async () => {
+  uploadConfirm.disabled = true;
+  const del = [...document.querySelectorAll(".delete-box")].filter((b) => b.checked).map((b) => b.dataset.file);
+  const resp = await fetch(`/xnav-config-history/${encodeURIComponent(uploadingName)}/upload`, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({delete: del}),
+  });
+  const result = await resp.json().catch(() => ({ok: false, reason: "Bad response from server"}));
+  if (!result.ok) {
+    uploadBody.append(el("div", {className: "text-danger mt-2"}, result.reason || "Upload failed"));
+    return;
+  }
+  alert(`Uploaded. The previous config was saved as "${result.backup}". Reset the xNAV for it to take effect.`);
+  location.reload();
+});
+
+document.querySelectorAll("button[data-action]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const name = btn.closest("tr").dataset.name;
+    if (btn.dataset.action === "view") {
+      const row = [...document.querySelectorAll(".view-row")].find((r) => r.dataset.for === name);
+      row.classList.toggle("d-none");
+      if (!row.classList.contains("d-none")) showView(name, row.querySelector(".view-body"));
+    } else if (btn.dataset.action === "upload") {
+      showUpload(name);
+    } else if (btn.dataset.action === "delete") {
+      if (!confirm(`Delete saved config "${name}"? This can't be undone.`)) return;
+      fetch(`/xnav-config-history/${encodeURIComponent(name)}`, {method: "DELETE"}).then(() => location.reload());
+    }
+  });
+});
+</script>
+{% endblock %}

@@ -1,6 +1,6 @@
 import unittest
 
-from xnav_ftp import RD_NAME, firmware_versions, parse_listing
+from xnav_ftp import RD_NAME, firmware_versions, is_config_file, parse_listing
 
 LISTING = [
     "Type=cdir;Modify=20091102000012;Perm=celmp;Unique=QgmbSvAh5T/Y/U4FbCVo18Lj/6g=; /",
@@ -32,6 +32,14 @@ class TestFirmwareVersions(unittest.TestCase):
     def test_mixed_and_none(self):
         self.assertEqual(firmware_versions(b"FWVER=HPG 1.50 x FWVER=HPG 1.13"), ["HPG 1.13", "HPG 1.50"])
         self.assertEqual(firmware_versions(b"no version here"), [])
+
+
+class TestIsConfigFile(unittest.TestCase):
+    def test_config_files(self):
+        for name in ["mobile.cfg", "mobile.dbu", "comment.txt"]:
+            self.assertTrue(is_config_file(name), name)
+        for name in ["mobile.rd", "260928_235913.rd", "ptpd.conf", "oxts.dbu", "info.txt"]:
+            self.assertFalse(is_config_file(name), name)
 
 
 if __name__ == "__main__":

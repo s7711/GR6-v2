@@ -144,6 +144,12 @@ than being surprised commands stop working plainly one day.
   OXTS adds later is picked up automatically. Any non-`mobile.*` file
   found (e.g. a stray `.ptp` file) is logged but left alone — not
   understood well enough to manage here.
+  The one exception is `comment.txt`, the free-text setup log the xNAV
+  keeps with its config: it's mirrored and editable too, under its own
+  name (not `comment.txt.txt`) and uploaded back as `comment.txt`.
+  Added 2026-10-08. The rule lives in `xnav_ftp.is_config_file`. Each
+  download makes the mirror match the xNAV, removing local copies of
+  files no longer there.
 - **GAD aiding data:** still deferred — carried over conceptually from
   `xnav.py`/`gad_aruco.py` but not designed here. Revisit once
   path-following or vision needs to send aiding data back to the
@@ -354,6 +360,37 @@ sending files to OxTS without FTPing in by hand.
   `ublox_zed_f9p_pri.cfg`/`_sec.cfg` to the xNAV root and reset; the
   flash takes ~2 minutes, both receivers are updated, and the xNAV
   deletes the files afterwards.
+
+## xNAV config history (added 2026-10-08)
+
+Saved copies of the xNAV's config, so a change can be noted and undone.
+Before this, copies were scattered (NAVconfig folders in `/home/pi`,
+GR6-v1's `xnav-config-backup/`); those were imported on 2026-10-08.
+
+- **Storage:** `data/xnav-config-history/<name>/`, one folder per
+  snapshot, files under their real xNAV names (no `.txt`), so a folder
+  can go straight into NAVconfig. Git-ignored with the rest of `data/`.
+  No index file: a folder copied in by hand is a snapshot too. Logic in
+  `xnav_config_history.py`.
+- **Save** ("Save this config" on the xNAV Config page; name defaults to
+  `YYMMDD_HHMMSS`): fetches the config fresh from the xNAV, not from the
+  mirror, which misses anything NAVconfig changed since startup, and
+  refreshes the mirror from the same fetch. Never overwrites a name.
+- **The note** is the last line of the snapshot's `comment.txt`: edit
+  `comment.txt` first, then save. No separate note field.
+- **xNAV Config History page:** one row per snapshot, newest name first,
+  with View, Upload to xNAV and Delete; no Edit. View expands the row
+  with a file-by-file comparison against the xNAV now (unified diff,
+  "-" the xNAV, "+" the snapshot; long-line files like `mobile.dbu`
+  just say they differ), each file viewable whole.
+- **Upload to xNAV** makes the xNAV match the snapshot: writes every
+  file in it and deletes `mobile.*` files it doesn't have. It always
+  saves the current config first as `<YYMMDD_HHMMSS> before upload of
+  <name>`. The confirmation lists the writes and the deletes, each
+  delete a ticked checkbox: older snapshots predate `mobile.dbu` (the
+  UCOM message config), and deleting it would break UCOM decoding.
+  `comment.txt` is never deleted. No reset: the page says to reset,
+  as for edits.
 
 ## Aruco-priority GNSS mode (added 2026-08-14)
 
