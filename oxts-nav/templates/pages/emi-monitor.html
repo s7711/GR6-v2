@@ -21,8 +21,8 @@
     <div class="fs-5"><span id="status-GnssPosNumSats">—</span></div>
   </div></div></div>
   <div class="col"><div class="card text-center"><div class="card-body py-2">
-    <div class="text-body-secondary small">Differential age</div>
-    <div class="fs-5"><span id="stat-age">—</span> s</div>
+    <div class="text-body-secondary small">Altitude</div>
+    <div class="fs-5"><span id="stat-alt">—</span> m</div>
   </div></div></div>
   <div class="col"><div class="card text-center"><div class="card-body py-2">
     <div class="text-body-secondary small">Rejected positions</div>
@@ -47,8 +47,12 @@
   <div id="graph-inn"></div>
 </div></div>
 <div class="card mb-3"><div class="card-body py-2">
-  <div class="text-body-secondary small mb-1">Consecutive rejected positions, and differential age (s)</div>
+  <div class="text-body-secondary small mb-1">Consecutive rejected positions</div>
   <div id="graph-rej"></div>
+</div></div>
+<div class="card mb-3"><div class="card-body py-2">
+  <div class="text-body-secondary small mb-1">Altitude (m) — the garden is nearly flat, so a wrong RTK fix shows as a step</div>
+  <div id="graph-alt"></div>
 </div></div>
 <div class="card mb-3"><div class="card-body py-2">
   <div class="text-body-secondary small mb-1">Core noise</div>
@@ -108,10 +112,8 @@ const charts = [
     { label: "Y", stroke: "#4c78a8" },
     { label: "Z", stroke: "#54a24b" },
   ], [st("InnPosXFilt"), st("InnPosYFilt"), st("InnPosZFilt")], [0, 7]),
-  liveChart("graph-rej", [
-    { label: "Rejected", stroke: "#e45756" },
-    { label: "Diff age (s)", stroke: "#888888" },
-  ], [st("GnssPosReject"), st("GnssDiffAge")]),
+  liveChart("graph-rej", [{ label: "Rejected", stroke: "#e45756" }], [st("GnssPosReject")]),
+  liveChart("graph-alt", [{ label: "Altitude", stroke: "#54a24b" }], [nav("Alt")]),
   liveChart("graph-noise", [
     { label: "Primary", stroke: "#4c78a8" },
     { label: "Secondary", stroke: "#f58518" },
@@ -127,7 +129,7 @@ connectWs("/ws/nav", (msg) => {
   const status = msg.status || {};
   fillFields("status-", status);
   translateNcomCodes("status-", status);
-  show("stat-age", status.GnssDiffAge, 1);
+  show("stat-alt", (msg.nav || {}).Alt, 2);
   show("stat-reject", status.GnssPosReject);
   show("stat-noise-p", status.GpsPrimaryCoreNoise);
   show("stat-noise-s", status.GpsSecondaryCoreNoise);
