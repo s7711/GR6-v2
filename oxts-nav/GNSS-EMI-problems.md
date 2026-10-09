@@ -1,10 +1,11 @@
 # GNSS EMI problems — working notes
 
 Status: **parked until the chimney base station is installed**, as of
-2026-10-08 (Thu). Current conclusion (see "Summary, 2026-10-08" at the
-end): the 38 km baseline is the main factor, and a poor local GNSS
+2026-10-09 (Fri). Current conclusion (see "Summary, 2026-10-08" near
+the end): the 38 km baseline is the main factor, and a poor local GNSS
 environment (point 2, evenings) is the trigger. Motors, wifi, the
-Navimow radio and direction of travel are ruled out. Temporary file:
+Navimow radio, direction of travel, u-blox firmware and the ultrasonic
+sensors are ruled out. Temporary file:
 delete it, or fold the conclusion into `oxts-nav-prd.md`'s "Interference
 diagnostics", once the base station has settled it. The sections below
 are in date order; the early ones reflect what was believed then.
@@ -77,7 +78,7 @@ activities (afternoon slow loops near, morning driving far).
 | RTK engine | u-blox and the xNAV's internal (Gx) engine | Both fail: one receiver's raw data, two RTK algorithms |
 | Dongle distance | Moved from ~20 cm to ~40 cm from the antennas | Not enough on its own |
 
-Not yet tested: the ultrasonic sensors (hard to remove).
+Ultrasonic sensors: ruled out 2026-10-09 (see the end).
 
 ## Leading hypothesis (2026-10-02; superseded, see the summary at the end)
 
@@ -373,6 +374,8 @@ Dry, Kp 1.0–1.7. Helix antennas, Ben's new `mobile.cfg`, OXTS1.
 | Wifi (power, position, reconnects) | Not the cause (repeated 2026-10-07 with the dongle 20 cm away) |
 | Navimow base radio | Not the cause (same rate on/off; an event 1.6 m from it while off) |
 | Direction of travel | Not the cause |
+| Ultrasonic sensors | Not the cause (2026-10-09: holds at point 2 with them unplugged) |
+| u-blox firmware | Not the cause (HPG 1.13 vs 1.50, below) |
 | Ionosphere | Makes it worse (Monday's storm), but problems at Kp 1 too |
 | G5ANT without ground plane | Made it much worse in rain; helix fixed that |
 | `-stat_speed1` (stationary below 1 m/s) | Probably unhelpful; removed |
@@ -402,3 +405,71 @@ on both. Back on HPG 1.50 (flashed 13:53, `261008_125513.rd` confirms).
 Tools added 2026-10-08: `oxts-nav/tools/reset_cycle.py` (the reset
 test); the oxts-nav **xNAV Logs** page (lists the xNAV's `.rd` files,
 newest first, and streams one to the browser).
+
+## 2026-10-09: ultrasonics ruled out
+
+Ultrasonics unplugged once (no A-B-A; the drive feed read −1 on all
+five), so each test is judged one way: any RTK failure with them off
+clears them. Helix antennas, OXTS1, HPG 1.50.
+
+- **Parked, connected, 16:07–16:22** (after the xNAV settled): Integer
+  throughout, 31 satellites, core noise 38 / 37, innovations ~0.2, no
+  rejects. The fix wandered smoothly ~12 cm N, 9 cm E, ±11 cm up in
+  15 min. Before that, the 16:03 reset initialised on float and then
+  sat stuck (innovations 6.3, accuracy growing, no rejects) until
+  16:06:49, when the position jumped 0.3 m E and **0.72 m up**
+  (`261009_150318.rd`).
+- **Dual-antenna resets, connected, 16:54–17:36:** 6 cycles: 2 settled
+  (one after a 142 s fight), 2 no Integer in 60 s, 2 Integer never
+  accepted in 10 min. Stopped early.
+- **Dual-antenna resets, off, 17:39–17:52:** 3 cycles: 1 clean, 1 no
+  Integer, 1 settled after a 312 s fight. Stopped: the dual-antenna
+  test mostly measures the float solution (the xNAV initialises on
+  float, and a stuck cycle can't be scored right or wrong), and it's
+  slow.
+- **Single-antenna resets, off, 18:01–18:20** (secondary unplugged,
+  `!set init hea 344`): 9 of 10 Integer (1 none in 180 s), altitude SD
+  **0.9 cm**, range 3.1 cm, no outlier > 4 cm; horizontal mostly ±4 cm,
+  worst 8 cm N. The best set yet, but against other days' sets
+  (connected) only: suggestive, not proof.
+- **Boresight loop anticlockwise x8, off, 18:32–18:54** (both antennas,
+  attitude Gx Integer): **3 holds in 8 loops** (peak rejects 16–19), all
+  at the usual spot near point 2. Wednesday's matching window had 16 in
+  31. Unplugging made no visible difference: **ultrasonics ruled out.**
+- **Boresight loop clockwise x8, off, 18:57–19:20:** **4 holds in 8
+  loops** (peak rejects 12–19). Three near point 2 as usual; one
+  (19:03:56) ~10 m further east, at 52.2354549, −1.4604096. Both
+  directions together: 7 holds in 16 loops, every one caught by the
+  hold (no aborts).
+
+- **Heading is hit too.** Through the holds the Gx attitude mode stays
+  24 (Integer), but the xNAV rejects the GNSS heading alongside the
+  position: peak heading rejection count 10, 3 and 23 for the three
+  holds (position 18, 19, 16). In the third, the heading rejections lead
+  by ~14 s and build while the position innovations fall. The heading
+  baseline is the antenna-to-antenna one (no base station), and with
+  inertial relock it re-solves almost at once, so a brief disagreement
+  is all it shows. Lining up with the position events points to
+  something disturbing the receivers' tracking loops at point 2 (slips
+  or reflections at the robot), which a nearby base station won't
+  remove. A short baseline should still make it re-fix faster and
+  catch slips more often, so fewer wrong fixes get through. Not yet
+  separated from the other reading (bad positions accepted before
+  rejection dragging the INS heading): compare the raw GNSS heading in
+  the `.rd` files with the path's direction.
+
+Waiting for the chimney base station. Experiments still to do:
+
+- **Wheelspeed aiding**: get it working, so the INS holds position
+  better when GNSS goes wrong.
+- **G5ANT on a ground plane**, single antenna (a ground plane under the
+  helixes isn't practical, and they're designed to do without one). A
+  ground plane cuts reflections from below, which fits a
+  tracking-loop disturbance at point 2. The G5ANT without one was much
+  worse in rain. A big metal plate, so the water tank comes off: a
+  mechanical rebuild. Measure the antenna position once it's fitted,
+  and save the current config first (xNAV Config, "Save this config")
+  so the helix setup can be restored. Compare
+  against the helix in single-antenna mode too, at a matching
+  (sidereal) evening time, so neither the antenna mode nor the sky is
+  what changes.
